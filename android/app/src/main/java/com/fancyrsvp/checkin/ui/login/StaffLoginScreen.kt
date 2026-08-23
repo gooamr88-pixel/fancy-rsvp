@@ -1,5 +1,6 @@
 package com.fancyrsvp.checkin.ui.login
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +29,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -40,10 +42,10 @@ import com.fancyrsvp.checkin.ui.components.PinDots
 import com.fancyrsvp.checkin.ui.components.PinKeypad
 import com.fancyrsvp.checkin.ui.components.ScrollableCenteredColumn
 import com.fancyrsvp.checkin.ui.components.SecondaryAction
+import com.fancyrsvp.checkin.ui.components.Wordmark
 import com.fancyrsvp.checkin.ui.components.pressableSurface
 import com.fancyrsvp.checkin.ui.components.rememberEventCover
 import com.fancyrsvp.checkin.ui.theme.LocalDimens
-import com.fancyrsvp.checkin.ui.theme.ScriptFont
 import com.fancyrsvp.checkin.ui.theme.StateAttention
 import java.text.DateFormat
 import java.util.Date
@@ -143,25 +145,43 @@ fun StaffLoginScreen(
                         }
 
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                "Fancy",
-                                style = if (dimens.compact) {
-                                    MaterialTheme.typography.headlineLarge
-                                } else {
-                                    MaterialTheme.typography.displayMedium
-                                }.copy(fontFamily = ScriptFont),
-                                color = MaterialTheme.colorScheme.primary,
-                            )
-                            if (!dimens.compact) {
-                                Text(
-                                    stringResource(R.string.login_title),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
+                            // The shared mark. It used to be declared inline
+                            // here, which is how the app's identity came to
+                            // first appear on its third screen; setup now opens
+                            // with it and this is the same component.
+                            Wordmark()
                         }
                     }
-                    Spacer(Modifier.height(if (dimens.compact) 12.dp else 24.dp))
+
+                    Spacer(Modifier.height(if (dimens.compact) 10.dp else 18.dp))
+
+                    /*
+                     * "Who is on the door?" — at every size.
+                     *
+                     * This was previously hidden whenever `dimens.compact` was
+                     * true, to buy back the height a tracked-caps line costs
+                     * under the wordmark. It is the ONLY instruction on the
+                     * screen, and dropping it left a small tablet showing a
+                     * wordmark above an unlabelled column of names — on the
+                     * device where there is least room to guess.
+                     *
+                     * The height is bought back from the wordmark's own
+                     * strapline slot instead, and by using the heading style
+                     * rather than a label: it reads as the question it is, and
+                     * it is one line either way.
+                     */
+                    Text(
+                        stringResource(R.string.login_title),
+                        style = if (dimens.compact) {
+                            MaterialTheme.typography.titleLarge
+                        } else {
+                            MaterialTheme.typography.headlineLarge
+                        },
+                        color = MaterialTheme.colorScheme.onBackground,
+                        textAlign = TextAlign.Center,
+                    )
+
+                    Spacer(Modifier.height(if (dimens.compact) 10.dp else 18.dp))
 
                     if (state is StaffLoginViewModel.State.RosterEmpty && roster.isEmpty()) {
                         Text(
@@ -260,18 +280,8 @@ private fun StaffRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                text = stringResource(
-                    if (option.role == "supervisor") {
-                        R.string.login_role_supervisor
-                    } else {
-                        R.string.login_role_usher
-                    },
-                ),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-            )
+            Spacer(Modifier.height(4.dp))
+            RoleChip(isSupervisor = option.role == "supervisor")
             if (locked && option.lockedUntil != null) {
                 Text(
                     text = DateFormat.getTimeInstance(DateFormat.SHORT)
@@ -284,6 +294,45 @@ private fun StaffRow(
         }
         Chevron(color = MaterialTheme.colorScheme.primary, pointsBack = false)
     }
+}
+
+/**
+ * Usher or supervisor, told apart at a glance.
+ *
+ * The role was already on the row — as a muted subtitle, in the same colour and
+ * weight for both, which meant the two were distinguishable only by reading.
+ * The difference is not cosmetic: only a supervisor can override an admission or
+ * close an event, so at a handover mid-rush the question "which of us can do
+ * that" is asked of this list, and a colour answers it faster than a word.
+ *
+ * Usher stays deliberately quiet. It is the common case, and making both roles
+ * loud would restore exactly the sameness this fixes.
+ */
+@Composable
+private fun RoleChip(isSupervisor: Boolean) {
+    val container = if (isSupervisor) {
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant
+    }
+    val content = if (isSupervisor) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Text(
+        text = stringResource(
+            if (isSupervisor) R.string.login_role_supervisor else R.string.login_role_usher,
+        ),
+        style = MaterialTheme.typography.bodyMedium,
+        color = content,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(container)
+            .padding(horizontal = 12.dp, vertical = 3.dp),
+    )
 }
 
 @Composable

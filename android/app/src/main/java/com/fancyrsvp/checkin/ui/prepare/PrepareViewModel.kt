@@ -4,7 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.fancyrsvp.checkin.data.local.EventEntity
 import com.fancyrsvp.checkin.data.repo.BundleRepository
+import com.fancyrsvp.checkin.data.repo.DeviceRepository
 import com.fancyrsvp.checkin.device.DeviceStatusMonitor
+import com.fancyrsvp.checkin.ui.session.SessionManager
 import com.fancyrsvp.checkin.util.safeLaunch
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,6 +31,8 @@ import javax.inject.Inject
 class PrepareViewModel @Inject constructor(
     private val bundleRepository: BundleRepository,
     private val deviceStatusMonitor: DeviceStatusMonitor,
+    private val deviceRepository: DeviceRepository,
+    private val sessionManager: SessionManager,
 ) : ViewModel() {
 
     /** Readiness, as §8.2 requires it to be presented. */
@@ -158,6 +162,62 @@ class PrepareViewModel @Inject constructor(
         if (current is BundleRepository.Progress.Done || current is BundleRepository.Progress.Failed) {
             _progress.value = null
         }
+    }
+
+    // ── Releasing the tablet ──
+
+    /** How many check-ins are still unsent, or null while nothing is blocked. */
+    private val _unpairBlockedBy = MutableStateFlow<Int?>(null)
+    val unpairBlockedBy: StateFlow<Int?> = _unpairBlockedBy.asStateFlow()
+
+    private val _unpairing = MutableStateFlow(false)
+    val unpairing: StateFlow<Boolean> = _unpairing.asStateFlow()
+
+    /**
+     * Releases this tablet so it can be paired to another account.
+     *
+     * [onReleased] runs only on success, because the caller's job is to navigate
+     * back to the start of setup and a blocked attempt must leave the operator
+     * exactly where they are, reading why.
+     */
+    fun unpair(onReleased: () -> Unit) {
+        if (_unpairing.value) return
+        _unpairing.value = true
+        _unpairBlockedBy.value = null
+
+        safeLaunch(
+            onError = {
+                _unpairing.value = false
+                // Treated as blocked rather than as a silent failure: the tablet
+                // is still paired either way, and the operator must not be left
+                // believing it was released.
+                _unpairBlockedBy.value = 0
+            },
+        ) {
+            when (val result = deviceRepository.unpair()) {
+                is DeviceRepository.UnpairResult.Success -> {
+                    _unpairing.value = false
+                    /*
+                     * A signed-in operator can be standing here: closing an
+                     * event routes to this screen without ending their session.
+                     * Left alone, that session outlives the pairing — and five
+                     * minutes backgrounded would raise the PIN lock over the
+                     * WELCOME screen of a tablet that now belongs to nobody,
+                     * demanding a PIN from a roster that has just been deleted.
+                     */
+                    sessionManager.signOut()
+                    onReleased()
+                }
+                is DeviceRepository.UnpairResult.Blocked -> {
+                    _unpairing.value = false
+                    _unpairBlockedBy.value = result.pending
+                }
+            }
+        }
+    }
+
+    fun clearUnpairBlock() {
+        _unpairBlockedBy.value = null
     }
 
     private companion object {

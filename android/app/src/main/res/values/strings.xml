@@ -20,8 +20,49 @@
 <resources>
     <string name="app_name">Fancy Check-in</string>
 
+    <!--
+      Setup: welcome, then the three-stop rail every setup screen carries.
+
+      The brand is "Fancy". It is deliberately its own string rather than being
+      spliced out of app_name: the wordmark is set in Great Vibes and the words
+      "Check-in" beside it are not, so they cannot share one resource.
+    -->
+    <string name="brand_name">Fancy</string>
+    <string name="welcome_product">Check-in</string>
+    <string name="welcome_tagline">Scan guests in at the door — with or without internet.</string>
+    <string name="welcome_start">Pair this tablet</string>
+    <!-- Said before anything is attempted. Preparing a tablet at the venue, on
+         the venue\'s wifi, at the hour the guests arrive is the single most
+         common way setup goes wrong. -->
+    <string name="welcome_internet_notice">Pairing and loading the guest list need internet. Checking guests in does not.</string>
+
+    <string name="setup_step_pair">Pair</string>
+    <string name="setup_step_prepare">Prepare</string>
+    <string name="setup_step_signin">Sign in</string>
+    <string name="setup_step_of">Step %1$d of %2$d</string>
+    <!-- The rail on the welcome screen, where no step has been started yet.
+         Without this, welcome and pairing rendered an identical rail and the
+         one indicator that is supposed to say where you are could not tell two
+         consecutive screens apart. -->
+    <string name="setup_steps_total">%1$d steps</string>
+
     <!-- Event selection and preparation (§8.2) -->
-    <string name="prepare_title">This tablet</string>
+    <!-- Was "This tablet", which named the screen instead of saying what to do
+         on it. The screen answers one question: can I leave for the venue yet. -->
+    <string name="prepare_title">Get this tablet ready</string>
+
+    <!-- Releasing a tablet from its account. Until now nothing in the app could
+         undo a pairing, and a device paired to the wrong event had to be
+         reinstalled. -->
+    <string name="prepare_release">Pair to a different account</string>
+    <string name="prepare_release_title">Release this tablet?</string>
+    <string name="prepare_release_body">The guest list and this tablet\'s access are removed from the device. You will need a new pairing code to use it again. Check-ins that have already been sent are safe on the server.</string>
+    <string name="prepare_release_confirm">Release tablet</string>
+    <!-- No format argument: the dialog renders this title without one, and a
+         stray %1$d would print literally. The count lives in the body. -->
+    <string name="prepare_release_blocked_title">Not yet — check-ins are still on this tablet</string>
+    <string name="prepare_release_blocked_body">%1$d check-ins have not reached the server, and releasing the tablet would lose them. Connect to the internet, wait for them to send, then try again.</string>
+    <string name="prepare_release_failed">The tablet was not released. Nothing has changed — try again.</string>
     <string name="prepare_which_event">Which event?</string>
     <string name="prepare_choose_another">Choose a different event</string>
     <!-- The one action when the device is armed. "OK" said nothing about what
@@ -75,9 +116,58 @@
 
     <!-- Device pairing (§18.3) -->
     <string name="pair_title">Pair this tablet</string>
-    <string name="pair_instructions">Enter the 8-character code from the Fancy RSVP dashboard.</string>
-    <string name="pair_code_hint">Pairing code</string>
+    <!-- Said "the Fancy RSVP dashboard" until the rebrand made that a product
+         that no longer exists. It also never said WHERE in the dashboard, which
+         is the only part someone who has not seen one needs. -->
+    <string name="pair_instructions">Enter the 8-character code from your Fancy dashboard.</string>
     <string name="pair_submit">Pair</string>
+    <string name="pair_paste">Paste code</string>
+    <string name="pair_paste_nothing">No pairing code in the clipboard. Copy it, then tap Paste again.</string>
+    <string name="pair_help_link">Where do I find this code?</string>
+
+    <!--
+      The pairing guide.
+
+      Every dashboard label quoted below was read out of the dashboard's source,
+      not remembered. An earlier draft of this copy said "Go to Check-in devices,
+      tap Add device" — there is no "Add device" button, and it left out the
+      seating-map step entirely, which is the one place organizers get stuck.
+
+        "Check-in setup", "Before the event", "Tablets"
+            frontend/src/app/dashboard/checkin-setup/page.js
+        "Check-in devices", "Gate", "Create pairing code",
+        "Add an entrance to your seating map first"
+            frontend/src/app/dashboard/components/DeviceManagement.js
+        8 characters · no O/0/I/1/L · single use · 10 minutes
+            backend/services/checkinDeviceService.js
+
+      Change the dashboard, change these.
+    -->
+    <string name="howto_link">How do I connect this to Fancy?</string>
+    <string name="howto_title">Connect to Fancy</string>
+    <string name="howto_step_of">Step %1$d of %2$d</string>
+    <!-- "Previous", not "Back". The bar at the bottom of this screen already
+         says "Back to pairing", and two controls beginning with the same word,
+         100dp apart, doing different things is the exact ambiguity the rest of
+         this app is written to avoid. -->
+    <string name="howto_back">Previous</string>
+    <string name="howto_next">Next</string>
+    <string name="howto_finish">Enter the code</string>
+    <string name="howto_leave">Back to pairing</string>
+
+    <string name="howto_1_title">Open the dashboard</string>
+    <string name="howto_1_body">On a computer or phone — not on this tablet — sign in at fancyrsvp.com and open Check-in setup from the menu. This part needs internet. Checking guests in later does not.</string>
+
+    <string name="howto_2_title">Put an entrance on the map</string>
+    <string name="howto_2_body">Every tablet is tied to a gate, and gates come from your seating map. Open the seating map, add an entrance, and give it the name your staff already use for it — “Main entrance”, “Garden gate”.</string>
+    <string name="howto_2_note">Skip this and there is no code to create. The Tablets panel will only offer to open the seating map, which is easy to read as something being broken.</string>
+
+    <string name="howto_3_title">Create the pairing code</string>
+    <string name="howto_3_body">In Check-in setup, under “Before the event”, choose Tablets. Pick the gate this tablet will stand at, then press Create pairing code. One gate can have several tablets — a busy entrance often runs two.</string>
+
+    <string name="howto_4_title">Type it here</string>
+    <string name="howto_4_body">Eight characters, into the boxes on the pairing screen. There is no O, zero, I, one or L in a Fancy code, so anything that looks like one is a different character.</string>
+    <string name="howto_4_note">The code lasts 10 minutes and works once. If it runs out, create another — nothing is wasted by doing so.</string>
     <string name="pair_failed_invalid">That code is not valid.</string>
     <string name="pair_failed_expired">That code has expired. Generate a new one.</string>
     <string name="pair_failed_limit">This event already has the maximum number of devices.</string>
@@ -110,10 +200,25 @@
     <string name="scanner_search">Search by name</string>
     <string name="scanner_counter">%1$d of %2$d arrived</string>
     <!-- Camera permission denial must degrade to manual search, never a dead
-         screen (§8.3). The message says what still works. -->
+         screen (§8.3). Every one of these leads with what still works, because
+         the person reading it has a queue in front of them.
+
+         THREE bodies, not one, because there are three different ways out and
+         the old single message pointed all of them at "Allow camera" — a button
+         Android answers instantly and silently once the permission has been
+         refused for good. -->
+    <!-- Shown over a black preview while CameraX brings the camera up. A cold
+         tablet takes a moment, and an unexplained black rectangle is
+         indistinguishable from a broken one. -->
+    <string name="scanner_camera_starting">Starting camera…</string>
     <string name="scanner_no_camera_title">Camera not available</string>
-    <string name="scanner_no_camera_body">You can still check guests in by name. Everything else works normally.</string>
+    <string name="scanner_camera_permission_title">Camera is switched off</string>
+    <string name="scanner_camera_denied_body">Scanning needs the camera. You can still check guests in by name — everything else works normally.</string>
+    <string name="scanner_camera_blocked_body">Camera access is blocked for this app, so the prompt will not appear again. Open Settings and allow the camera. You can keep checking guests in by name in the meantime.</string>
+    <string name="scanner_camera_failed_body">The camera did not start. Close any other app using it, then try again. You can keep checking guests in by name in the meantime.</string>
     <string name="scanner_grant_camera">Allow camera</string>
+    <string name="scanner_open_settings">Open settings</string>
+    <string name="scanner_camera_retry">Try camera again</string>
 
     <!--
       Scan result states (§8.4).

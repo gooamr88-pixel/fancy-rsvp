@@ -1,17 +1,6 @@
 package com.fancyrsvp.checkin.ui.scanner
 
-import android.Manifest
-import android.content.pm.PackageManager
 import android.view.HapticFeedbackConstants
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.Preview
-import androidx.camera.core.resolutionselector.ResolutionSelector
-import androidx.camera.core.resolutionselector.ResolutionStrategy
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.togetherWith
@@ -45,6 +34,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -56,7 +46,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
@@ -64,10 +53,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.Lifecycle
 // androidx.lifecycle.compose, not androidx.compose.ui.platform: the latter is
 // deprecated as of Compose 1.7 and resolves to a different instance in a
 // navigation graph, which would bind the camera to the wrong lifecycle.
@@ -122,7 +108,6 @@ fun ScannerScreen(
     onOpenMenu: () -> Unit,
     viewModel: ScannerViewModel = hiltViewModel(),
 ) {
-    val context = LocalContext.current
     val view = LocalView.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val dimens = LocalDimens.current
@@ -134,18 +119,22 @@ fun ScannerScreen(
     val deviceStatus by viewModel.deviceStatus.collectAsState()
     val batteryAcknowledged by viewModel.batteryAcknowledged.collectAsState()
 
-    var hasCameraPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
-                PackageManager.PERMISSION_GRANTED,
-        )
-    }
-    var torchOn by remember { mutableStateOf(false) }
-    var showSearch by remember { mutableStateOf(false) }
+    val cameraPermission = rememberCameraPermissionState()
+    val cameraController = rememberCameraController()
 
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted -> hasCameraPermission = granted }
+    /**
+     * The camera is up and scanning. Not the same question as "did we get the
+     * permission": a granted permission still leaves a device with no lens, a
+     * HAL that refuses to start, or another app holding the camera, and all
+     * three of those have to route to the same place — the fallback, with manual
+     * search as the way in.
+     */
+    val cameraLive = cameraPermission.isGranted &&
+        cameraController.status != CameraStatus.Unavailable
+
+    /** What the OPERATOR asked for. What the lamp is doing is the controller's. */
+    var torchRequested by remember { mutableStateOf(false) }
+    var showSearch by remember { mutableStateOf(false) }
 
     /*
      * Ask for the camera automatically, once, on arrival.
@@ -156,13 +145,30 @@ fun ScannerScreen(
      * unavailable and left the operator to work out why. Nobody at a door is
      * going to diagnose a permission prompt that never appeared.
      *
+     * Only when asking can still produce a dialog. Once the permission is
+     * Blocked the system drops the request silently, and firing it on every
+     * arrival would be a no-op dressed up as an attempt.
+     *
      * Declining is still handled: the fallback takes over with manual search as
-     * its primary action and keeps the grant button for later.
+     * its primary action and offers the route back — the dialog while there is
+     * still one to show, the settings page after that.
      */
     LaunchedEffect(Unit) {
-        if (!hasCameraPermission) {
-            permissionLauncher.launch(Manifest.permission.CAMERA)
+        if (cameraPermission.status == CameraPermissionStatus.Denied) {
+            cameraPermission.request()
         }
+    }
+
+    /*
+     * A torch left on cannot outlive the camera it belongs to.
+     *
+     * Losing the pipeline — permission revoked mid-shift, a HAL failure, the
+     * operator hitting retry — takes the lamp out with it. Without this the
+     * request survives, and the next successful bind switches a light on that
+     * nobody asked for, in a room where that is rude at best.
+     */
+    LaunchedEffect(cameraLive) {
+        if (!cameraLive) torchRequested = false
     }
 
     LaunchedEffect(eventId) { viewModel.start(eventId, staffId, staffName, role) }
@@ -268,18 +274,61 @@ fun ScannerScreen(
 
     Surface(modifier = Modifier.fillMaxSize()) {
         Box(Modifier.fillMaxSize()) {
-            if (hasCameraPermission) {
-                CameraPreview(
-                    analyzer = analyzer,
-                    executor = analysisExecutor,
-                    torchOn = torchOn,
-                    lifecycleOwner = lifecycleOwner,
-                    modifier = Modifier.fillMaxSize(),
-                )
+            if (cameraLive) {
+                // Keyed on the attempt counter so RETRY tears the PreviewView and
+                // its binding down and builds them again. Re-running the effect
+                // alone would not: the provider hands back the same singleton and
+                // the surface is already attached, so a failed pipeline would
+                // simply stay failed.
+                key(cameraController.attempt) {
+                    CameraPreview(
+                        analyzer = analyzer,
+                        executor = analysisExecutor,
+                        controller = cameraController,
+                        torchOn = torchRequested,
+                        lifecycleOwner = lifecycleOwner,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
                 Viewfinder(topInset = topChrome, bottomInset = bottomChrome)
+
+                /*
+                 * Said out loud while the pipeline comes up.
+                 *
+                 * Starting and Running used to be indistinguishable to every
+                 * consumer — the only test anywhere was `!= Unavailable`, which
+                 * made Running a value nothing read and left a cold tablet
+                 * showing a black rectangle with a viewfinder drawn on it for a
+                 * second or two. An usher cannot tell that from a dead camera,
+                 * and the honest difference between "wait" and "this is broken"
+                 * is the whole reason the status has three values.
+                 *
+                 * It disappears on its own the moment the first frame binds, and
+                 * after eight seconds CameraPreview turns it into the real
+                 * fallback instead.
+                 */
+                if (cameraController.status == CameraStatus.Starting) {
+                    Text(
+                        text = stringResource(R.string.scanner_camera_starting),
+                        style = MaterialTheme.typography.titleLarge,
+                        color = OnCamera,
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .background(CameraScrim, RoundedCornerShape(12.dp))
+                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                    )
+                }
             } else {
                 NoCameraFallback(
-                    onRequestPermission = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                    reason = when {
+                        cameraPermission.status == CameraPermissionStatus.Blocked ->
+                            NoCameraReason.PermissionBlocked
+                        !cameraPermission.isGranted -> NoCameraReason.PermissionDenied
+                        else -> NoCameraReason.CameraFailed
+                    },
+                    onRequestPermission = { cameraPermission.request() },
+                    onOpenSettings = { cameraPermission.openSettings() },
+                    onRetryCamera = { cameraController.retry() },
                     onSearch = { showSearch = true },
                 )
             }
@@ -308,10 +357,18 @@ fun ScannerScreen(
             // these as well put two identical SEARCH BY NAME buttons on screen
             // at the same time, one mid-screen and one at the bottom, with a
             // torch control for a camera that is not running.
-            if (hasCameraPermission) {
+            if (cameraLive) {
                 BottomControls(
-                    torchOn = torchOn,
-                    onToggleTorch = { torchOn = !torchOn },
+                    torchOn = cameraController.torchActive,
+                    // Hidden outright on a device with no lamp. A control that
+                    // cannot do anything is worse than a missing one: an usher in
+                    // a dark doorway presses it, nothing lights, and they spend
+                    // the next scan believing the app is broken.
+                    torchAvailable = cameraController.hasFlash,
+                    // Toggles against what the LAMP is doing, not against the last
+                    // thing we asked for. After a background/foreground cycle
+                    // those two disagreed, and one press went the wrong way.
+                    onToggleTorch = { torchRequested = !cameraController.torchActive },
                     onSearch = { showSearch = true },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -378,168 +435,6 @@ fun ScannerScreen(
             }
         }
     }
-}
-
-/**
- * CameraX preview bound to the lifecycle.
- *
- * KEEP_ONLY_LATEST because a backlog of stale frames is useless at a door — the
- * guest has already moved the card. Binding to the lifecycle owner means the
- * preview pauses when the app is backgrounded, which §11 requires for battery.
- *
- * ── Why every camera call here is guarded ──
- *
- * This block runs on the main executor, NOT inside a coroutine, so `safeLaunch`
- * does nothing for it: an uncaught throw goes straight to the default handler and
- * the process dies with no dialog. And camera bring-up throws for reasons that
- * have nothing to do with this app being correct — another process holding the
- * camera, a vendor HAL that fails to initialise, the operator leaving the screen
- * before the provider future resolves. At a venue every one of those was the app
- * disappearing mid-shift.
- */
-@Composable
-private fun CameraPreview(
-    analyzer: QrAnalyzer,
-    /**
-     * The thread CameraX delivers frames on — created by the caller, because the
-     * analyzer runs ML Kit's callbacks on it too. Owned here: this composable
-     * shuts it down when the camera goes away.
-     */
-    executor: java.util.concurrent.ExecutorService,
-    torchOn: Boolean,
-    lifecycleOwner: androidx.lifecycle.LifecycleOwner,
-    modifier: Modifier = Modifier,
-) {
-    var camera by remember { mutableStateOf<androidx.camera.core.Camera?>(null) }
-
-    // Retained so the use cases can be DETACHED before the analysis executor is
-    // shut down. Without the unbind, CameraX goes on delivering frames to an
-    // executor that no longer accepts work — a RejectedExecutionException raised
-    // on a camera thread, which is another silent process kill. It fired on the
-    // way back from the menu, when the previous binding is re-attached to a
-    // lifecycle that has just come round again.
-    var provider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
-
-    DisposableEffect(Unit) {
-        onDispose {
-            // Unbind ONLY. The executor belongs to the caller and is deliberately
-            // not shut down here.
-            //
-            // It used to be created and destroyed in this composable, which was
-            // safe while it was private to it. Now that the analyzer shares it,
-            // shutting it down here would kill a thread the caller still holds:
-            // if the camera permission is revoked and re-granted, this composable
-            // leaves and re-enters, and the second time it would hand CameraX an
-            // executor that no longer accepts work — a RejectedExecutionException
-            // on a camera thread, which is a process kill.
-            //
-            // Compose disposes children before parents, so the caller's shutdown
-            // still runs after this unbind, which is the order that matters.
-            runCatching { provider?.unbindAll() }
-        }
-    }
-
-    LaunchedEffect(torchOn, camera) {
-        // enableTorch on a camera that has just been unbound throws rather than
-        // returning a failed future on some devices, and the torch is the control
-        // staff hit most often in a dark venue.
-        runCatching {
-            val control = camera?.cameraControl
-            if (control != null && camera?.cameraInfo?.hasFlashUnit() == true) {
-                control.enableTorch(torchOn)
-            }
-        }
-    }
-
-    AndroidView(
-        modifier = modifier,
-        factory = { ctx ->
-            val previewView = PreviewView(ctx).apply {
-                scaleType = PreviewView.ScaleType.FILL_CENTER
-            }
-
-            val providerFuture = ProcessCameraProvider.getInstance(ctx)
-            providerFuture.addListener({
-                runCatching {
-                    // The future resolves asynchronously. If the operator has moved
-                    // on in the meantime, binding to a destroyed lifecycle throws —
-                    // so check first and simply do nothing.
-                    if (lifecycleOwner.lifecycle.currentState == Lifecycle.State.DESTROYED) {
-                        return@runCatching
-                    }
-
-                    // .get() on a failed future throws ExecutionException, wrapping
-                    // whatever the camera stack objected to.
-                    val cameraProvider = providerFuture.get()
-                    provider = cameraProvider
-
-                    /*
-                     * ── Resolution: 1280x720, explicitly ──
-                     *
-                     * CameraX defaults ImageAnalysis to 640x480. That is cheaper
-                     * per frame — decode cost scales with pixel count, so 720p is
-                     * roughly three times the work — and it is still the wrong
-                     * choice here.
-                     *
-                     * Time-to-decode is not frames-per-second, it is how many
-                     * frames pass before the code is RESOLVABLE at all. A QR on a
-                     * phone screen held at arm's length occupies a small part of a
-                     * tablet's wide field of view, and below a certain pixel
-                     * density ML Kit cannot decode it in any number of frames. At
-                     * 480p that guest has to be asked to step closer; at 720p the
-                     * first or second frame reads. Three times the work on frames
-                     * that succeed beats free frames that never do.
-                     *
-                     * The preview is capped at the same size for a different
-                     * reason: it shares the camera pipeline, and letting it run at
-                     * the sensor's full resolution spends bandwidth and ISP time
-                     * on pixels nobody decodes.
-                     */
-                    val resolution = ResolutionSelector.Builder()
-                        .setResolutionStrategy(
-                            ResolutionStrategy(
-                                android.util.Size(1280, 720),
-                                // Fall back to the closest available in either
-                                // direction rather than failing: a device without
-                                // exactly 720p must still scan.
-                                ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
-                            ),
-                        )
-                        .build()
-
-                    val preview = Preview.Builder()
-                        .setResolutionSelector(resolution)
-                        .build()
-                        .also {
-                            it.setSurfaceProvider(previewView.surfaceProvider)
-                        }
-                    val analysis = ImageAnalysis.Builder()
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .setResolutionSelector(resolution)
-                        // YUV_420_888 is the default and is kept deliberately:
-                        // ML Kit consumes YUV natively, so asking CameraX for RGBA
-                        // would add a full-frame colour conversion per frame for
-                        // nothing.
-                        .build()
-                        .also { it.setAnalyzer(executor, analyzer) }
-
-                    cameraProvider.unbindAll()
-                    camera = cameraProvider.bindToLifecycle(
-                        lifecycleOwner,
-                        CameraSelector.DEFAULT_BACK_CAMERA,
-                        preview,
-                        analysis,
-                    )
-                }
-                // Failure leaves `camera` null and the preview black. The status bar,
-                // the counter, MENU and SEARCH BY NAME are all drawn over this and
-                // stay live, so the door keeps working by name — which is exactly the
-                // degradation §8.3 asks for when the camera is unavailable.
-            }, ContextCompat.getMainExecutor(ctx))
-
-            previewView
-        },
-    )
 }
 
 /**
@@ -845,6 +740,7 @@ private fun FreshnessLabel(lastSyncedAt: Long?) {
 @Composable
 private fun BottomControls(
     torchOn: Boolean,
+    torchAvailable: Boolean,
     onToggleTorch: () -> Unit,
     onSearch: () -> Unit,
     modifier: Modifier = Modifier,
@@ -856,19 +752,25 @@ private fun BottomControls(
         horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterHorizontally),
         verticalAlignment = Alignment.Bottom,
     ) {
-        // The torch is the one control whose STATE matters at a glance: an usher
-        // must be able to see whether the light is already on without toggling it
-        // to find out. On is solid gold; off is a dark panel.
-        CameraAction(
-            text = stringResource(
-                if (torchOn) R.string.scanner_torch_off else R.string.scanner_torch_on,
-            ),
-            onClick = onToggleTorch,
-            containerColor = if (torchOn) Gold else CameraScrim,
-            contentColor = if (torchOn) Color.White else OnCamera,
-            icon = { tint -> TorchIcon(color = tint) },
-            modifier = Modifier.weight(1f),
-        )
+        // Absent, not disabled, on a device with no lamp. A greyed-out control
+        // still reads as "the light is off, press harder"; nothing at all reads
+        // as "this tablet has no light", and SEARCH BY NAME takes the whole bar,
+        // which is the right answer on hardware that cannot help in the dark.
+        if (torchAvailable) {
+            // The torch is the one control whose STATE matters at a glance: an
+            // usher must be able to see whether the light is already on without
+            // toggling it to find out. On is solid gold; off is a dark panel.
+            CameraAction(
+                text = stringResource(
+                    if (torchOn) R.string.scanner_torch_off else R.string.scanner_torch_on,
+                ),
+                onClick = onToggleTorch,
+                containerColor = if (torchOn) Gold else CameraScrim,
+                contentColor = if (torchOn) Color.White else OnCamera,
+                icon = { tint -> TorchIcon(color = tint) },
+                modifier = Modifier.weight(1f),
+            )
+        }
 
         CameraAction(
             text = stringResource(R.string.scanner_search),
@@ -884,15 +786,43 @@ private fun BottomControls(
 }
 
 /**
+ * Why there is no camera. Each one has a different way out, and offering the
+ * wrong one is how the old single fallback produced a dead button.
+ */
+private enum class NoCameraReason {
+    /** Refused, but the system will still show the dialog. Ask again. */
+    PermissionDenied,
+
+    /** Refused for good. Only Settings can undo it — see [CameraPermissionStatus]. */
+    PermissionBlocked,
+
+    /** Granted, but the pipeline would not start. Retrying is the useful action. */
+    CameraFailed,
+}
+
+/**
  * Camera unavailable or permission denied.
  *
  * §8.3: this must degrade to manual search, NOT to a dead screen. The wording
  * says what still works rather than what failed, because an usher reading it has
- * a queue in front of them.
+ * a queue in front of them — and SEARCH BY NAME stays the hero on all three
+ * variants for the same reason. The secondary action is the only thing that
+ * changes, because it is the only thing that differs.
+ *
+ * ── The button that did nothing ──
+ *
+ * There used to be one variant, and its secondary action was always "Allow
+ * camera". After a second refusal Android answers that request instantly and
+ * silently, with no dialog — so the screen's only offer of a way out was a
+ * button that could not work, on the one screen where staff are least able to
+ * stop and investigate.
  */
 @Composable
 private fun NoCameraFallback(
+    reason: NoCameraReason,
     onRequestPermission: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onRetryCamera: () -> Unit,
     onSearch: () -> Unit,
 ) {
     val dimens = LocalDimens.current
@@ -905,14 +835,25 @@ private fun NoCameraFallback(
         verticalArrangement = Arrangement.Center,
     ) {
         Text(
-            stringResource(R.string.scanner_no_camera_title),
+            stringResource(
+                when (reason) {
+                    NoCameraReason.CameraFailed -> R.string.scanner_no_camera_title
+                    else -> R.string.scanner_camera_permission_title
+                },
+            ),
             style = MaterialTheme.typography.headlineLarge,
             color = MaterialTheme.colorScheme.onBackground,
             textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(12.dp))
         Text(
-            stringResource(R.string.scanner_no_camera_body),
+            stringResource(
+                when (reason) {
+                    NoCameraReason.PermissionDenied -> R.string.scanner_camera_denied_body
+                    NoCameraReason.PermissionBlocked -> R.string.scanner_camera_blocked_body
+                    NoCameraReason.CameraFailed -> R.string.scanner_camera_failed_body
+                },
+            ),
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -927,8 +868,18 @@ private fun NoCameraFallback(
         }
         Spacer(Modifier.height(12.dp))
         SecondaryAction(
-            text = stringResource(R.string.scanner_grant_camera),
-            onClick = onRequestPermission,
+            text = stringResource(
+                when (reason) {
+                    NoCameraReason.PermissionDenied -> R.string.scanner_grant_camera
+                    NoCameraReason.PermissionBlocked -> R.string.scanner_open_settings
+                    NoCameraReason.CameraFailed -> R.string.scanner_camera_retry
+                },
+            ),
+            onClick = when (reason) {
+                NoCameraReason.PermissionDenied -> onRequestPermission
+                NoCameraReason.PermissionBlocked -> onOpenSettings
+                NoCameraReason.CameraFailed -> onRetryCamera
+            },
         )
     }
 }

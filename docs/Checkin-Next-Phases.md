@@ -385,6 +385,123 @@ silently weakens every PIN on the platform, and the hash is shared with
 - Confirm the **bundled** ML Kit model works with the device in airplane mode.
   If it needs a download, the wrong artifact is on the classpath.
 
+**Camera hardening, 2026-08-23.** Six failure paths were closed and none of them
+has run on a device. Each one is a deliberate test, not a glance:
+
+- **Permission refused twice.** The fallback must switch from "Allow camera" to
+  **"Open settings"**. Tapping "Allow camera" a third time used to do nothing at
+  all — no dialog, no feedback — which is the specific bug this replaced.
+- **Grant it in Settings and come back.** The scanner must pick the camera up on
+  return. It previously stayed on the fallback screen with no way to notice.
+- **Background the app with the torch ON, then return.** The lamp must come back
+  on by itself, and the button must never claim "on" while the lamp is dark.
+  Watch the button's colour on the way back, not just the lamp.
+- **A tablet with no rear camera.** It must fall back to the front lens rather
+  than showing a black screen. If you have no such device, verify the branch by
+  temporarily reversing the order in `firstAvailableLens()`.
+- **A device with no flash unit.** The torch control must be absent, not greyed,
+  and SEARCH BY NAME takes the whole bar.
+- **Camera held by another app.** Open the stock camera, then switch here. The
+  fallback must say the camera did not start and offer **"Try camera again"** —
+  and that button must actually recover the pipeline once the other app is gone.
+- **Tap to focus.** Tap the preview with a phone screen held close: focus and
+  exposure should settle on it, and release back to continuous focus after ~3 s.
+  Confirm the tap does not steal touches from MENU or SEARCH BY NAME.
+
+### 12.2b Setup flow, 2026-08-23
+
+A new welcome screen and a rebuilt pairing screen. None of it has been compiled.
+
+- **A fresh, unpaired tablet opens on Welcome**, not on the code form. One tap
+  reaches pairing. A PAIRED tablet must still open straight on Prepare — if it
+  shows the greeting, the `isPaired` branch in `CheckinNavHost` is wrong and
+  staff will tap past it at every venue.
+- **The crash report moved** from Pair to Welcome. Force a crash, relaunch an
+  unpaired tablet, and confirm the report still takes the screen over. On a
+  paired tablet the route is Menu → Last crash, unchanged.
+- **The code cells accept typing.** This is the one to test first: the field is
+  a transparent `BasicTextField` stretched over the drawn boxes, so if the
+  overlay is mis-sized the boxes look perfect and nothing can be entered. Tap
+  the boxes, expect the keyboard; type, expect characters to fill left to right.
+- **Paste.** Copy a code into the clipboard, tap Paste. With an empty or junk
+  clipboard it must say so rather than doing nothing. Note that Android 12+
+  shows its own "pasted from clipboard" toast — that is the system, not the app.
+- **The Pair button must not move** when an error appears. That is the whole
+  point of the reserved slot.
+- **Release this tablet** (Prepare → "Pair to a different account"):
+  - With unsent check-ins it MUST refuse and name the count. Test this by going
+    offline, checking someone in, then trying to release. Getting this wrong
+    destroys check-ins that exist nowhere else.
+  - With a clean queue it clears credentials AND the guest list, then returns to
+    Welcome.
+  - Release while signed in (close an event first, which lands on Prepare with a
+    live session) and confirm the tablet does not later raise a PIN lock for a
+    roster that no longer exists.
+- **The compact ramp.** On the smallest tablet the step rail collapses to
+  "Step 1 of 3" and "Who is on the door?" must now be VISIBLE — it used to be
+  hidden at exactly that size.
+
+### 12.2c The pairing guide, 2026-08-23
+
+A four-step in-app walkthrough (`ui/howto/`), reached from Welcome and from the
+"Where do I find this code?" link on the pairing screen.
+
+**Read this before testing.** The instructions are quoted from the dashboard's
+own source, and they are only correct until someone edits the dashboard. The
+sources are named in the `strings.xml` comment above `howto_*`. Open the real
+dashboard beside the tablet and check word for word:
+
+- `/dashboard/checkin-setup` still says **Check-in setup**, still groups tabs
+  under **Before the event**, and the tab is still called **Tablets**.
+- The panel is still **Check-in devices**, the select is still **Gate**, and the
+  gold button still says **Create pairing code**.
+- A code is still 8 characters, still 10 minutes, still single use, still drawn
+  from an alphabet with no O/0/I/1/L.
+
+If any of those moved, step 2 or 3 is now confidently wrong, which is worse than
+having no guide.
+
+Then on the device:
+
+- **Back returns to where you came from.** Open the guide from Welcome → back to
+  Welcome. Open it from Pair with four characters typed → back to Pair **with
+  those four characters still there**. It uses `popBackStack()` for exactly this.
+- **The bottom bar says "Back to pairing", not "Back to scanner".** There is no
+  scanner on an unpaired tablet.
+- **Paging animates forward going forward and backward going back.** The motion
+  helpers were widened from `AnimatedContentTransitionScope<NavBackStackEntry>`
+  to a generic `<S>` so this screen could reuse them; check the NavHost's own
+  screen transitions still animate correctly, since they now bind through the
+  generic signature.
+
+### 12.2d Review fixes, 2026-08-23
+
+A self-review of §12.2b/c found ten issues; all are fixed. The ones that need
+checking on a device:
+
+- **Two-button rows line up.** `Paste code` / `Pair`, and `Previous` / `Next` on
+  the guide. `SecondaryAction` does not `fillMaxWidth()` and `PrimaryAction`
+  does, so weighted wrappers stretched one and left the other at text width.
+  Both now take `weight()` directly.
+- **The keyboard no longer covers the code boxes.** `imePadding()` was written
+  inside `verticalScroll()`; focusing the field could scroll it *under* the
+  keyboard. Tap the boxes on a real device and confirm they end up above it.
+- **A camera that never starts now gives up after 8s** and shows the fallback
+  with RETRY, instead of a permanent black rectangle. Hard to force
+  deliberately; the observable part is the new **"Starting camera…"** label,
+  which should appear briefly on a cold launch and vanish on the first frame.
+- **Welcome scrolls on a short screen.** It used weighted spacers and clipped
+  the step rail on a landscape phone. Check the rail is reachable at 390dp tall.
+- **The welcome rail shows no active dot** ("3 steps"), so it is now
+  distinguishable from the pairing screen's rail.
+
+And one new automated guard: `PairingGuideCopyTest` fails the build if the
+dashboard renames anything the guide names, or if the pairing code's alphabet or
+10-minute expiry changes. It skips when `frontend/` is not checked out. **This is
+the first test in this repo that reads across the app/web boundary** — if it
+starts failing after a frontend change, the tablet's instructions are wrong, not
+the dashboard.
+
 ### 12.3 Session, lock, security
 
 - `FLAG_SECURE`: screenshots blocked, and the app hidden in the recent-apps

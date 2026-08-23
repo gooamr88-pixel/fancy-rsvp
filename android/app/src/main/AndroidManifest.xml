@@ -14,7 +14,23 @@
       the same reasoning applies to hardware that simply has no camera.
     -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.front" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
+
+    <!--
+      camera.front and camera.any are declared because the scanner now FALLS BACK
+      to the front lens when a device has no rear one (see CameraPreview) — a real
+      class of cheap tablet, and exactly the kind bought in sixes for a door.
+      camera.flash is declared for the same honesty: the torch control is hidden
+      outright on hardware with no lamp rather than offered and inert.
+
+      Every one is required="false". Declaring a feature without that is what
+      makes Google Play hide the app from devices that lack it, and this app must
+      install on all of them — §8.3's degradation to manual search is not a
+      consolation path, it is a supported way to run the door.
+    -->
 
     <application
         android:name=".CheckinApp"

@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Check-in Setup Redesign</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Aboreto&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&family=Great+Vibes&display=swap">
+
+<style>
+:root{
+  /* Stage — the surface the tablets sit on. Warm paper. */
+  --stage:#E8E2D7;
+  --stage-2:#F5F1E9;
+  --stage-3:#FBF8F3;
+  --stage-ink:#221F1B;
+  --stage-muted:#6E6558;
+  --stage-line:#D3CABA;
+  --accent:#8A6D34;
+  --accent-soft:rgba(138,109,52,.11);
+  --shadow:0 2px 4px rgba(40,32,18,.06), 0 18px 40px -14px rgba(40,32,18,.24);
+  --was:#9C2F1E;
+  --now:#1F6B4C;
+
+  /* The app's own palette. Constant in both themes: the tablet UI is light-only
+     by decision (see the theme file), and a mockup that recolours itself would
+     be showing something that does not exist. */
+  --app-ground:#FAF7F2;
+  --app-surface:#F2EDE4;
+  --app-white:#FFFFFF;
+  --app-ink:#1A1714;
+  --app-muted:#6B6154;
+  --app-line:#E3DACB;
+  --app-gold:#8A6D34;
+  --app-gold-lift:#A8873F;
+  --app-green:#1F6B4C;
+  --app-red:#9C2F1E;
+  --app-amber:#8A5A18;
+
+  --display:'Aboreto',Georgia,serif;
+  --ui:'DM Sans','Segoe UI',system-ui,sans-serif;
+  --script:'Great Vibes',cursive;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --stage:#1D1A16;
+    --stage-2:#272319;
+    --stage-3:#2F2A22;
+    --stage-ink:#EFE9DE;
+    --stage-muted:#9E9483;
+    --stage-line:#3B342B;
+    --accent:#C9A961;
+    --accent-soft:rgba(201,169,97,.13);
+    --shadow:0 2px 4px rgba(0,0,0,.4), 0 22px 48px -16px rgba(0,0,0,.7);
+    --was:#D97A64;
+    --now:#68B894;
+  }
+  :root:not([data-theme="light"]) .notes .n{color:#1D1A16}
+}
+:root[data-theme="dark"]{
+  --stage:#1D1A16;
+  --stage-2:#272319;
+  --stage-3:#2F2A22;
+  --stage-ink:#EFE9DE;
+  --stage-muted:#9E9483;
+  --stage-line:#3B342B;
+  --accent:#C9A961;
+  --accent-soft:rgba(201,169,97,.13);
+  --shadow:0 2px 4px rgba(0,0,0,.4), 0 22px 48px -16px rgba(0,0,0,.7);
+  --was:#D97A64;
+  --now:#68B894;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--stage);
+  color:var(--stage-ink);
+  font-family:var(--ui);
+  font-size:16px;
+  line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1180px;margin:0 auto;padding:clamp(28px,5vw,72px) clamp(18px,4vw,40px) 96px}
+
+/* ── Page header ───────────────────────────────────────────── */
+.eyebrow{
+  font-size:12px;letter-spacing:.18em;text-transform:uppercase;
+  font-weight:700;color:var(--accent);margin:0 0 14px;
+}
+h1{
+  font-family:var(--display);font-weight:400;
+  font-size:clamp(34px,6vw,60px);line-height:1.05;letter-spacing:-.01em;
+  margin:0 0 18px;text-wrap:balance;
+}
+.lede{
+  font-size:clamp(17px,2vw,20px);color:var(--stage-muted);
+  max-width:60ch;margin:0;
+}
+.note{
+  margin-top:26px;padding:14px 18px;border-left:3px solid var(--accent);
+  background:var(--accent-soft);border-radius:0 8px 8px 0;
+  font-size:15px;color:var(--stage-ink);max-width:70ch;
+}
+
+/* ── Findings ──────────────────────────────────────────────── */
+.findings{
+  margin:clamp(40px,6vw,68px) 0 0;
+  display:grid;gap:1px;background:var(--stage-line);
+  border:1px solid var(--stage-line);border-radius:12px;overflow:hidden;
+  grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+}
+.finding{background:var(--stage-2);padding:20px 22px}
+.finding b{
+  display:block;font-size:14px;font-weight:700;margin-bottom:6px;
+  color:var(--stage-ink);
+}
+.finding span{display:block;font-size:14px;color:var(--stage-muted);line-height:1.5}
+.finding .screen-tag{
+  display:inline-block;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;
+  font-weight:700;color:var(--accent);margin-bottom:9px;
+}
+
+/* ── Plates ────────────────────────────────────────────────── */
+.plate{margin-top:clamp(52px,8vw,96px)}
+.plate-head{
+  display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;
+  padding-bottom:14px;margin-bottom:clamp(22px,3vw,34px);
+  border-bottom:1px solid var(--stage-line);
+}
+.plate-n{
+  font-family:var(--display);font-size:15px;color:var(--accent);
+  letter-spacing:.06em;
+}
+.plate-head h2{
+  font-family:var(--display);font-weight:400;
+  font-size:clamp(24px,3.4vw,34px);margin:0;letter-spacing:-.005em;
+}
+.plate-head .file{
+  margin-left:auto;font-size:12.5px;color:var(--stage-muted);
+  font-variant-numeric:tabular-nums;
+}
+
+.split{display:grid;gap:clamp(24px,3.5vw,42px);grid-template-columns:1fr}
+@media(min-width:900px){ .split{grid-template-columns:1.55fr 1fr;align-items:start} }
+
+.compare{display:grid;gap:22px;grid-template-columns:1fr}
+@media(min-width:760px){ .compare{grid-template-columns:1fr 1fr} }
+
+.cap{
+  display:flex;align-items:center;gap:8px;
+  font-size:11px;letter-spacing:.14em;text-transform:uppercase;font-weight:700;
+  margin:0 0 10px;
+}
+.cap.was{color:var(--was)}
+.cap.now{color:var(--now)}
+.cap::before{content:"";width:20px;height:2px;background:currentColor;border-radius:2px}
+
+/* ── Device frame ──────────────────────────────────────────── */
+.device{
+  background:#0F0D0B;border-radius:14px;padding:9px;
+  box-shadow:var(--shadow);
+}
+.screen{
+  container-type:inline-size;
+  aspect-ratio:16/10;border-radius:6px;overflow:hidden;
+  background:var(--app-ground);color:var(--app-ink);
+  display:flex;flex-direction:column;
+  position:relative;
+}
+.screen .pad{
+  flex:1;display:flex;flex-direction:column;
+  padding:4.4cqw 6cqw;min-height:0;
+}
+
+/* type inside the tablet, scaled to the frame */
+.s-script{font-family:var(--script);font-size:5.6cqw;line-height:1;color:var(--app-gold)}
+.s-display{font-family:var(--display);font-size:4.2cqw;line-height:1.15;letter-spacing:-.01em}
+.s-h{font-family:var(--display);font-size:3.1cqw;line-height:1.2}
+.s-body{font-size:2.05cqw;line-height:1.45;color:var(--app-muted)}
+.s-small{font-size:1.7cqw;line-height:1.4;color:var(--app-muted)}
+.s-label{
+  font-size:1.55cqw;letter-spacing:.16em;text-transform:uppercase;
+  font-weight:700;color:var(--app-muted);
+}
+
+/* marker badges that tie the mockup to the notes beside it */
+.mk{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:2.5cqw;height:2.5cqw;min-width:16px;min-height:16px;
+  border-radius:50%;background:var(--app-gold);color:#fff;
+  font-size:1.5cqw;font-weight:700;font-family:var(--ui);
+  vertical-align:middle;flex:none;
+  box-shadow:0 0 0 .35cqw var(--app-ground);
+}
+.mk-float{position:absolute;transform:translate(-55%,-55%);z-index:3}
+
+/* app controls */
+.btn-hero,.btn-2,.btn-quiet{
+  font-family:var(--ui);font-weight:700;width:100%;
+  display:flex;align-items:center;justify-content:center;gap:1.4cqw;
+  border-radius:1.5cqw;text-align:center;
+}
+.btn-hero{
+  background:var(--app-gold);color:#fff;font-size:2.5cqw;
+  padding:2.3cqw 2cqw;box-shadow:0 1cqw 2cqw -.6cqw rgba(138,109,52,.5);
+  border:.18cqw solid var(--app-gold-lift);
+}
+.btn-hero.off{background:var(--app-line);color:#A79C8B;box-shadow:none;border-color:transparent}
+.btn-2{
+  background:var(--app-white);color:var(--app-ink);font-size:2.05cqw;
+  padding:1.7cqw 2cqw;border:.22cqw solid var(--app-line);
+}
+.btn-quiet{
+  background:none;color:var(--app-muted);font-size:1.85cqw;
+  padding:1.2cqw;text-decoration:underline;text-underline-offset:.3cqw;
+  font-weight:500;
+}
+
+/* segmented code entry */
+.code-row{display:flex;gap:1.1cqw;justify-content:center}
+.cell{
+  width:6.6cqw;height:8.6cqw;border-radius:1.2cqw;
+  background:var(--app-white);border:.25cqw solid var(--app-line);
+  display:flex;align-items:center;justify-content:center;
+  font-family:'DM Sans',monospace;font-weight:700;
+  font-size:4cqw;color:var(--app-ink);
+}
+.cell.filled{border-color:var(--app-gold);background:#FFFDF8}
+.cell.active{
+  border-color:var(--app-gold);border-width:.4cqw;
+  box-shadow:0 0 0 .5cqw rgba(138,109,52,.13);
+}
+.caret{width:.35cqw;height:4cqw;background:var(--app-gold);border-radius:1px}
+.cell.sep{border:none;background:none;width:2cqw;color:var(--app-line);font-size:3cqw}
+
+/* the old text field, drawn honestly */
+.old-field{
+  border:.22cqw solid #8B8378;border-radius:1cqw;
+  padding:3.6cqw 2cqw 2.6cqw;position:relative;background:transparent;
+  text-align:center;font-family:monospace;font-size:4.4cqw;letter-spacing:.9cqw;
+  color:var(--app-ink);
+}
+.old-field .flabel{
+  position:absolute;top:-1.1cqw;left:2.4cqw;background:var(--app-ground);
+  padding:0 .8cqw;font-size:1.55cqw;color:#8B8378;letter-spacing:0;font-family:var(--ui);
+}
+.ime{
+  position:absolute;left:0;right:0;bottom:0;height:38%;
+  background:repeating-linear-gradient(180deg,#D6D2CB 0 1px,#C9C4BC 1px 2px),#CFCAC2;
+  border-top:.3cqw solid #A9A49B;
+  display:flex;align-items:center;justify-content:center;
+  font-size:1.8cqw;font-weight:700;color:#5C5750;letter-spacing:.1em;text-transform:uppercase;
+}
+.ime span{opacity:.75}
+
+/* step rail */
+.rail{display:flex;align-items:center;gap:1.4cqw}
+.rail i{
+  font-style:normal;font-size:1.6cqw;font-weight:700;letter-spacing:.1em;
+  text-transform:uppercase;color:#B6AB98;
+}
+.rail i.on{color:var(--app-gold)}
+.rail b{
+  display:block;width:1.5cqw;height:1.5cqw;border-radius:50%;
+  background:var(--app-line);flex:none;
+}
+.rail b.on{background:var(--app-gold)}
+.rail b.done{background:var(--app-green)}
+.rail hr{
+  flex:1;height:.22cqw;background:var(--app-line);border:none;margin:0;
+  max-width:4cqw;
+}
+
+/* error slot — reserved whether or not it holds anything */
+.err-slot{min-height:5.2cqw;display:flex;align-items:center;justify-content:center}
+.err{
+  font-size:1.95cqw;color:var(--app-red);font-weight:500;
+  display:flex;align-items:center;gap:1cqw;
+}
+.err::before{
+  content:"!";width:2.4cqw;height:2.4cqw;border-radius:50%;
+  background:var(--app-red);color:#fff;font-size:1.6cqw;font-weight:700;
+  display:flex;align-items:center;justify-content:center;flex:none;
+}
+.slot-ghost{
+  font-size:1.55cqw;color:#C4BAA8;letter-spacing:.1em;text-transform:uppercase;
+}
+
+/* event card (prepare) */
+.ecard{
+  background:var(--app-surface);border-radius:2cqw;padding:2.8cqw;
+  display:flex;flex-direction:column;gap:1.8cqw;
+}
+.ecard .top{display:flex;gap:2.4cqw;align-items:center}
+.cover{
+  width:13cqw;height:13cqw;border-radius:1.4cqw;flex:none;
+  background:linear-gradient(150deg,#C9B48A,#8A6D34 55%,#5C4A22);
+  box-shadow:inset 0 0 0 .3cqw rgba(255,255,255,.35);
+  position:relative;overflow:hidden;
+}
+.cover::after{
+  content:"";position:absolute;inset:22%;border-radius:50%;
+  border:.3cqw solid rgba(255,255,255,.5);
+}
+.pill{
+  display:inline-flex;align-items:center;gap:.9cqw;align-self:flex-start;
+  padding:.7cqw 1.6cqw;border-radius:99px;font-size:1.7cqw;font-weight:700;
+}
+.pill.ok{background:rgba(31,107,76,.13);color:var(--app-green)}
+.pill.warn{background:rgba(138,90,24,.14);color:var(--app-amber)}
+.pill::before{content:"";width:1.1cqw;height:1.1cqw;border-radius:50%;background:currentColor}
+
+/* roster (login) */
+.rrow{
+  background:var(--app-white);border:.22cqw solid var(--app-line);
+  border-radius:1.5cqw;padding:2cqw 2.4cqw;
+  display:flex;align-items:center;gap:1.8cqw;
+}
+.av{
+  width:5.4cqw;height:5.4cqw;border-radius:50%;flex:none;
+  background:var(--app-surface);border:.22cqw solid var(--app-line);
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--display);font-size:2.4cqw;color:var(--app-gold);
+}
+.chip{
+  margin-left:auto;font-size:1.5cqw;font-weight:700;letter-spacing:.09em;
+  text-transform:uppercase;padding:.6cqw 1.3cqw;border-radius:99px;
+  background:var(--app-surface);color:var(--app-muted);
+}
+.chip.sup{background:rgba(138,109,52,.15);color:var(--app-gold)}
+
+/* ── Notes column ──────────────────────────────────────────── */
+.notes{list-style:none;margin:0;padding:0;display:grid;gap:16px}
+.notes li{display:grid;grid-template-columns:auto 1fr;gap:13px;align-items:start}
+.notes .n{
+  width:23px;height:23px;border-radius:50%;background:var(--accent);color:var(--stage);
+  font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;
+  margin-top:2px;flex:none;
+}
+:root[data-theme="dark"] .notes .n{color:#1D1A16}
+.notes b{display:block;font-size:15px;font-weight:700;margin-bottom:3px}
+.notes span{display:block;font-size:14.5px;color:var(--stage-muted);line-height:1.55}
+.notes code{
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;
+  background:var(--accent-soft);padding:1px 5px;border-radius:4px;color:var(--stage-ink);
+}
+
+/* ── Close ─────────────────────────────────────────────────── */
+.close{
+  margin-top:clamp(56px,8vw,100px);padding:clamp(24px,3.5vw,38px);
+  background:var(--stage-2);border:1px solid var(--stage-line);border-radius:14px;
+}
+.close h2{font-family:var(--display);font-weight:400;font-size:clamp(21px,2.8vw,28px);margin:0 0 18px}
+.close ul{margin:0;padding-left:20px;display:grid;gap:9px}
+.close li{font-size:15px;color:var(--stage-muted)}
+.close li b{color:var(--stage-ink);font-weight:700}
+.close code{
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;
+  background:var(--accent-soft);padding:1px 5px;border-radius:4px;color:var(--stage-ink);
+}
+.stamp{
+  margin-top:22px;padding-top:18px;border-top:1px solid var(--stage-line);
+  font-size:14px;color:var(--stage-muted);
+}
+.stamp b{color:var(--was)}
+</style>
+
+</head>
+<body>
+<div class="wrap">
+
+  <p class="eyebrow">Fancy check-in · Android tablet · landscape</p>
+  <h1>Setup, before anyone reaches the door</h1>
+  <p class="lede">
+    Three screens stand between an unboxed tablet and a working entrance:
+    pair it, load tonight's guest list, sign in. They are the screens staff meet
+    first and understand least — and the pairing screen is the least finished
+    thing in the app.
+  </p>
+  <p class="note">
+    This is a mockup, not shipped UI. No Kotlin has been written for it. Colours,
+    type and control shapes are taken from the app's real theme files, so what you
+    see is what the tablet would render.
+  </p>
+
+  <div class="findings">
+    <div class="finding">
+      <span class="screen-tag">Pair</span>
+      <b>No identity at all</b>
+      <span>The first screen anyone ever sees carries no logo and no wordmark. Sign-in, two screens later, does.</span>
+    </div>
+    <div class="finding">
+      <span class="screen-tag">Pair</span>
+      <b>A keyboard for 8 characters</b>
+      <span>On a landscape tablet the soft keyboard covers roughly a third of the screen, and the layout is vertically centred, so the field moves as it opens.</span>
+    </div>
+    <div class="finding">
+      <span class="screen-tag">Pair</span>
+      <b>Nowhere to find the code</b>
+      <span>The instruction names a dashboard without saying where in it to look, and there is no way to paste a code that arrived in a message.</span>
+    </div>
+    <div class="finding">
+      <span class="screen-tag">Prepare</span>
+      <b>A title that is a noun</b>
+      <span>“This tablet” names the screen instead of saying what to do on it.</span>
+    </div>
+    <div class="finding">
+      <span class="screen-tag">Prepare</span>
+      <b>No way back to pairing</b>
+      <span>Nothing in the app unpairs a device. A rented tablet paired to the wrong account is a dead end that needs a reinstall.</span>
+    </div>
+    <div class="finding">
+      <span class="screen-tag">Sign in</span>
+      <b>The instruction is dropped</b>
+      <span>“Who is on the door?” is hidden on compact tablets — removed exactly where the screen is hardest to read.</span>
+    </div>
+  </div>
+
+  <!-- ══ PLATE 1 ══════════════════════════════════════════ -->
+  <section class="plate">
+    <div class="plate-head">
+      <span class="plate-n">01</span>
+      <h2>Pair this tablet</h2>
+      <span class="file">ui/pair/PairScreen.kt · 178 lines</span>
+    </div>
+
+    <div class="compare">
+      <div>
+        <p class="cap was">Today</p>
+        <div class="device"><div class="screen">
+          <div class="pad" style="justify-content:center;align-items:center;gap:2.6cqw;text-align:center">
+            <div class="s-display">Pair this tablet</div>
+            <div class="s-body" style="max-width:60cqw">
+              Enter the 8-character code from the Fancy RSVP dashboard.
+            </div>
+            <div class="old-field" style="width:52cqw;margin-top:1.5cqw">
+              <span class="flabel">Pairing code</span>K7QM
+            </div>
+            <div style="width:52cqw"><div class="btn-hero off">Pair</div></div>
+          </div>
+          <div class="ime"><span>soft keyboard</span></div>
+        </div></div>
+      </div>
+
+      <div>
+        <p class="cap now">Proposed</p>
+        <div class="device"><div class="screen">
+          <div class="pad" style="gap:2.4cqw">
+
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <div style="display:flex;align-items:baseline;gap:1.6cqw">
+                <span class="mk">1</span>
+                <span class="s-script">Fancy</span>
+              </div>
+              <div class="rail">
+                <span class="mk">2</span>
+                <b class="on"></b><i class="on">Pair</i>
+                <hr><b></b><i>Prepare</i>
+                <hr><b></b><i>Sign in</i>
+              </div>
+            </div>
+
+            <div style="text-align:center;margin-top:.6cqw">
+              <div class="s-h">Enter the pairing code</div>
+              <div class="s-small" style="margin-top:.8cqw">
+                Fancy dashboard → Event → Check-in devices
+              </div>
+            </div>
+
+            <div style="display:flex;align-items:center;justify-content:center;gap:1.4cqw">
+              <span class="mk">3</span>
+              <div class="code-row">
+                <div class="cell filled">K</div>
+                <div class="cell filled">7</div>
+                <div class="cell filled">Q</div>
+                <div class="cell filled">M</div>
+                <div class="cell sep">–</div>
+                <div class="cell active"><div class="caret"></div></div>
+                <div class="cell"></div>
+                <div class="cell"></div>
+                <div class="cell"></div>
+              </div>
+            </div>
+
+            <div class="err-slot"><span class="slot-ghost">error appears here</span></div>
+
+            <div style="display:flex;gap:2cqw;align-items:center;margin-top:auto">
+              <div style="flex:1;display:flex;align-items:center;gap:1.2cqw">
+                <span class="mk">4</span>
+                <div class="btn-2">Paste code</div>
+              </div>
+              <div style="flex:1.4"><div class="btn-hero off">Pair tablet</div></div>
+            </div>
+
+            <div style="display:flex;align-items:center;justify-content:center;gap:1.2cqw">
+              <span class="mk">5</span>
+              <div class="btn-quiet" style="width:auto">Where do I find this code?</div>
+            </div>
+
+          </div>
+        </div></div>
+      </div>
+    </div>
+
+    <ul class="notes" style="margin-top:30px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));display:grid">
+      <li><span class="n">1</span><div>
+        <b>The wordmark, first</b>
+        <span>Great Vibes “Fancy”, the same mark sign-in already uses. The first screen should be the most identifiable one, not the only anonymous one.</span>
+      </div></li>
+      <li><span class="n">2</span><div>
+        <b>A step rail</b>
+        <span>Setup is three screens and nothing said so. Someone who stops halfway has no idea whether they finished.</span>
+      </div></li>
+      <li><span class="n">3</span><div>
+        <b>Eight boxes, not a field</b>
+        <span>Each character gets its own target, a mistyped one is visible without re-reading, and the group is 30 % of the screen wide instead of a thin line. The <code>4–4</code> break matches how codes are read aloud.</span>
+      </div></li>
+      <li><span class="n">4</span><div>
+        <b>Paste</b>
+        <span>Codes arrive in a message on someone's phone, or in an email on the tablet itself. Retyping eight characters is the failure mode, not the flow.</span>
+      </div></li>
+      <li><span class="n">5</span><div>
+        <b>Where the code lives</b>
+        <span>Expands to the three-step path through the dashboard. The current copy also still says “Fancy RSVP” — a leftover from the rebrand.</span>
+      </div></li>
+      <li><span class="n">6</span><div>
+        <b>A reserved error slot</b>
+        <span>Errors currently appear between the field and the button, so the button drops as you reach for it. The space is now always there.</span>
+      </div></li>
+    </ul>
+  </section>
+
+  <!-- ══ PLATE 2 ══════════════════════════════════════════ -->
+  <section class="plate">
+    <div class="plate-head">
+      <span class="plate-n">02</span>
+      <h2>Get this tablet ready</h2>
+      <span class="file">ui/prepare/PrepareScreen.kt · 531 lines</span>
+    </div>
+
+    <div class="split">
+      <div>
+        <p class="cap now">Proposed</p>
+        <div class="device"><div class="screen">
+          <div class="pad" style="gap:2.2cqw">
+
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <span class="s-script" style="font-size:3.8cqw">Fancy</span>
+              <div class="rail">
+                <b class="done"></b><i>Pair</i>
+                <hr><b class="on"></b><i class="on">Prepare</i>
+                <hr><b></b><i>Sign in</i>
+              </div>
+            </div>
+
+            <div style="display:flex;align-items:center;gap:1.4cqw">
+              <span class="mk">1</span>
+              <div class="s-h">Get this tablet ready</div>
+            </div>
+
+            <div class="ecard">
+              <div class="top">
+                <div class="cover"></div>
+                <div style="flex:1;min-width:0">
+                  <div class="s-display" style="font-size:3.4cqw">Al-Rashid Wedding</div>
+                  <div class="s-small" style="margin-top:.7cqw">
+                    Hilton Bayfront · 22 Aug 2026, 7:00 PM · 240 guests
+                  </div>
+                  <div class="pill ok" style="margin-top:1.4cqw">Ready offline</div>
+                  <div class="s-small" style="margin-top:.9cqw;font-size:1.5cqw">
+                    Guest list from 4:32 PM
+                  </div>
+                </div>
+              </div>
+              <div class="btn-hero">Start check-in</div>
+            </div>
+
+            <div style="display:flex;gap:1.8cqw;align-items:center;margin-top:auto">
+              <div style="flex:1"><div class="btn-2">Refresh guest list</div></div>
+              <div style="flex:1;display:flex;align-items:center;gap:1.2cqw">
+                <span class="mk">2</span>
+                <div class="btn-quiet" style="width:auto">Pair to a different account</div>
+              </div>
+            </div>
+
+          </div>
+        </div></div>
+      </div>
+
+      <ul class="notes">
+        <li><span class="n">1</span><div>
+          <b>The title says what to do</b>
+          <span>“This tablet” was a label on a screen whose whole job is a question: can I leave for the venue yet. The one-card layout underneath is good and stays exactly as it is.</span>
+        </div></li>
+        <li><span class="n">2</span><div>
+          <b>A way back to pairing</b>
+          <span>Nothing in the app can currently unpair a device — not the menu, not this screen. A tablet paired to the wrong event or handed between two organisers has to be reinstalled. This is the only genuinely new capability in the whole redesign; everything else is a rearrangement.</span>
+        </div></li>
+        <li><span class="n">3</span><div>
+          <b>“Internet is required now”</b>
+          <span>That line currently sits inside the not-yet-downloaded state, which is right — but it belongs above the button that needs it, not below the card. A small move.</span>
+        </div></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ══ PLATE 3 ══════════════════════════════════════════ -->
+  <section class="plate">
+    <div class="plate-head">
+      <span class="plate-n">03</span>
+      <h2>Who is on the door?</h2>
+      <span class="file">ui/login/StaffLoginScreen.kt · 391 lines</span>
+    </div>
+
+    <div class="split">
+      <div>
+        <p class="cap now">Proposed</p>
+        <div class="device"><div class="screen">
+          <div class="pad" style="gap:2cqw">
+
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <span class="s-script" style="font-size:3.8cqw">Fancy</span>
+              <div class="rail">
+                <b class="done"></b><i>Pair</i>
+                <hr><b class="done"></b><i>Prepare</i>
+                <hr><b class="on"></b><i class="on">Sign in</i>
+              </div>
+            </div>
+
+            <div style="display:flex;align-items:center;gap:1.4cqw">
+              <span class="mk">1</span>
+              <div class="s-h">Who is on the door?</div>
+            </div>
+
+            <div style="display:grid;gap:1.4cqw">
+              <div class="rrow">
+                <div class="av">N</div>
+                <div class="s-body" style="color:var(--app-ink);font-size:2.4cqw;font-weight:500">Nadia Haddad</div>
+                <span class="mk" style="margin-left:auto">2</span>
+                <span class="chip sup" style="margin-left:1.2cqw">Supervisor</span>
+              </div>
+              <div class="rrow">
+                <div class="av">O</div>
+                <div class="s-body" style="color:var(--app-ink);font-size:2.4cqw;font-weight:500">Omar Fahmy</div>
+                <span class="chip">Usher</span>
+              </div>
+              <div class="rrow">
+                <div class="av">L</div>
+                <div class="s-body" style="color:var(--app-ink);font-size:2.4cqw;font-weight:500">Layla Mansour</div>
+                <span class="chip">Usher</span>
+              </div>
+            </div>
+
+          </div>
+        </div></div>
+      </div>
+
+      <ul class="notes">
+        <li><span class="n">1</span><div>
+          <b>Keep the question at every size</b>
+          <span>The heading is currently hidden when <code>dimens.compact</code> is true, leaving a wordmark above an unlabelled list of names. It is the only instruction on the screen, and it is dropped on the smallest tablet — the one where guessing is hardest.</span>
+        </div></li>
+        <li><span class="n">2</span><div>
+          <b>Role on the row</b>
+          <span>Only a supervisor can close an event or override an admission. Staff should be able to see which of them is which before tapping, not after.</span>
+        </div></li>
+        <li><span class="n">3</span><div>
+          <b>The PIN keypad stays</b>
+          <span>Tapping a name already opens a full-size numeric keypad, which is the right control. Untouched.</span>
+        </div></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ══ CLOSE ════════════════════════════════════════════ -->
+  <section class="close">
+    <h2>What it would take</h2>
+    <ul>
+      <li><b>One new shared component.</b> <code>SetupHeader</code> — wordmark plus step rail, used by all three screens. Roughly 60 lines.</li>
+      <li><b>One new control.</b> <code>CodeCells</code> — the segmented entry, driven by the existing view-model string so <code>PairViewModel</code> is untouched.</li>
+      <li><b>One new capability.</b> Unpair, in <code>DeviceRepository</code> plus a confirmation dialog. Everything else on these three screens is layout and copy.</li>
+      <li><b>Around a dozen strings.</b> Including the stale <code>pair_instructions</code>, which still says “Fancy RSVP” after the rebrand.</li>
+      <li><b>No change to any view-model, repository, or network call</b> other than unpair.</li>
+    </ul>
+    <p class="stamp">
+      <b>Not verified.</b> There is no JDK on this machine, so nothing here has been
+      compiled and no screen in this app has been seen rendered on a device. Treat
+      the mockup as the design decision and the tablet as the test.
+    </p>
+  </section>
+
+</div>
+</body>
+</html>

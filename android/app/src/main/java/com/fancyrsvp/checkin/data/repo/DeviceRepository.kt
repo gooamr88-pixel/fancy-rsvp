@@ -41,6 +41,17 @@ class DeviceRepository @Inject constructor(
         data class Failed(val code: Int, val message: String?) : PairResult
     }
 
+    /**
+     * Outcome of releasing a tablet from its account.
+     *
+     * [Blocked] is not an error the operator can retry past — it is the whole
+     * point of the check. See [unpair].
+     */
+    sealed interface UnpairResult {
+        data object Success : UnpairResult
+        data class Blocked(val pending: Int) : UnpairResult
+    }
+
     val isPaired: Boolean get() = secureStore.isPaired
     val pairedEventId: String? get() = secureStore.pairedEventId
     val deviceLabel: String? get() = secureStore.deviceLabel
@@ -127,6 +138,48 @@ class DeviceRepository @Inject constructor(
         osVersion = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
         installId = installId(),
     )
+
+    /**
+     * Releases this tablet from its account, so it can be paired to another.
+     *
+     * ── Why this exists ──
+     *
+     * Nothing in the app could undo a pairing. Not the menu, not the preparation
+     * screen, not anywhere. A tablet paired to the wrong event, a rental going
+     * back to the hire company, a device handed from one organiser to the next —
+     * every one of those needed the app uninstalled and reinstalled, by someone
+     * who probably does not have the tablet in front of them.
+     *
+     * ── Why it refuses while anything is unsent ──
+     *
+     * Unpairing clears the credentials the sync queue authenticates with, so a
+     * check-in still sitting in that queue could never be delivered afterwards.
+     * Those records exist NOWHERE else — they are guests who were admitted at a
+     * door on a tablet that was offline. Losing them is the worst outcome in the
+     * system, and it is exactly the outcome someone tidying up a device at the
+     * end of a night would cause without this check.
+     *
+     * The count is returned rather than a bare refusal so the screen can say how
+     * many, which is the difference between "wait for signal" and "something is
+     * wrong".
+     */
+    suspend fun unpair(): UnpairResult = withContext(io) {
+        val pending = db.syncQueueDao().totalDepth()
+        if (pending > 0) return@withContext UnpairResult.Blocked(pending)
+
+        // Guest data goes with the credentials. Leaving a decrypted-at-rest guest
+        // list on a tablet that no longer belongs to the event is the §20.3 leak
+        // this whole storage design exists to prevent, and the next operator to
+        // pair the device would have no idea it was there.
+        //
+        // purgeEventData re-checks the per-event queue depth. That is redundant
+        // after the total check above and is left alone deliberately: it is the
+        // guard that makes the function safe to call from anywhere.
+        secureStore.pairedEventId?.let { purgeEventData(it) }
+
+        secureStore.clearDeviceCredentials()
+        UnpairResult.Success
+    }
 
     /**
      * Purges local event data after a confirmed wipe or an event close (§20.5).

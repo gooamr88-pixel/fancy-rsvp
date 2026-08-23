@@ -9,12 +9,14 @@ import androidx.navigation.compose.rememberNavController
 import com.fancyrsvp.checkin.ui.close.CloseEventScreen
 import com.fancyrsvp.checkin.ui.entrance.EntranceDisplayScreen
 import com.fancyrsvp.checkin.ui.guests.GuestListScreen
+import com.fancyrsvp.checkin.ui.howto.HowToPairScreen
 import com.fancyrsvp.checkin.ui.login.StaffLoginScreen
 import com.fancyrsvp.checkin.ui.menu.MenuScreen
 import com.fancyrsvp.checkin.ui.pair.PairScreen
 import com.fancyrsvp.checkin.ui.prepare.PrepareScreen
 import com.fancyrsvp.checkin.ui.scanner.ScannerScreen
 import com.fancyrsvp.checkin.ui.session.SessionManager
+import com.fancyrsvp.checkin.ui.welcome.WelcomeScreen
 import com.fancyrsvp.checkin.ui.theme.enterDeeper
 import com.fancyrsvp.checkin.ui.theme.enterShallower
 import com.fancyrsvp.checkin.ui.theme.exitDeeper
@@ -27,7 +29,11 @@ import com.fancyrsvp.checkin.ui.theme.exitShallower
  *
  * Setup runs once, in order, and is never seen again:
  *
- *     pair -> prepare -> login -> SCANNER
+ *     welcome -> pair -> prepare -> login -> SCANNER
+ *
+ * `welcome` is reached only by an UNPAIRED tablet. A paired one starts at
+ * `prepare`, because staff arriving at a venue must not be made to tap past a
+ * greeting they have already read.
  *
  * After that the scanner is home and the graph is flat:
  *
@@ -51,6 +57,9 @@ import com.fancyrsvp.checkin.ui.theme.exitShallower
  *    can still tell which way they just moved.
  */
 object Routes {
+    const val WELCOME = "welcome"
+    /** Reachable from BOTH welcome and pairing — see the composable's comment. */
+    const val HOW_TO_PAIR = "how-to-pair"
     const val PAIR = "pair"
     const val PREPARE = "prepare"
     const val LOGIN = "login/{eventId}"
@@ -115,20 +124,49 @@ fun CheckinNavHost(
     NavHost(
         navController = navController,
         // An unpaired tablet has nothing else it can usefully do.
-        startDestination = if (isPaired) Routes.PREPARE else Routes.PAIR,
+        startDestination = if (isPaired) Routes.PREPARE else Routes.WELCOME,
         enterTransition = { enterDeeper() },
         exitTransition = { exitDeeper() },
         popEnterTransition = { enterShallower() },
         popExitTransition = { exitShallower() },
     ) {
+        composable(Routes.WELCOME) {
+            // NOT popped on the way to pairing. Going back from the code form to
+            // read the greeting again is a reasonable thing to want, and the
+            // screen is free to return to — it holds no state and consumes
+            // nothing. Everything from PAIR onward is popped, because those
+            // screens do consume something.
+            WelcomeScreen(
+                onStart = { navController.navigate(Routes.PAIR) },
+                onOpenGuide = { navController.navigate(Routes.HOW_TO_PAIR) },
+            )
+        }
+
+        /*
+         * The pairing guide, reachable from welcome AND from the code form.
+         *
+         * `popBackStack()` rather than a route, so it returns to whichever of
+         * the two opened it. Reading the guide from the code form must land back
+         * on the code form with the digits still there — sending it to a fixed
+         * destination would throw away a half-typed code, which is exactly what
+         * someone consulting instructions is in the middle of.
+         */
+        composable(Routes.HOW_TO_PAIR) {
+            HowToPairScreen(onDone = { navController.popBackStack() })
+        }
+
         composable(Routes.PAIR) {
             PairScreen(
+                onOpenGuide = { navController.navigate(Routes.HOW_TO_PAIR) },
                 onPaired = {
-                    // popUpTo removes pairing from the back stack: returning to
-                    // it after a successful pair would offer to consume a code
-                    // that is already spent.
+                    // popUpTo the START of setup, inclusive: after a successful
+                    // pair neither the code form nor the greeting may be reached
+                    // again. Returning to pairing would offer to consume a code
+                    // that is already spent, and returning to the welcome screen
+                    // would offer to start setup on a tablet that has finished
+                    // it.
                     navController.navigate(Routes.PREPARE) {
-                        popUpTo(Routes.PAIR) { inclusive = true }
+                        popUpTo(Routes.WELCOME) { inclusive = true }
                     }
                 },
             )
@@ -137,6 +175,15 @@ fun CheckinNavHost(
         composable(Routes.PREPARE) {
             PrepareScreen(
                 onEventReady = { eventId -> navController.navigate(Routes.login(eventId)) },
+                // A released tablet is an unpaired tablet, so it goes back to
+                // where an unpaired tablet starts. The whole stack is dropped,
+                // inclusive: preparation is now a screen for an account this
+                // device no longer belongs to, and its event list is gone.
+                onReleased = {
+                    navController.navigate(Routes.WELCOME) {
+                        popUpTo(Routes.PREPARE) { inclusive = true }
+                    }
+                },
             )
         }
 

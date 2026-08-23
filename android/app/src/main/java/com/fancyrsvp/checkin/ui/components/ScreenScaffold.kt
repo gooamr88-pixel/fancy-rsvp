@@ -130,6 +130,16 @@ fun ScreenScaffold(
 fun BackToScannerBar(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * What the bar says it goes to.
+     *
+     * Defaulted, so every existing caller keeps the promise the doc above makes.
+     * It is overridable for exactly one case: the setup guide, reached before a
+     * tablet is paired. There is no scanner to go back to at that point, and a
+     * bar promising one would be the first thing the app said to a new operator
+     * that was not true.
+     */
+    label: String = stringResource(R.string.nav_back_to_scanner),
 ) {
     val dimens = LocalDimens.current
     val interactionSource = remember { MutableInteractionSource() }
@@ -167,7 +177,7 @@ fun BackToScannerBar(
             Chevron(color = MaterialTheme.colorScheme.primary, pointsBack = true)
             Spacer(Modifier.width(16.dp))
             Text(
-                stringResource(R.string.nav_back_to_scanner),
+                label,
                 style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.primary,
                 maxLines = 1,

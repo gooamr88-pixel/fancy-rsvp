@@ -17,10 +17,12 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -32,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -43,7 +46,8 @@ import com.fancyrsvp.checkin.ui.components.PrimaryAction
 import com.fancyrsvp.checkin.ui.components.QuietAction
 import com.fancyrsvp.checkin.ui.components.ScrollableCenteredColumn
 import com.fancyrsvp.checkin.ui.components.SecondaryAction
-import com.fancyrsvp.checkin.ui.components.SectionLabel
+import com.fancyrsvp.checkin.ui.components.SetupHeader
+import com.fancyrsvp.checkin.ui.components.SetupStep
 import com.fancyrsvp.checkin.ui.components.pressableSurface
 import com.fancyrsvp.checkin.ui.components.rememberEventCover
 import com.fancyrsvp.checkin.ui.theme.LocalDimens
@@ -101,6 +105,7 @@ private fun formatEventStart(startsAt: Long, timezone: String?): String {
 @Composable
 fun PrepareScreen(
     onEventReady: (eventId: String) -> Unit,
+    onReleased: () -> Unit,
     viewModel: PrepareViewModel = hiltViewModel(),
 ) {
     val events by viewModel.events.collectAsState()
@@ -108,8 +113,11 @@ fun PrepareScreen(
     val preparingId by viewModel.preparingEventId.collectAsState()
     val refreshing by viewModel.refreshing.collectAsState()
     val listError by viewModel.listError.collectAsState()
+    val unpairBlockedBy by viewModel.unpairBlockedBy.collectAsState()
+    val unpairing by viewModel.unpairing.collectAsState()
     val dimens = LocalDimens.current
 
+    var confirmRelease by remember { mutableStateOf(false) }
     var chosenId by remember { mutableStateOf<String?>(null) }
     // With a single event there is nothing to choose, so the picker is skipped
     // entirely rather than shown as a list of one.
@@ -130,8 +138,22 @@ fun PrepareScreen(
                 ),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            SectionLabel(stringResource(R.string.prepare_title))
-            Spacer(Modifier.height(dimens.sectionGap))
+            SetupHeader(
+                current = SetupStep.Prepare,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(dimens.sectionGap * 0.6f))
+
+            // "This tablet" named the screen. The screen's job is a question —
+            // can I leave for the venue yet — and its title should be the
+            // instruction that answers it.
+            Text(
+                text = stringResource(R.string.prepare_title),
+                style = MaterialTheme.typography.headlineLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(dimens.sectionGap * 0.7f))
 
             Box(Modifier.widthIn(max = 760.dp).weight(1f)) {
                 /*
@@ -211,8 +233,157 @@ fun PrepareScreen(
                     )
                 }
             }
+
+            /*
+             * The way out of a pairing.
+             *
+             * Deliberately the quietest control on the screen and deliberately
+             * present on all of its states, including "no events assigned" —
+             * which is precisely the screen a tablet paired to the wrong account
+             * lands on, and where the operator previously had nothing to do but
+             * tap Refresh at a dashboard that was never going to answer.
+             */
+            if (progress == null) {
+                Spacer(Modifier.height(8.dp))
+                QuietAction(
+                    text = stringResource(R.string.prepare_release),
+                    onClick = { confirmRelease = true },
+                )
+            }
         }
     }
+
+    if (confirmRelease) {
+        ReleaseTabletDialog(
+            busy = unpairing,
+            onConfirm = {
+                viewModel.unpair {
+                    confirmRelease = false
+                    onReleased()
+                }
+            },
+            onDismiss = { confirmRelease = false },
+        )
+    }
+
+    // Shown INSTEAD of the release going through, not alongside it. The tablet
+    // is still paired and still holds the check-ins, which is the whole reason
+    // the attempt was refused.
+    unpairBlockedBy?.let { pending ->
+        ReleaseBlockedDialog(
+            pending = pending,
+            onDismiss = {
+                viewModel.clearUnpairBlock()
+                confirmRelease = false
+            },
+        )
+    }
+}
+
+/**
+ * Confirms releasing the tablet.
+ *
+ * A confirmation rather than a straight action because it destroys the local
+ * guest list and the credentials together, and the control sits on a screen
+ * staff open before every event. The body says what is lost, in the order it
+ * matters.
+ */
+@Composable
+private fun ReleaseTabletDialog(
+    busy: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = {
+            Text(
+                stringResource(R.string.prepare_release_title),
+                style = MaterialTheme.typography.headlineLarge,
+            )
+        },
+        text = {
+            Text(
+                stringResource(R.string.prepare_release_body),
+                style = MaterialTheme.typography.bodyLarge,
+            )
+        },
+        // TextButton, matching the app's other dialogs. PrimaryAction and
+        // DestructiveAction both apply fillMaxWidth internally, so dropping one
+        // into a dialog's button slot makes it claim the whole row and pushes
+        // Cancel onto a second line at hero height.
+        confirmButton = {
+            TextButton(
+                onClick = onConfirm,
+                enabled = !busy,
+                modifier = Modifier.heightIn(min = LocalDimens.current.minTouch),
+            ) {
+                Text(
+                    stringResource(R.string.prepare_release_confirm),
+                    style = MaterialTheme.typography.titleLarge,
+                    // The one destructive word in the dialog, in the one colour
+                    // reserved for destructive actions.
+                    color = StateAttention,
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !busy,
+                modifier = Modifier.heightIn(min = LocalDimens.current.minTouch),
+            ) {
+                Text(
+                    stringResource(R.string.action_cancel),
+                    style = MaterialTheme.typography.titleLarge,
+                )
+            }
+        },
+    )
+}
+
+/**
+ * The refusal. Unsent check-ins exist nowhere else, and releasing the tablet
+ * clears the credentials they would be sent with.
+ */
+@Composable
+private fun ReleaseBlockedDialog(
+    pending: Int,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                stringResource(R.string.prepare_release_blocked_title),
+                style = MaterialTheme.typography.headlineLarge,
+            )
+        },
+        text = {
+            Text(
+                // Zero is the view model's marker for "the attempt itself
+                // failed", which is a different sentence: nothing is being held
+                // back, the release simply did not happen.
+                text = if (pending > 0) {
+                    stringResource(R.string.prepare_release_blocked_body, pending)
+                } else {
+                    stringResource(R.string.prepare_release_failed)
+                },
+                style = MaterialTheme.typography.bodyLarge,
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.heightIn(min = LocalDimens.current.minTouch),
+            ) {
+                Text(
+                    stringResource(R.string.action_ok),
+                    style = MaterialTheme.typography.titleLarge,
+                )
+            }
+        },
+    )
 }
 
 /**

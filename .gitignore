@@ -49,3 +49,4 @@ android/.gradle/
 *.jks
 *.keystore
 *.p12
+"/images/" 

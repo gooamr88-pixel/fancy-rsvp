@@ -12,7 +12,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.ui.unit.IntOffset
-import androidx.navigation.NavBackStackEntry
 
 /**
  * Motion tokens.
@@ -86,30 +85,37 @@ object Motion {
 // Written against the container edges (Start/End) rather than Left/Right, so
 // the direction stays correct if the app is ever localised to Arabic. In RTL
 // "deeper" comes from the left, which is what an Arabic reader expects.
+//
+// Generic in the target type rather than fixed to NavBackStackEntry. These are
+// the app's grammar for "forward" and "back", and forward is not only a route
+// change — the pairing guide pages through four steps inside one destination
+// and has to move the same way, or the app has two contradictory ideas of which
+// direction progress travels. The NavHost's own calls are unaffected: S simply
+// infers as NavBackStackEntry there.
 
 /** Entering a screen one level deeper. */
-fun AnimatedContentTransitionScope<NavBackStackEntry>.enterDeeper(): EnterTransition =
+fun <S> AnimatedContentTransitionScope<S>.enterDeeper(): EnterTransition =
     slideIntoContainer(
         towards = AnimatedContentTransitionScope.SlideDirection.Start,
         animationSpec = Motion.enter<IntOffset>(),
     ) + fadeIn(Motion.enter())
 
 /** The screen you are leaving behind as you go deeper. */
-fun AnimatedContentTransitionScope<NavBackStackEntry>.exitDeeper(): ExitTransition =
+fun <S> AnimatedContentTransitionScope<S>.exitDeeper(): ExitTransition =
     slideOutOfContainer(
         towards = AnimatedContentTransitionScope.SlideDirection.Start,
         animationSpec = Motion.enter<IntOffset>(),
     ) + fadeOut(Motion.enter())
 
 /** Coming back up. The exact reverse of [enterDeeper]. */
-fun AnimatedContentTransitionScope<NavBackStackEntry>.enterShallower(): EnterTransition =
+fun <S> AnimatedContentTransitionScope<S>.enterShallower(): EnterTransition =
     slideIntoContainer(
         towards = AnimatedContentTransitionScope.SlideDirection.End,
         animationSpec = Motion.enter<IntOffset>(),
     ) + fadeIn(Motion.enter())
 
 /** Coming back up. The exact reverse of [exitDeeper]. */
-fun AnimatedContentTransitionScope<NavBackStackEntry>.exitShallower(): ExitTransition =
+fun <S> AnimatedContentTransitionScope<S>.exitShallower(): ExitTransition =
     slideOutOfContainer(
         towards = AnimatedContentTransitionScope.SlideDirection.End,
         animationSpec = Motion.enter<IntOffset>(),
