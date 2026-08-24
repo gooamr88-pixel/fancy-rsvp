@@ -303,7 +303,7 @@ export default function EventSettings({ eventId, event, onEventUpdated, onEventD
     ha_gift_bank_name: '', ha_gift_account_name: '', ha_gift_iban: '', ha_gift_registry_label: '', ha_gift_message: '',
     ha_dress_ladies: '', ha_dress_gentlemen: '', ha_closing_message: '',
     // Sealed Letter's portrait — see the matching block in the hydration below.
-    letter_hero_photo: '', letter_hero_focus: 'center',
+    letter_hero_photo: '', letter_hero_focus: 'center', letter_hero_text_pos: 'bottom',
     letter_hero_caption: '', letter_hero_caption_sub: '',
   });
   const [saving, setSaving] = useState(false);
@@ -705,6 +705,7 @@ export default function EventSettings({ eventId, event, onEventUpdated, onEventD
            in this list. */
         letter_hero_photo: event.template_data?.letter_hero_photo || '',
         letter_hero_focus: event.template_data?.letter_hero_focus || 'center',
+        letter_hero_text_pos: event.template_data?.letter_hero_text_pos || 'bottom',
         letter_hero_caption: event.template_data?.letter_hero_caption || '',
         letter_hero_caption_sub: event.template_data?.letter_hero_caption_sub || '',
       });
@@ -2300,8 +2301,8 @@ export default function EventSettings({ eventId, event, onEventUpdated, onEventD
             read. */}
         {effectiveTemplateType === 'letter' && (
           <div style={{ marginTop: '16px', padding: '16px', background: COLORS.softBg, borderRadius: '8px', border: `1px solid ${COLORS.border}` }}>
-            <h4 style={{ margin: '0 0 4px 0', fontSize: '13px', fontWeight: 600, color: COLORS.charcoal }}>The Portrait</h4>
-            <span style={hintStyle}>Your photograph goes inside the carved frame your guests open onto. Leave it empty and the frame keeps its own illustration.</span>
+            <h4 style={{ margin: '0 0 4px 0', fontSize: '13px', fontWeight: 600, color: COLORS.charcoal }}>Your Photograph</h4>
+            <span style={hintStyle}>Your own photo fills the whole page your guests land on once the letter opens, with your names and your words written over it. Leave it empty and they land on your names alone, on the template&apos;s paper.</span>
             <div style={{ marginTop: 12 }}>
               <LetterPortraitFields
                 value={templateData}

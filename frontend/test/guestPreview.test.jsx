@@ -111,15 +111,22 @@ describe('the preview renders the real page', () => {
      whichever test triggers it, which is what made this file's first test time
      out against the 15s default. */
   let GuestExperiencePreview;
-  /* 60s, not the config's 15s hook timeout. This single import pulls the whole
-     guest renderer — every section, the RSVP form, both cinematic openings,
-     framer-motion — and transforming that graph exceeds 15s whenever the suite
-     is sharing a machine. Raised HERE rather than in vitest.config so the
-     global ceiling stays tight and only the hook that genuinely needs the room
-     gets it. */
+  /* 150s, not the config's 15s hook timeout. This single import pulls the whole
+     guest renderer — every section, the RSVP form, ALL FOUR cinematic openings
+     (the preview loads them statically on purpose: a cover that has to
+     round-trip for a chunk before it appears defeats the point of previewing
+     it), framer-motion — and transforming that graph exceeds 15s whenever the
+     suite is sharing a machine.
+
+     It was 60s and a fourth template pushed it past that too. The number is a
+     machine-speed allowance, not a claim about the code: when it is exceeded
+     the whole FILE reports as failed and its four tests as skipped, which
+     reads like the preview is broken. Raised HERE rather than in
+     vitest.config so the global ceiling stays tight and only the hook that
+     genuinely needs the room gets it. */
   beforeAll(async () => {
     ({ default: GuestExperiencePreview } = await import('../src/app/components/templates/GuestExperiencePreview'));
-  }, 60000);
+  }, 150000);
 
   const renderPreview = async (state = WIZARD_STATE, props = {}) => {
     let result;

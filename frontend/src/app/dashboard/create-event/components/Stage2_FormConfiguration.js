@@ -583,8 +583,8 @@ export default function Stage2_FormConfiguration({
                 same block, from the same component, is in EventSettings. */}
             {templateType === 'letter' && (
               <Field
-                label="The Portrait"
-                hint="Your photograph goes inside the carved frame your guests open onto. Leave it empty and the frame keeps its own illustration."
+                label="Your Photograph"
+                hint="Your own photo fills the whole page your guests land on once the letter opens, with your names and your words written over it. Leave it empty and they land on your names alone, on the template's paper."
               >
                 <LetterPortraitFields
                   value={templateData}

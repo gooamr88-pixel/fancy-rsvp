@@ -43,7 +43,27 @@ const SHOTS = {
   ring: "/images/landing/hero-ring.webp",
   bab: "/images/landing/hero-bab.webp",
   swans: "/images/landing/hero-swans.webp",
-  letter: "/images/landing/hero-letter.webp",
+  /* The SEALED envelope, not the opened page — the one exception, and a
+     deliberate one. The other three open onto photography we supply, so their
+     opened page is the thing to show. Sealed Letter opens onto the couple's
+     OWN photograph, and there is no honest picture of that: any hero shot
+     here would be a stock couple standing in for theirs, which is exactly the
+     impression this template exists to avoid giving. So the plate shows what
+     we actually ship — the envelope — and says in words what goes behind it,
+     with the inset below standing in at a size that cannot be mistaken for a
+     promise. */
+  letter: "/images/landing/cover-letter.webp",
+};
+
+/** Templates whose plate carries the "your own photo goes here" note. */
+const OWN_PHOTO = {
+  letter: {
+    /* Lifted from the template's own former hero artwork — the illustration
+       that used to be printed into it, now retired from the product and kept
+       only at this size. */
+    illustration: "/images/landing/couple-illustration.webp",
+    line: "And behind it, your own photograph — full screen, with your names and your words across it.",
+  },
 };
 
 /** What a guest actually does to open each one — the thing worth showing. */
@@ -51,15 +71,27 @@ const ARRIVAL = {
   ring: "They touch the box. It opens on film.",
   bab: "They knock three times. It answers.",
   swans: "They break the seal. The card rises out.",
+  /* Short, like the other three. The "your own photograph" claim lives in the
+     note below it — saying it here as well made the plate state the same
+     thing three times over, in the arrival, the note and the description. */
   letter: "They touch the wax. Both flaps fall open.",
 };
 
 /** Lowercase roman, to pair with the section numeral without competing. */
 const PLATE_NUMERAL = ["i", "ii", "iii", "iv", "v"];
 
+/* The band's own headline and its commission strip both COUNT the templates,
+   and both had the number typed into the sentence — so shipping a fourth
+   template left the page saying "three" twice, in the two places a visitor
+   reads first. Spelled from the list that is actually being rendered. */
+const COUNT_WORD = ["no", "one", "two", "three", "four", "five", "six", "seven"];
+const countWord = (n) => COUNT_WORD[n] || String(n);
+const titleCase = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
 function TemplatePlate({ template, index }) {
   const policy = occasionPolicyFor(template.key);
   const shot = SHOTS[template.key];
+  const own = OWN_PHOTO[template.key];
 
   return (
     <li className="tss-plate">
@@ -72,6 +104,7 @@ function TemplatePlate({ template, index }) {
           height={1013}
           loading="lazy"
         />
+
       </div>
 
       <div className="tss-namerow">
@@ -82,6 +115,28 @@ function TemplatePlate({ template, index }) {
       </div>
 
       <p className="tss-arrival">{ARRIVAL[template.key]}</p>
+
+      {/* An annotated note, sitting in the flow AFTER the name — not an inset
+          floated over the artwork. Overlapping the device covered the couple's
+          names printed on the envelope, and placing it above the title broke
+          the rhythm every other plate keeps (picture, name, arrival,
+          description). Beside its own illustration it reads as a margin note
+          about what is inside, which is exactly what it is. */}
+      {own && (
+        <figure className="tss-own">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            className="tss-own__fig"
+            src={own.illustration}
+            alt="An illustration of a couple, standing in for the photograph you upload"
+            width={285}
+            height={338}
+            loading="lazy"
+          />
+          <figcaption className="tss-own__line">{own.line}</figcaption>
+        </figure>
+      )}
+
       <p className="tss-desc">{template.desc}</p>
       <span className="tss-badge">{policy.label}</span>
     </li>
@@ -139,7 +194,7 @@ export default async function TemplatesShowcaseSection() {
             <span aria-hidden="true" className="tss-kicker__rule" />
           </span>
           <span className="tss-secnum" aria-hidden="true">I</span>
-          <h2 id="tss-title" className="tss-title">Four ways to open a door.</h2>
+          <h2 id="tss-title" className="tss-title">{titleCase(countWord(shown.length))} ways to open a door.</h2>
           <p className="tss-sub">
             {/* "Filmed, not animated" was true of three and is not true of the
                 fourth — Sealed Letter is a sprite sheet, which is why it opens
@@ -181,7 +236,7 @@ export default async function TemplatesShowcaseSection() {
                 <span aria-hidden="true" className="tss-comm__rule" />
               </span>
               <h3 id="tss-comm-title" className="tss-comm__title">
-                These three are where we start, not where we stop.
+                These {countWord(shown.length)} are where we start, not where we stop.
               </h3>
               <p className="tss-comm__body">
                 If what you are imagining is not here — your own artwork, another
@@ -324,6 +379,42 @@ export default async function TemplatesShowcaseSection() {
           width: 100%;
           height: auto;
           border-radius: 17px;
+        }
+
+        /* ── "and behind it, your own photograph" ──
+           A margin note: the stand-in illustration beside the sentence it
+           illustrates. Small on purpose — it is standing in for something we
+           do not have, and at 54px it can never be mistaken for a picture the
+           template ships. In the FLOW, not floated over the device: as an
+           overlay it covered the couple's names printed on the envelope. */
+        .tss-own {
+          display: flex;
+          align-items: flex-start;
+          gap: 12px;
+          margin: 12px 0 0;
+          padding: 10px 12px;
+          background: ${C.paper};
+          border: 1px solid #DED4C1;
+        }
+        /* 64px, not 54. At 54 the two figures had merged into one grey shape
+           and the note illustrated nothing; at 64 the dress and the suit read
+           as a couple, which is the entire job. Still far too small to be
+           taken for a picture the template ships. */
+        .tss-own__fig {
+          flex: none;
+          width: 64px;
+          height: auto;
+          display: block;
+          border: 1px solid #E6DCCB;
+        }
+        .tss-own__line {
+          margin: 0;
+          min-width: 0;
+          font-family: ${T.display};
+          font-size: 13.5px;
+          font-style: italic;
+          line-height: 1.5;
+          color: ${C.goldInk};
         }
 
         .tss-namerow {

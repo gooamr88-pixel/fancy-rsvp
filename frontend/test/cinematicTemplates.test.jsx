@@ -491,19 +491,18 @@ describe('rewired modules still load', () => {
     ['HeroCardDownload', () => import('../src/app/components/templates/cinematic/HeroCardDownload')],
     ['curatedTemplates', () => import('../src/app/utils/curatedTemplates')],
     ['SealedLetterOpening', () => import('../src/app/components/guest/openings/SealedLetterOpening')],
-    ['LetterFrameHero', () => import('../src/app/components/templates/cinematic/LetterFrameHero')],
+    ['LetterPortraitHero', () => import('../src/app/components/templates/cinematic/LetterPortraitHero')],
     ['LetterPortraitFields', () => import('../src/app/components/LetterPortraitFields')],
     ['GuestExperiencePreview', () => import('../src/app/components/templates/GuestExperiencePreview')],
   ])('%s imports cleanly', async (_name, load) => {
     const mod = await load();
     expect(mod).toBeTruthy();
-    /* 30s, not the 15s default. These are whole module GRAPHS, not modules —
-       EventPageClient and GuestExperiencePreview between them pull in the
-       page engine, every section, all four openings and both heroes, and the
-       first one to be asked pays for transforming the lot. On this machine
-       that alone has crossed 15s. A timeout here reports as "the module is
-       broken", which is the most misleading failure this file can produce. */
-  }, 30000);
+    /* No per-test timeout. It carried 30000 — raised back when the suite
+       ceiling was 15s, and now LOWER than it, which would quietly make these
+       the strictest tests in the file rather than the most generous. They
+       inherit vitest.config.mjs's ceiling, which is set for exactly this kind
+       of work: these are whole module GRAPHS, not modules. */
+  });
 });
 
 /* ════════════════════════════════════════════════════════════════════

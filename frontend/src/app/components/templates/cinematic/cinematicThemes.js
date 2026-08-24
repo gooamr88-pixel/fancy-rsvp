@@ -314,17 +314,26 @@ export const CINEMATIC_TEMPLATES = {
      the slowest handsets on the worst connections, and it is worth having one
      of those in the catalogue.
 
-     ── The hero is the ORGANIZER'S ─────────────────────────────────────
-     The other three heroes are photography we shipped. This one is a carved
-     ivory frame with an empty panel in it, and what goes in the panel is the
-     couple's own photograph plus their own words. See LetterFrameHero. */
+     ── The hero is the ORGANIZER'S, and ONLY the organizer's ────────────
+     The other three heroes are photography we shipped, so every event using
+     them opens on the same picture. This one ships NO hero artwork at all:
+     the couple's own photograph fills the fold, and their own words sit on
+     it wherever they choose to put them.
+
+     It shipped once with a carved ivory frame and a stock illustrated couple
+     printed into it, the photograph fitted into the frame's panel. That was
+     wrong in the way that matters: the invitation's biggest image was still
+     somebody else's, and the couple's was a smaller inset inside it. The
+     frame artwork is gone (its illustration lives on at a postage stamp on
+     the marketing page, which is the size that claim deserves). See
+     LetterPortraitHero. */
   letter: {
     key: 'letter',
     // A default, not a restriction — a sealed letter suits any celebration.
     defaultOccasion: 'wedding',
     occasions: 'any',
     opening: 'sealedLetter',
-    hero: 'letterFrame',
+    hero: 'letterPortrait',
 
     assets: {
       /* Frame 0, cut out of the sheet below — the same picture, 22KB instead
@@ -342,10 +351,11 @@ export const CINEMATIC_TEMPLATES = {
          440/782 is 9:16, which is why the cover can be sized to the viewport
          with `aspect-ratio` and never letterbox on a phone. */
       sprite: '/templates/letter/envelope-sprite.jpg',
-      /* The hero's stage: a carved plaster frame, 780×1386, with a flat
-         damask panel in the middle. LETTER_PANEL below is that panel, measured
-         off the artwork rather than eyeballed. */
-      frame: '/templates/letter/frame.jpg',
+      /* NO hero artwork. Deliberately — the fold is the organizer's own
+         photograph, full bleed, and anything we shipped here would be a
+         second picture competing with theirs. An event with no photograph
+         yet gets a typographic hero built from the palette below, not a
+         placeholder and not a stock couple. */
       /* No sealSfx ships. useOpeningSfx falls through to its synthesiser when
          the URL is missing, so the seal is never silent; dropping a real
          recording in at a path here upgrades it with no code change. */
@@ -401,6 +411,15 @@ export const CINEMATIC_TEMPLATES = {
          were dead; the scope-aware var test in cinematicTemplates.test.jsx
          catches the opposite mistake, not this one. */
       '--cine-ivory-rgb': '248, 242, 233',
+      /* The hero scrim's own dark, and it has to be its OWN.
+         `--cine-deep` on the other three templates is a genuinely dark ground
+         (#2a100b, #3d3226, #3a3826) and the obvious thing was to reuse it
+         here — but this template's `--cine-deep` is #a6705f, a light rose,
+         because it describes a BLUSH ENVELOPE. Building the scrim from it
+         produced a pale wash that darkened nothing, and ivory names over a lit
+         chandelier disappeared completely. Caught in the screenshot pass;
+         invisible in jsdom and invisible over any dark photograph. */
+      '--cine-lhero-shade-rgb': '46, 24, 18',
       /* El Messiri for display here, not Aref Ruqaa: this artwork is a
          plaster relief with clean geometric scrollwork, and Aref Ruqaa's
          calligraphic stroke fights it. Both are already self-hosted through
@@ -433,46 +452,49 @@ export const CINEMATIC_TEMPLATES = {
 };
 
 /**
- * The flat damask panel inside Sealed Letter's carved frame, as fractions of
- * the artwork.
+ * Where the organizer's words sit on their photograph.
  *
- * MEASURED off frame.jpg (780×1386) with a per-column and per-row luminance-
- * variance scan, not eyeballed: the carved relief has high local variance and
- * the flat panel has almost none, so the boundaries fall out of the data. The
- * panel is x 140→640, y 188→1188 — 500×1000, a 1:2 portrait.
+ * The photograph is full bleed, so unlike the other heroes there is no fixed
+ * safe area — the sky might be at the top of one couple's picture and their
+ * faces at the top of another's. This is the control that answers that, and
+ * the scrim follows it (see `.cine-lhero` in cinematic.css): the gradient is
+ * drawn from whichever edge the type is anchored to, so the words always have
+ * ground under them and the rest of the picture stays uncovered.
  *
- * Every one of these numbers is load-bearing. The panel is where the
- * organizer's photograph goes, and the artwork has a couple ILLUSTRATED into
- * the bottom third of it — so a photo inset even slightly too far leaves a
- * printed bride's veil showing beside a real one. Exported rather than
- * inlined in the CSS so the test can assert the hero and the artwork agree.
+ * Read by the hero AND the editor's live preview, so what an organizer
+ * positions is what a guest gets.
  */
-export const LETTER_PANEL = {
-  /** Both sides are symmetric on this artwork; one number serves both. */
-  insetInline: '17.95%',  // 140 / 780
-  top: '13.56%',          // 188 / 1386
-  bottom: '14.29%',       // (1386 − 1188) / 1386
-  /* Where inside the panel the photograph goes: the LOWER 62%, leaving the
-     top for the names on clean plaster.
+export const LETTER_TEXT_POS = {
+  top: 'flex-start',
+  center: 'center',
+  bottom: 'flex-end',
+};
+/** Bottom, because that is where a caption sits on a photograph by default. */
+export const LETTER_TEXT_POS_DEFAULT = 'bottom';
 
-     Filling the whole panel was tried and the screenshot pass killed it — the
-     names and the date landed on chandeliers and white roses, and a scrim
-     strong enough to fix that only muddied the photograph. The artwork itself
-     says the same thing: its illustrated couple occupies 69%–97% of this
-     rectangle and the rest is bare relief, because that is where the words
-     go. 62% covers the illustration completely with margin to spare.
+/** The shade the hero's scrim is built from. See the cssVars note above. */
+const LETTER_SHADE = CINEMATIC_TEMPLATES.letter.cssVars['--cine-lhero-shade-rgb'];
 
-     Read by both the hero's stylesheet and the editor's live preview, so the
-     crop an organizer is shown is the crop a guest gets. */
-  /* 42/58, not 38/62. At 38% the date line — which wraps to two lines at a
-     250px panel width in both languages — put its second line ("2026") down
-     on the photograph's feathered edge, over a chandelier. Four percent of the
-     panel is 20px, which is exactly the line it needed. The photograph is
-     still 250x290 on a phone and still covers the printed couple outright. */
-  photoTop: '42%',
-  photoHeight: '58%',
-  /** The feather along the photograph's top edge, shared for the same reason. */
-  photoMask: 'linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.45) 9%, rgba(0, 0, 0, 0.88) 18%, #000 26%, #000 100%)',
+/**
+ * The hero scrim, per text position, as finished CSS gradients.
+ *
+ * These exist in TWO places by necessity — here for the editor's live preview,
+ * and in cinematic.css for the page — because a stylesheet cannot read a
+ * JavaScript constant. That duplication has already produced one real bug: the
+ * scrim's colour was changed in the CSS (from the blush `--cine-deep` to a
+ * genuinely dark shade) and the preview kept painting the old pale wash, so an
+ * organizer would have positioned their words against one scrim and their
+ * guests seen another.
+ *
+ * What makes it safe now is not discipline, it is a test:
+ * sealedLetterTemplate.test.jsx parses the three rules out of cinematic.css,
+ * substitutes the custom property, and compares them to these strings
+ * character for character. Change one and the other fails.
+ */
+export const LETTER_SCRIM = {
+  bottom: `linear-gradient(180deg, rgba(${LETTER_SHADE}, 0.34) 0%, rgba(${LETTER_SHADE}, 0.12) 24%, rgba(${LETTER_SHADE}, 0.52) 58%, rgba(${LETTER_SHADE}, 0.84) 84%, rgba(${LETTER_SHADE}, 0.92) 100%)`,
+  top: `linear-gradient(180deg, rgba(${LETTER_SHADE}, 0.90) 0%, rgba(${LETTER_SHADE}, 0.70) 24%, rgba(${LETTER_SHADE}, 0.22) 54%, rgba(${LETTER_SHADE}, 0.36) 80%, rgba(${LETTER_SHADE}, 0.76) 100%)`,
+  center: `radial-gradient(ellipse 100% 48% at 50% 46%, rgba(${LETTER_SHADE}, 0.80), rgba(${LETTER_SHADE}, 0) 76%), linear-gradient(180deg, rgba(${LETTER_SHADE}, 0.38) 0%, rgba(${LETTER_SHADE}, 0.14) 38%, rgba(${LETTER_SHADE}, 0.70) 100%)`,
 };
 
 /**
@@ -480,10 +502,9 @@ export const LETTER_PANEL = {
  *
  * Lives here rather than in the hero because the EDITOR needs it too: its live
  * preview has to crop the way the guest page crops, and a second copy of these
- * three values is a preview that can quietly start lying. The panel's
- * photograph window is about 250×290 on a phone, so a 4:3 or 16:9 photograph
- * really is being cut — this is what decides whether the couple's faces or
- * their knees survive it.
+ * three values is a preview that can quietly start lying. A phone's fold is a
+ * tall portrait and most photographs are not, so this is what decides whether
+ * the couple's faces or their knees survive the crop.
  */
 export const LETTER_FOCUS = {
   top: '50% 18%',

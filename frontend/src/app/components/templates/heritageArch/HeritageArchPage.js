@@ -11,7 +11,7 @@ import { getCinematicTemplate, getCinematicOccasion, getCinematicCopy } from '..
 import VelvetRingHero from '../cinematic/VelvetRingHero';
 import DoorOfJoyHero from '../cinematic/DoorOfJoyHero';
 import SwanLakeHero from '../cinematic/SwanLakeHero';
-import LetterFrameHero from '../cinematic/LetterFrameHero';
+import LetterPortraitHero from '../cinematic/LetterPortraitHero';
 
 /* Keyed by `cinematic.hero`, not chosen by a ternary — see the note on
    CINEMATIC_OPENINGS in [slug]/EventPageClient.js. The ternary this replaces
@@ -20,7 +20,7 @@ const CINEMATIC_HEROES = {
   velvetRing: VelvetRingHero,
   doorOfJoy: DoorOfJoyHero,
   swanLake: SwanLakeHero,
-  letterFrame: LetterFrameHero,
+  letterPortrait: LetterPortraitHero,
 };
 import AmbientFx from '../../guest/fx/AmbientFx';
 import HeroSection from './sections/HeroSection';
@@ -514,20 +514,21 @@ export default function HeritageArchPage({
           tagline={(isPreview ? D.tagline : heroTagline) || cinematicCopy.sub}
           dateLine={[dateLine, timeLine].filter(Boolean).join(isRTL ? ' — ' : ' — ')}
           coverImageUrl={event.cover_image_url || null}
-          /* Sealed Letter's own three, and only it reads them. Deliberately
+          /* Sealed Letter's own four, and only it reads them. Deliberately
              NOT event.cover_image_url: that is the social card, the dashboard
-             tile and its own cover-photo section, and it is landscape. This
-             one goes into a 1:2 panel inside a carved frame, so it is a
-             different picture with a different crop — reusing the cover would
-             have printed the same image twice on one page and made a portrait
-             the invitation's OG image. See LetterFrameHero.
+             tile and its own cover-photo section. This one fills the fold on
+             a phone, so it is a different picture with a different crop —
+             reusing the cover would print the same image twice on one page.
+             See LetterPortraitHero.
 
-             No `isPreview` sample fallback here, unlike most of this file. An
-             empty panel is not an empty state on this template: the artwork's
-             own illustrated couple stands, which IS the finished look. There
-             is nothing missing for sample content to stand in for. */
+             No `isPreview` sample fallback, unlike most of this file. An empty
+             hero is not a broken one here: it falls back to a typographic
+             page on the template's own paper, which is a finished look in its
+             own right. Substituting a stock photograph would be showing the
+             organizer something they did not upload and will never get. */
           heroPhoto={td.letter_hero_photo || null}
           heroFocus={td.letter_hero_focus}
+          heroTextPos={td.letter_hero_text_pos}
           heroCaption={td.letter_hero_caption}
           heroCaptionSub={td.letter_hero_caption_sub}
           invitationPattern={invitationPattern} invitationTheme={invitationTheme}

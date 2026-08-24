@@ -15,13 +15,15 @@ vi.mock('framer-motion', async (importOriginal) => {
 });
 
 import SealedLetterOpening from '../src/app/components/guest/openings/SealedLetterOpening';
-import LetterFrameHero from '../src/app/components/templates/cinematic/LetterFrameHero';
+import LetterPortraitHero from '../src/app/components/templates/cinematic/LetterPortraitHero';
 import LetterPortraitFields from '../src/app/components/LetterPortraitFields';
 import {
   CINEMATIC_TEMPLATES,
-  LETTER_PANEL,
   LETTER_FOCUS,
   LETTER_FOCUS_DEFAULT,
+  LETTER_TEXT_POS,
+  LETTER_TEXT_POS_DEFAULT,
+  LETTER_SCRIM,
   getCinematicCopy,
 } from '../src/app/components/templates/cinematic/cinematicThemes';
 import { OPENING_TIMINGS } from '../src/app/components/guest/openings/openingSafety';
@@ -40,8 +42,9 @@ import { occasionPolicyFor } from '../src/app/utils/eventOccasion';
 
      • the guest always gets through a cover that is a sprite sheet rather
        than a film, including the ways a sprite can fail that a film cannot
-     • an empty panel is a FINISHED state, not a broken one — the frame's own
-       illustration stands, and nothing renders a placeholder
+     • the hero is the ORGANIZER'S photograph and nothing else — no shipped
+       artwork, no stock couple, and no placeholder when they have not
+       uploaded one yet
 
    The four dispatch maps are asserted from CINEMATIC_KEYS by
    swanLakeTemplate.test.jsx, so this template is covered there with no edit —
@@ -52,6 +55,18 @@ import { occasionPolicyFor } from '../src/app/utils/eventOccasion';
 const LETTER = CINEMATIC_TEMPLATES.letter;
 const ROOT = process.cwd();
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
+
+/* Every template_data key this template owns. Listed once, so the guest page,
+   the settings hydration and the wizard's pruner are all checked against the
+   same set — adding a fifth field and forgetting one of those three is the
+   failure this catches. */
+const LETTER_FIELD_KEYS = [
+  'letter_hero_photo',
+  'letter_hero_focus',
+  'letter_hero_text_pos',
+  'letter_hero_caption',
+  'letter_hero_caption_sub',
+];
 
 /** Past the readiness hard-arm: jsdom decodes no image, so nothing else arms. */
 async function arm() {
@@ -301,34 +316,56 @@ describe('the sealed letter names the occasion it was given', () => {
 });
 
 /* ════════════════════════════════════════════════════════════════════
-   4. The hero is the organizer's, and an empty panel is finished
+   4. The hero is the organizer's photograph and nothing else
    ════════════════════════════════════════════════════════════════════ */
-describe('the portrait in the frame', () => {
+describe('the organizer\'s photograph is the hero', () => {
   const heroProps = {
     template: LETTER, names: 'Noor & Yusuf', isRTL: false,
     invitationPattern: 'serif', invitationTheme: {}, invitationGuestName: 'Guest', invitationData: {},
   };
 
-  it('renders nothing in the panel when no photograph was uploaded', () => {
-    /* The artwork's own illustrated couple stands, and that IS the finished
-       look. A placeholder box here would tell every organizer who has not
-       reached that field yet that their invitation is broken. */
-    render(<LetterFrameHero {...heroProps} />);
-    expect(screen.queryByTestId('cine-lhero-photo')).toBeNull();
-    expect(screen.getByTestId('cine-hero-letter')).toBeTruthy();
+  it('ships no hero artwork of its own', () => {
+    /* The point of the whole template. Every other cinematic key supplies the
+       picture at the fold; this one must not, or an organizer's photograph is
+       competing with ours on their own invitation. */
+    const shipped = Object.entries(LETTER.assets).map(([k]) => k);
+    expect(shipped, 'a hero asset came back').not.toContain('frame');
+    expect(shipped).not.toContain('lake');
+    expect(shipped).not.toContain('heroPoster');
+    // And no stylesheet rule may put one back.
+    const css = read('src/app/styles/cinematic.css');
+    const block = css.slice(css.indexOf('.cine-lhero {'), css.indexOf('6. RESPONSIVE'));
+    expect(block, 'the hero paints artwork we shipped').not.toMatch(/url\(["']?\/templates\//);
   });
 
-  it('renders the photograph when there is one', () => {
-    render(<LetterFrameHero {...heroProps} heroPhoto="https://cdn.example/couple.jpg" />);
+  it('falls back to a typographic hero, never a placeholder or a stock couple', () => {
+    render(<LetterPortraitHero {...heroProps} />);
+    expect(screen.queryByTestId('cine-lhero-photo')).toBeNull();
+    // Still a finished page: the names are there and the root says which
+    // ground it is painting, so the CSS can invert the ink.
+    expect(screen.getByTestId('cine-hero-letter').className).toContain('is-bare');
+    expect(screen.getByText('Noor & Yusuf')).toBeTruthy();
+  });
+
+  it('fills the fold with the photograph when there is one', () => {
+    render(<LetterPortraitHero {...heroProps} heroPhoto="https://cdn.example/couple.jpg" />);
     expect(screen.getByTestId('cine-lhero-photo').getAttribute('src')).toBe('https://cdn.example/couple.jpg');
+    expect(screen.getByTestId('cine-hero-letter').className).toContain('has-photo');
+
+    // Full bleed, asserted where it actually lives.
+    const css = read('src/app/styles/cinematic.css');
+    const photo = css.match(/\.cine-lhero__photo \{([\s\S]*?)\n\}/)?.[1] || '';
+    expect(photo).toContain('width: 100%');
+    expect(photo).toContain('height: 100%');
+    expect(photo).toContain('object-fit: cover');
   });
 
   it('the focal point reaches object-position', () => {
-    /* The panel is 1:2, so a landscape photograph loses most of its width and
-       this decides which part survives. A control that writes a value nothing
-       reads is the "Design tab dead controls" bug all over again. */
-    const seen = ['top', 'center', 'bottom'].map((focus) => {
-      const { unmount } = render(<LetterFrameHero {...heroProps} heroPhoto="/p.jpg" heroFocus={focus} />);
+    /* A phone's fold is a tall portrait and most photographs are not, so this
+       decides which part survives. A control that writes a value nothing reads
+       is the "Design tab dead controls" bug all over again. */
+    const seen = Object.keys(LETTER_FOCUS).map((focus) => {
+      const { unmount } = render(<LetterPortraitHero {...heroProps} heroPhoto="/p.jpg" heroFocus={focus} />);
       const style = screen.getByTestId('cine-lhero-photo').getAttribute('style') || '';
       unmount();
       return style;
@@ -340,55 +377,114 @@ describe('the portrait in the frame', () => {
   it('an unknown focal point falls back rather than rendering nothing', () => {
     // template_data is free-form JSON on a row anybody with API access can
     // write; an unrecognised value must not blank the crop.
-    render(<LetterFrameHero {...heroProps} heroPhoto="/p.jpg" heroFocus="sideways" />);
+    render(<LetterPortraitHero {...heroProps} heroPhoto="/p.jpg" heroFocus="sideways" />);
     expect(screen.getByTestId('cine-lhero-photo').getAttribute('style')).toMatch(/object-position/);
   });
 
-  it('no caption plate at all when both lines are empty', () => {
-    // An empty plate is a grey band across the couple's faces.
-    const { unmount } = render(<LetterFrameHero {...heroProps} heroPhoto="/p.jpg" />);
-    expect(screen.queryByTestId('cine-lhero-plate')).toBeNull();
-    unmount();
+  it('anchors the words where the organizer put them, and the scrim with them', () => {
+    /* The words move and the shading has to move with them — a scrim drawn
+       from the bottom while the type sits at the top is type on bare
+       photograph, which is the failure this control exists to prevent. */
+    const css = read('src/app/styles/cinematic.css');
+    Object.keys(LETTER_TEXT_POS).forEach((pos) => {
+      const { unmount } = render(<LetterPortraitHero {...heroProps} heroPhoto="/p.jpg" heroTextPos={pos} />);
+      expect(screen.getByTestId('cine-hero-letter').className).toContain(`pos-${pos}`);
+      unmount();
+      expect(css, `pos-${pos} has no scrim of its own`)
+        .toMatch(new RegExp(`\\.cine-lhero\\.pos-${pos} \\.cine-lhero__scrim \\{`));
 
-    // Whitespace is empty too — a stray space must not summon the band.
-    render(<LetterFrameHero {...heroProps} heroPhoto="/p.jpg" heroCaption="   " heroCaptionSub="  " />);
-    expect(screen.queryByTestId('cine-lhero-plate')).toBeNull();
+      /* Gated on `.has-photo`, and the VALUE has to match LETTER_TEXT_POS —
+         which the editor's preview reads directly. Two things ride on the
+         gate: the empty state centres regardless (the control positions words
+         against a photograph, and with none the type just looked fallen), and
+         naming it removes a specificity tie that a bare
+         `.cine-lhero.is-bare` rule was winning on source order alone. */
+      const rule = css.match(new RegExp(`\\.cine-lhero\\.has-photo\\.pos-${pos} \\{([^}]*)\\}`))?.[1];
+      expect(rule, `pos-${pos} does not move the type, or is not gated on a photo`).toBeTruthy();
+      expect(rule, `pos-${pos} disagrees with LETTER_TEXT_POS`)
+        .toContain(`justify-content: ${LETTER_TEXT_POS[pos]}`);
+    });
+
+    // And the base — what a hero with no photograph gets whatever is set.
+    const base = css.match(/\n\.cine-lhero \{([\s\S]*?)\n\}/)?.[1] || '';
+    expect(base, 'the empty hero no longer centres its type')
+      .toContain('justify-content: center');
+  });
+
+  it('the scroll cue stays at the foot whatever the words do', () => {
+    /* It travelled with the type at first, which put "scroll down" halfway up
+       a photograph pointing at nothing — a cue points at the edge you scroll
+       from. The save button DOES travel with the words, because it is part of
+       the invitation rather than a hint about the page. */
+    const css = read('src/app/styles/cinematic.css');
+    const cue = css.match(/\.cine-lhero__cue \{([\s\S]*?)\n\}/)?.[1] || '';
+    expect(cue, 'the cue is no longer pinned').toBeTruthy();
+    expect(cue).toContain('position: absolute');
+    expect(cue).toContain('bottom:');
+
+    // And the moving column reserves room for it, or the two overlap at the
+    // one position where both want the foot.
+    const inner = css.match(/\.cine-lhero__inner \{([\s\S]*?)\n\}/)?.[1] || '';
+    expect(inner, 'nothing reserves the pinned cue\'s height').toMatch(/padding[\s\S]*8\dpx/);
+  });
+
+  it('an unknown text position falls back to the default', () => {
+    render(<LetterPortraitHero {...heroProps} heroPhoto="/p.jpg" heroTextPos="sideways" />);
+    expect(screen.getByTestId('cine-hero-letter').className).toContain(`pos-${LETTER_TEXT_POS_DEFAULT}`);
+  });
+
+  it('no scrim at all without a photograph', () => {
+    // The ground is already paper; a scrim over it is just dirt.
+    const { container } = render(<LetterPortraitHero {...heroProps} />);
+    expect(container.querySelector('.cine-lhero__scrim')).toBeNull();
   });
 
   it('shows either caption line on its own', () => {
-    const { unmount } = render(<LetterFrameHero {...heroProps} heroCaption="Where it all begins" />);
+    const { unmount } = render(<LetterPortraitHero {...heroProps} heroCaption="Where it all begins" />);
     expect(screen.getByText('Where it all begins')).toBeTruthy();
     unmount();
 
-    render(<LetterFrameHero {...heroProps} heroCaptionSub="Beirut, 2026" />);
-    expect(screen.getByTestId('cine-lhero-plate')).toBeTruthy();
+    render(<LetterPortraitHero {...heroProps} heroCaptionSub="Beirut, 2026" />);
     expect(screen.getByText('Beirut, 2026')).toBeTruthy();
+  });
+
+  it('the occasion tagline yields to the organizer\'s own words', () => {
+    /* Both would be two sentences saying the same thing, and the generic one
+       would be the weaker. Theirs wins; the catalogue's shows only when they
+       have written nothing. */
+    const tagline = 'invite you to share the joy of their wedding';
+    const { unmount } = render(<LetterPortraitHero {...heroProps} tagline={tagline} />);
+    expect(screen.getByText(tagline)).toBeTruthy();
+    unmount();
+
+    render(<LetterPortraitHero {...heroProps} tagline={tagline} heroCaption="Where it all begins" />);
+    expect(screen.queryByText(tagline)).toBeNull();
   });
 
   it('holds its entrance while the cover is still up', () => {
     /* The hero mounts UNDERNEATH the opening, a second or two before the guest
        can see it. Arriving on mount spends the whole entrance behind a sealed
        envelope. */
-    render(<LetterFrameHero {...heroProps} openingActive />);
+    render(<LetterPortraitHero {...heroProps} openingActive />);
     expect(screen.getByTestId('cine-hero-letter').className).toContain('is-arriving');
   });
 
   it('releases when the cover goes', async () => {
-    const { rerender } = render(<LetterFrameHero {...heroProps} openingActive />);
-    await act(async () => { rerender(<LetterFrameHero {...heroProps} openingActive={false} />); });
+    const { rerender } = render(<LetterPortraitHero {...heroProps} openingActive />);
+    await act(async () => { rerender(<LetterPortraitHero {...heroProps} openingActive={false} />); });
     // requestAnimationFrame plus a timer backstop; jsdom runs rAF on a timer.
     await act(async () => { await new Promise((r) => setTimeout(r, 200)); });
     expect(screen.getByTestId('cine-hero-letter').className).not.toContain('is-arriving');
   });
 
   it('an event with the opening turned off arrives already settled', () => {
-    render(<LetterFrameHero {...heroProps} openingActive={false} />);
+    render(<LetterPortraitHero {...heroProps} openingActive={false} />);
     expect(screen.getByTestId('cine-hero-letter').className).not.toContain('is-arriving');
   });
 
   it('reduced motion gets the settled hero outright', () => {
     reducedMotion = true;
-    render(<LetterFrameHero {...heroProps} openingActive />);
+    render(<LetterPortraitHero {...heroProps} openingActive />);
     expect(screen.getByTestId('cine-hero-letter').className).not.toContain('is-arriving');
   });
 
@@ -397,8 +493,8 @@ describe('the portrait in the frame', () => {
        effect, must show the correct finished hero — never one stuck
        mid-entrance. Same shape as Swan Lake's is-embossed. */
     const css = read('src/app/styles/cinematic.css');
-    expect(css).toMatch(/\.cine-lhero\.is-arriving \.cine-lhero__frame \{/);
-    const block = css.match(/\.cine-lhero\.is-arriving \.cine-lhero__frame \{([\s\S]*?)\}/)[1];
+    expect(css).toMatch(/\.cine-lhero\.is-arriving \.cine-lhero__photo \{/);
+    const block = css.match(/\.cine-lhero\.is-arriving \.cine-lhero__photo \{([\s\S]*?)\}/)[1];
     expect(block, 'the hero would animate INTO its entrance on mount').toContain('transition: none');
   });
 
@@ -408,62 +504,21 @@ describe('the portrait in the frame', () => {
     expect(read('src/app/components/templates/GuestExperiencePreview.js')).toMatch(/openingActive=\{!openingDone\}/);
   });
 
-  it('the guest page reads the three fields the editor writes', () => {
+  it('the guest page reads every field the editor writes', () => {
     /* The whole feature, end to end, in one assertion. Every one of these has
        a silent failure mode: the organizer fills the field in, it saves, and
        the guest page simply never looks at it. */
     const page = read('src/app/components/templates/heritageArch/HeritageArchPage.js');
-    ['letter_hero_photo', 'letter_hero_focus', 'letter_hero_caption', 'letter_hero_caption_sub']
-      .forEach((key) => expect(page, `${key} is written but never read`).toContain(key));
+    LETTER_FIELD_KEYS.forEach((key) => {
+      expect(page, `${key} is written but never read`).toContain(key);
+    });
   });
 });
 
 /* ════════════════════════════════════════════════════════════════════
-   5. The panel the photograph goes in
+   5. The editor shows what the guest will get
    ════════════════════════════════════════════════════════════════════ */
-describe('the measured panel', () => {
-  it('the hero, the stylesheet and the editor preview agree', () => {
-    /* Three places crop to this rectangle: the hero's CSS, the editor's live
-       preview, and LETTER_PANEL itself. The artwork has a couple ILLUSTRATED
-       into the bottom third of it, so a disagreement of even a percent leaves
-       a printed veil showing beside a real one — and it shows up nowhere
-       except in front of a guest. */
-    const css = read('src/app/styles/cinematic.css');
-    const panel = css.match(/\.cine-lhero__panel \{([\s\S]*?)\}/)?.[1];
-    expect(panel, 'the panel rule is gone').toBeTruthy();
-    expect(panel).toContain(`inset-inline: ${LETTER_PANEL.insetInline}`);
-    expect(panel).toContain(`top: ${LETTER_PANEL.top}`);
-    expect(panel).toContain(`bottom: ${LETTER_PANEL.bottom}`);
-
-    // The editor's preview reads the constant rather than repeating it.
-    const editor = read('src/app/components/LetterPortraitFields.js');
-    expect(editor, 'the editor preview no longer crops the way the hero does')
-      .toContain('LETTER_PANEL');
-  });
-
-  it('the photograph occupies the lower part of the panel, in both places', () => {
-    /* Filling the WHOLE panel was the first attempt and the screenshot pass
-       killed it: the names and the date landed on chandeliers and white roses.
-       The numbers now live in LETTER_PANEL and are read by the hero's
-       stylesheet and the editor's preview — if those drift, an organizer
-       positions a photograph against one crop and their guests see another. */
-    const css = read('src/app/styles/cinematic.css');
-    const photo = css.match(/\.cine-lhero__photo \{([\s\S]*?)\n\}/)?.[1] || '';
-    expect(photo, 'the photo rule is gone').toBeTruthy();
-    expect(photo).toContain(`top: ${LETTER_PANEL.photoTop}`);
-    expect(photo).toContain(`height: ${LETTER_PANEL.photoHeight}`);
-    expect(photo, 'the feather no longer matches the shared mask')
-      .toContain(LETTER_PANEL.photoMask.replace('linear-gradient(', 'linear-gradient('));
-
-    // And it still covers every pixel of the artwork's printed couple, who
-    // stand between 69% and 97% of the panel's height.
-    expect(parseFloat(LETTER_PANEL.photoTop)).toBeLessThan(69);
-
-    const editor = read('src/app/components/LetterPortraitFields.js');
-    expect(editor).toContain('LETTER_PANEL.photoTop');
-    expect(editor).toContain('LETTER_PANEL.photoMask');
-  });
-
+describe('the preview cannot drift from the page', () => {
   it('the hero and the editor read the SAME focal-point positions', () => {
     /* Both had their own copy of the three object-position values for a
        while. A preview that crops differently from the page is the one
@@ -475,7 +530,7 @@ describe('the measured panel', () => {
 
     [
       'src/app/components/LetterPortraitFields.js',
-      'src/app/components/templates/cinematic/LetterFrameHero.js',
+      'src/app/components/templates/cinematic/LetterPortraitHero.js',
     ].forEach((file) => {
       const src = read(file);
       expect(src, `${file} keeps its own copy of the focal points`).toContain('LETTER_FOCUS');
@@ -483,28 +538,44 @@ describe('the measured panel', () => {
     });
   });
 
-  it('the frame URL lives in one place', () => {
-    /* It was written into the stylesheet as a literal AND declared in
-       assets.frame, with nothing checking the two agreed — and the literal
-       also made the hero unstageable for the screenshot harness, which
-       photographed it with no frame at all. */
-    const css = read('src/app/styles/cinematic.css');
-    expect(css, 'the frame path is hardcoded in CSS again')
-      .not.toContain('url("/templates/letter/frame.jpg")');
-    expect(css).toContain('var(--cine-letter-frame)');
-    expect(read('src/app/components/templates/cinematic/LetterFrameHero.js'))
-      .toContain('--cine-letter-frame');
+  it('the hero and the editor read the SAME text positions', () => {
+    expect(Object.keys(LETTER_TEXT_POS).sort()).toEqual(['bottom', 'center', 'top']);
+    expect(LETTER_TEXT_POS[LETTER_TEXT_POS_DEFAULT], 'the fallback is not a real option').toBeTruthy();
+    [
+      'src/app/components/LetterPortraitFields.js',
+      'src/app/components/templates/cinematic/LetterPortraitHero.js',
+    ].forEach((file) => {
+      expect(read(file), `${file} keeps its own copy of the text positions`).toContain('LETTER_TEXT_POS');
+    });
   });
 
-  it('the frame artwork is the shape the panel fractions were measured on', () => {
-    const file = path.join(ROOT, 'public', LETTER.assets.frame.replace(/^\//, ''));
-    const { width, height } = jpegSize(fs.readFileSync(file));
-    expect(width).toBe(780);
-    expect(height).toBe(1386);
+  it('the preview centres an empty hero, exactly as the page does', () => {
+    /* The page ignores the position control until there is a photograph to
+       position against (`.cine-lhero`'s base is `center`, and the pos-* rules
+       are gated on `.has-photo`). The preview applied it regardless, so an
+       organizer with no photo yet saw their names pinned low on a page that
+       centres them. Both directions of this drift have now happened once. */
+    const { container } = render(
+      <LetterPortraitFields
+        value={{ letter_hero_text_pos: 'bottom' }}
+        onChange={() => {}}
+        onUploadImage={async () => null}
+      />,
+    );
+    const preview = container.querySelector('[data-testid="letter-portrait-preview"]');
+    expect(preview.getAttribute('style')).toMatch(/justify-content:\s*center/);
   });
 
-  it('neither centred layer can drift in one language only', () => {
-    /* Two independent direction traps, and the right answer differs per box.
+  it('previews the real aspect ratio, not a square', () => {
+    /* The crop is the whole reason the focal point exists, and it only
+       happens because the fold is a tall portrait. A preview in any other
+       shape hides precisely the decision it is there to inform. */
+    const editor = read('src/app/components/LetterPortraitFields.js');
+    expect(editor, 'the preview is no longer a phone').toContain("aspectRatio: '390 / 844'");
+  });
+
+  it('the cover scene cannot drift in one language only', () => {
+    /* Two direction traps, and this box could hit either.
 
        a) `inset-inline: 0` (or `inset: 0`) together with `left: 50%` is an
           over-constrained absolute box; the spec discards `right` in LTR and
@@ -512,37 +583,118 @@ describe('the measured panel', () => {
           390px screen while English was perfect.
        b) `margin-inline: auto` centres only while the box FITS. Two auto
           margins that would resolve negative are handled by zeroing the
-          start-side one (CSS 2.1 §10.3.7) — margin-left in LTR, margin-right
-          in RTL.
+          start-side one (CSS 2.1 §10.3.7) — margin-left in LTR,
+          margin-right in RTL.
 
-       So the frame, which is min(100%, …) and always fits, uses auto margins;
-       the cover's scene, which is deliberately wider than a narrow viewport,
-       must use a physical transform instead. Getting either backwards is
-       invisible in English. */
+       This scene is deliberately WIDER than a narrow viewport, so (b) rules
+       out auto margins and it must centre with a physical transform. Getting
+       it backwards is invisible in English. */
     const css = read('src/app/styles/cinematic.css');
-    const blockOf = (sel) => {
-      const raw = css.match(new RegExp(`\\${sel} \\{([\\s\\S]*?)\\n\\}`))?.[1] || '';
-      expect(raw, `${sel} is gone`).toBeTruthy();
-      /* Comments stripped FIRST. Both of these rules explain the traps they
-         avoid, in prose that necessarily contains the very declarations being
-         searched for — so a check that reads the comments finds the bug it is
-         looking for in the note saying the bug was avoided. */
-      const block = raw.replace(/\/\*[\s\S]*?\*\//g, '');
-      // (a) applies to both, always.
-      expect(block, `${sel} is an over-constrained absolute box`)
-        .not.toMatch(/inset(-inline)?:[^;]*;[\s\S]*?(^|[^-])left:\s*50%/m);
-      return block;
-    };
-
-    const scene = blockOf('.cine-letter__scene');
-    expect(scene, 'a box wider than the viewport cannot centre with auto margins')
+    const raw = css.match(/\.cine-letter__scene \{([\s\S]*?)\n\}/)?.[1] || '';
+    expect(raw, 'the scene rule is gone').toBeTruthy();
+    /* Comments stripped FIRST. The rule explains the trap it avoids, in prose
+       that necessarily contains the very declarations being searched for — so
+       a check that reads the comments finds the bug it is looking for in the
+       note saying the bug was avoided. */
+    const block = raw.replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(block, 'the scene is an over-constrained absolute box')
+      .not.toMatch(/inset(-inline)?:[^;]*;[\s\S]*?(^|[^-])left:\s*50%/m);
+    expect(block, 'a box wider than the viewport cannot centre with auto margins')
       .not.toContain('margin-inline: auto');
-    expect(scene).toMatch(/transform: translate\(-50%, -50%\)/);
+    expect(block).toMatch(/transform: translate\(-50%, -50%\)/);
+  });
 
-    const frame = blockOf('.cine-lhero__frame');
-    expect(frame).toContain('margin-inline: auto');
-    // The premise that makes auto margins safe there.
-    expect(frame, 'the frame no longer clamps to its container').toContain('min(100%');
+  it('the stylesheet and the editor paint the SAME scrim, stop for stop', () => {
+    /* The one duplication this design genuinely cannot remove: a stylesheet
+       cannot read a JS constant, so the gradients exist in cinematic.css for
+       the page and in LETTER_SCRIM for the editor's preview. That has already
+       cost one real bug — the CSS moved from the blush `--cine-deep` to a dark
+       shade and the preview kept painting the old pale wash, so the organizer
+       positioned their words against one scrim and their guests saw another.
+
+       Discipline did not catch it and would not catch it next time. This does:
+       the rules are parsed out, the custom property is substituted, and the
+       result is compared character for character. */
+    const css = read('src/app/styles/cinematic.css');
+    const shade = LETTER.cssVars['--cine-lhero-shade-rgb'];
+    const squash = (s) => s.replace(/\s+/g, ' ').trim();
+
+    Object.keys(LETTER_TEXT_POS).forEach((pos) => {
+      const rule = css.match(new RegExp(`\\.cine-lhero\\.pos-${pos} \\.cine-lhero__scrim \\{([\\s\\S]*?)\\n\\}`))?.[1] || '';
+      expect(rule, `pos-${pos} has no scrim rule`).toBeTruthy();
+
+      const fromCss = squash(
+        rule.replace(/^\s*background:\s*/m, '')
+          .replace(/;\s*$/, '')
+          .replace(/rgba\(var\(--cine-lhero-shade-rgb\),/g, `rgba(${shade},`),
+      );
+      expect(fromCss, `pos-${pos} differs between the page and the preview`)
+        .toBe(squash(LETTER_SCRIM[pos]));
+    });
+  });
+
+  it('the scrim is built from a genuinely dark colour', () => {
+    /* --cine-deep is the obvious variable and the wrong one HERE: on this
+       template it is #a6705f, a light rose describing the blush envelope, so
+       a scrim made from it darkened nothing and ivory names disappeared into
+       a lit chandelier. Nothing in jsdom can see that, and it is invisible
+       over a dark photograph too — only a bright one shows it. */
+    const css = read('src/app/styles/cinematic.css');
+    Object.keys(LETTER_TEXT_POS).forEach((pos) => {
+      const rule = css.match(new RegExp(`\\.cine-lhero\\.pos-${pos} \\.cine-lhero__scrim \\{([\\s\\S]*?)\\n\\}`))?.[1] || '';
+      expect(rule, `pos-${pos} has no scrim`).toBeTruthy();
+      expect(rule, `pos-${pos} shades with the blush envelope's colour`)
+        .not.toContain('--cine-deep-rgb');
+      expect(rule).toContain('--cine-lhero-shade-rgb');
+    });
+
+    // And the value really is dark — every channel well below mid-grey.
+    const shade = LETTER.cssVars['--cine-lhero-shade-rgb'];
+    expect(shade, 'the template never declares its shade').toBeTruthy();
+    shade.split(',').forEach((ch) => {
+      expect(Number(ch.trim()), `${shade} is not a dark colour`).toBeLessThan(90);
+    });
+  });
+
+  it('the names are solid ink over a photograph, never a moving gradient', () => {
+    /* The gold sweep spends half its cycle with a mid-tone across the
+       letterforms, and `background-clip: text` forces a transparent fill that
+       text-shadow cannot paint on — so over a photograph the one treatment
+       that would rescue legibility is unavailable. Scoped to .is-bare, and it
+       has to STAY scoped: an unscoped rule leaves a transparent fill standing
+       on the photo hero, which is invisible names, not faint ones. */
+    const css = read('src/app/styles/cinematic.css');
+    expect(css, 'the shimmer is no longer limited to the bare hero')
+      .toMatch(/\.cine-lhero\.is-bare \.cine-lhero__shimmer \{/);
+
+    /* No rule whose selector STARTS with the shimmer — that is what "unscoped"
+       means here. Anchoring to line start is the whole trick: matching on
+       whitespace-then-shimmer also matches the descendant half of
+       `.cine-lhero.is-bare .cine-lhero__shimmer`, so the check fired on the
+       correctly-scoped rule it was written to protect. */
+    expect(css, 'an unscoped shimmer leaves a transparent fill on the photo hero')
+      .not.toMatch(/^\s*\.cine-lhero__shimmer\s*[,{]/m);
+  });
+
+  it('the measure is not expressed in ch', () => {
+    /* `ch` resolves against the containing box's font-size, not the names' —
+       22ch on a block inheriting 16px came out at ~176px and wrapped the date
+       inside a 390px screen with room for it twice over. */
+    const css = read('src/app/styles/cinematic.css');
+    const type = css.match(/\.cine-lhero__type \{([\s\S]*?)\n\}/)?.[1] || '';
+    expect(type, 'the measure is gone').toBeTruthy();
+    expect(type, 'a display measure cannot be written in the container\'s ch')
+      .not.toMatch(/max-width:[^;]*ch/);
+  });
+
+  it('the hero photograph is full bleed with inset-inline, not 100vw', () => {
+    // 100vw counts the scrollbar gutter but the scroll container's content
+    // box does not, so a 100vw layer overflows by half a scrollbar on every
+    // desktop — real horizontal overflow, hidden only by SnapShell's clip.
+    const css = read('src/app/styles/cinematic.css');
+    const photo = css.match(/\.cine-lhero__photo \{([\s\S]*?)\n\}/)?.[1] || '';
+    expect(photo).toContain('inset-inline: 0');
+    expect(photo).not.toContain('100vw');
   });
 });
 
@@ -623,11 +775,10 @@ describe('the organizer can actually fill the panel in', () => {
        empty upload box and a preview of the stock illustration, and the first
        save would look like it had worked. */
     const settings = read('src/app/dashboard/components/EventSettings.js');
-    ['letter_hero_photo', 'letter_hero_focus', 'letter_hero_caption', 'letter_hero_caption_sub']
-      .forEach((key) => {
-        expect(settings, `${key} is edited but never hydrated`)
-          .toContain(`${key}: event.template_data?.${key}`);
-      });
+    LETTER_FIELD_KEYS.forEach((key) => {
+      expect(settings, `${key} is edited but never hydrated`)
+        .toContain(`${key}: event.template_data?.${key}`);
+    });
   });
 
   it('the wizard never prunes the portrait when switching templates', () => {
@@ -713,7 +864,14 @@ describe('Sealed Letter is wired into everything a template needs', () => {
 
   it('the landing band shows it, with its own arrival line', () => {
     const band = read('src/app/components/landing/TemplatesShowcaseSection.js');
-    expect(band).toContain('/images/landing/hero-letter.webp');
+    /* The SEALED envelope, not an opened page — this is the one template
+       whose opened page is the couple's own photograph, and any hero shot
+       here would be a stock couple standing in for theirs. */
+    expect(band).toContain('/images/landing/cover-letter.webp');
+    expect(band, 'the plate never says the photograph is the organizer\'s')
+      .toMatch(/your own photograph/i);
+    expect(band, 'the "your photo here" inset is gone')
+      .toContain('/images/landing/couple-illustration.webp');
     // The band renders ARRIVAL[key]; a template missing from that map prints
     // an empty line under its photograph rather than erroring.
     const arrivals = band.match(/const ARRIVAL = \{([\s\S]*?)\n\};/)?.[1] || '';
@@ -755,7 +913,7 @@ describe('the port left the source platform behind', () => {
        and the failure mode is invisible locally — the module is on disk, the
        tests pass, and only the deploy notices it was never committed. */
     const needed = [
-      'frontend/src/app/components/templates/cinematic/LetterFrameHero.js',
+      'frontend/src/app/components/templates/cinematic/LetterPortraitHero.js',
       'frontend/src/app/components/guest/openings/SealedLetterOpening.js',
       'frontend/src/app/components/LetterPortraitFields.js',
       ...Object.values(LETTER.assets).map((s) => `frontend/public${s}`),

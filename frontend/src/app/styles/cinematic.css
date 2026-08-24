@@ -1517,164 +1517,203 @@
 }
 
 /* ═══════════════════════════════════════════════════════
-   5e. SEALED LETTER HERO — the couple's own photograph, framed
+   5e. SEALED LETTER HERO — the couple's own photograph, full bleed
 
-   Everything below hangs off one idea: the carved frame is a real object with
-   a real panel in it, and the panel's position is KNOWN (LETTER_PANEL in
-   cinematicThemes.js, measured off the artwork). That is why the frame is a
-   sized element rather than a `background-size: contain` on the stage —
-   `contain` fits the picture but tells CSS nothing about where it landed, and
-   a panel placed against the stage instead of against the artwork drifts at
-   every viewport.
+   This template ships NO hero artwork. The fold is the organizer's
+   photograph, edge to edge, and their own words sit on it.
+
+   It shipped once as a carved ivory frame with a stock illustrated couple
+   printed into it, the organizer's photograph fitted into the frame's inner
+   panel — about a fifth of the screen, beneath somebody else's drawing of a
+   bride. Every rule about measured panel insets and feathered top edges
+   belonged to that version and is gone with it. What replaced it is simpler
+   and says the right thing: their picture IS the hero.
    ═══════════════════════════════════════════════════════ */
 
 .cine-lhero {
-  justify-content: flex-end;
-  /* The paper the frame sits on, and what the sections below inherit through
-     buildPalette — so the join between the hero and the first section is
-     invisible. */
+  /* Centred is the BASE, which is the bare hero's answer — the pos-* rules
+     below override it only when there is a photograph to position against. */
+  justify-content: center;
+  /* Only ever seen with no photograph uploaded — the template's own paper,
+     and the same value the sections below inherit through buildPalette, so
+     the join between the hero and the first section is invisible. */
   background:
     radial-gradient(circle at 50% 0%, #fbf6ec, transparent 55%),
     radial-gradient(circle at 100% 100%, #f7ede0, transparent 45%),
     #f6efe4;
-  /* Room reserved at the foot for the save button and the scroll cue. The
-     frame's own size is computed from what is left, so the two can never
-     overlap however tall the viewport is. */
-  --cine-lhero-foot: clamp(104px, 17vh, 168px);
 }
 
-.cine-lhero__frame {
+/* Edge to edge. `inset-inline: 0` rather than a 100vw centring trick, for the
+   reason .cine-vhero__scene documents: 100vw counts the scrollbar gutter but
+   the scroll container's content box does not, so the photograph would sit
+   half a scrollbar-width past each edge on every desktop. */
+.cine-lhero__photo {
   position: absolute;
   z-index: 0;
   top: 0;
-  /* Auto margins are safe HERE and not on .cine-letter__scene, and the
-     difference is the width below: this box is `min(100%, …)`, so it can
-     never exceed its container and the two auto margins can never resolve
-     negative — which is the case §10.3.7 makes direction-sensitive. Nothing
-     is over-constrained either, because the width is definite. */
-  inset-inline: 0;
-  margin-inline: auto;
-  /* Fit-and-centre without relying on how aspect-ratio interacts with a
-     max-* clamp: BOTH dimensions fall out of the same min(), so the artwork's
-     780x1386 ratio is exact at every viewport and nothing is ever
-     over-constrained. Wide screens are bounded by the height term, phones by
-     the 100% term. */
-  width: min(100%, calc((100lvh - var(--cine-lhero-foot)) * 780 / 1386));
-  aspect-ratio: 780 / 1386;
-  /* `100% 100%` rather than `contain`: the box already IS the artwork's ratio,
-     so this is exact and leaves no letterbox for the panel to drift into.
-
-     The URL comes from the component as --cine-letter-frame, NOT hardcoded
-     here. Two reasons, one of which is a real bug this file used to have: the
-     path would have existed in two places (assets.frame in cinematicThemes.js
-     and a literal here) with nothing checking they agreed, and a stylesheet
-     with a baked-in absolute path cannot be staged for the screenshot
-     harness — which rewrites asset paths in the markup and so silently
-     rendered the hero with no frame around it at all. */
-  background: var(--cine-letter-frame) center / 100% 100% no-repeat;
-  /* A cast shadow, because past ~768px the frame stops growing (it is bounded
-     by height on this ratio) and centres on a field of cream. Without one it
-     read as an image pasted onto a background; with one it is a framed
-     picture standing on paper, which is what the artwork is. Costs nothing on
-     a phone, where the frame is full-width and the shadow barely shows. */
-  box-shadow:
-    0 2px 6px rgba(120, 80, 60, 0.10),
-    0 18px 44px -14px rgba(120, 80, 60, 0.30);
-}
-
-/* The flat damask panel, measured: x 140-640 and y 188-1188 of 780x1386.
-   These four numbers are the whole design. The artwork has a couple
-   ILLUSTRATED into the bottom third of this rectangle, so a photograph inset
-   even slightly too far leaves a printed veil showing beside a real one. */
-.cine-lhero__panel {
-  position: absolute;
-  inset-inline: 17.95%;
-  top: 13.56%;
-  bottom: 14.29%;
-  overflow: hidden;
-}
-
-/* ── Where the photograph actually sits ──────────────────────────────────
-   The LOWER 62% of the panel, not the whole of it, and this is the
-   composition rather than a compromise.
-
-   The artwork puts its illustrated couple in the bottom third of the panel
-   and leaves the top as clean damask relief, because that is where the words
-   go. Filling the entire panel with a photograph was tried first and the
-   screenshot pass killed it: the names and the date landed on chandeliers and
-   white roses, and no amount of scrim rescued small gold type over a busy
-   picture — it only muddied the picture instead. Type belongs on the plaster.
-
-   62% still covers every pixel of the printed couple (they end at 97% of the
-   panel and begin at 69%), and it gives the photograph a 250x310 window on a
-   phone — a friendlier crop for the landscape and square photographs most
-   people actually have than the 1:2 slot would be. */
-.cine-lhero__photo {
-  position: absolute;
-  inset-inline: 0;
-  top: 42%;
   bottom: 0;
+  inset-inline: 0;
   width: 100%;
-  height: 58%;
+  height: 100%;
   object-fit: cover;
-  /* object-position is set inline from the organizer's focal point — see
-     LetterFrameHero. Still needed: 250x310 out of a 4:3 photograph is a real
-     vertical crop, and it decides between their faces and their knees. */
-
-  /* Feathered along its TOP edge only. Fading the sides would expose damask
-     down both edges of the portrait; the panel's own bevel is a real edge in
-     the artwork, so a hard vertical join reads as the photograph sitting in
-     the frame's rebate. The top fade is what stops it reading as a rectangle
-     pasted onto the relief. */
-  -webkit-mask-image: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.45) 9%, rgba(0, 0, 0, 0.88) 18%, #000 26%, #000 100%);
-  mask-image: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.45) 9%, rgba(0, 0, 0, 0.88) 18%, #000 26%, #000 100%);
+  /* object-position is set inline from the organizer's focal point. A phone's
+     fold is a tall portrait and most photographs are not, so this is a real
+     crop — it decides between their faces and their knees. */
 }
 
-.cine-lhero__type {
+/* ── The scrim, drawn from the edge the TYPE is on ────────────────────────
+   A full-bleed photograph has no fixed safe area: one couple's picture is sky
+   where another's is faces. So the gradient follows the words rather than
+   covering the frame — the type always has ground under it and the rest of
+   the photograph is left alone. A blanket scrim would be the lazy version and
+   would flatten every picture uploaded to this template. */
+.cine-lhero__scrim {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* --cine-lhero-shade-rgb, NOT --cine-deep-rgb. This template's `--cine-deep`
+   is a light rose because it describes the blush envelope on the cover, so a
+   scrim built from it darkened nothing and ivory names vanished into a lit
+   chandelier. See the note on the variable in cinematicThemes.js. */
+.cine-lhero.pos-bottom .cine-lhero__scrim {
+  background: linear-gradient(180deg,
+    rgba(var(--cine-lhero-shade-rgb), 0.34) 0%,
+    rgba(var(--cine-lhero-shade-rgb), 0.12) 24%,
+    rgba(var(--cine-lhero-shade-rgb), 0.52) 58%,
+    rgba(var(--cine-lhero-shade-rgb), 0.84) 84%,
+    rgba(var(--cine-lhero-shade-rgb), 0.92) 100%);
+}
+
+.cine-lhero.pos-top .cine-lhero__scrim {
+  background: linear-gradient(180deg,
+    rgba(var(--cine-lhero-shade-rgb), 0.90) 0%,
+    rgba(var(--cine-lhero-shade-rgb), 0.70) 24%,
+    rgba(var(--cine-lhero-shade-rgb), 0.22) 54%,
+    rgba(var(--cine-lhero-shade-rgb), 0.36) 80%,
+    rgba(var(--cine-lhero-shade-rgb), 0.76) 100%);
+}
+
+/* Centre gets a soft pool rather than a band: the words are in the middle of
+   the picture, and a horizontal bar across the middle of a photograph reads
+   as a fault. The foot still darkens, because the save button and the scroll
+   cue live down there whatever the type is doing. */
+.cine-lhero.pos-center .cine-lhero__scrim {
+  background:
+    radial-gradient(ellipse 100% 48% at 50% 46%,
+      rgba(var(--cine-lhero-shade-rgb), 0.80),
+      rgba(var(--cine-lhero-shade-rgb), 0) 76%),
+    linear-gradient(180deg,
+      rgba(var(--cine-lhero-shade-rgb), 0.38) 0%,
+      rgba(var(--cine-lhero-shade-rgb), 0.14) 38%,
+      rgba(var(--cine-lhero-shade-rgb), 0.70) 100%);
+}
+
+/* ── Two grounds, one set of type ────────────────────────────────────────
+   The words sit on a photograph most of the time and on paper when there is
+   none, and those need opposite ink. Rather than duplicating every rule, the
+   two variants set three custom properties and everything below reads them.
+   Getting this wrong is not subtle — it is ivory text on ivory paper. */
+.cine-lhero.has-photo {
+  --cine-lhero-ink: #fdf8f0;
+  --cine-lhero-ink-soft: rgba(253, 248, 240, 0.86);
+  --cine-lhero-glow: 0 1px 3px rgba(40, 16, 12, 0.7), 0 2px 16px rgba(40, 16, 12, 0.55);
+}
+
+.cine-lhero.is-bare {
+  --cine-lhero-ink: #5a3a32;
+  --cine-lhero-ink-soft: var(--cine-text);
+  --cine-lhero-glow: 0 1px 8px rgba(var(--cine-ivory-rgb), 0.95);
+}
+
+/* ── Where the words sit ─────────────────────────────────────────────────
+   Anchored by the pos-* modifier the organizer chose, and every one of these
+   selectors states its real precondition: `.has-photo`.
+
+   That is not decoration. The bare hero must centre whatever position is set —
+   the control positions words against a PHOTOGRAPH, and with none the type
+   anchored low just looked like it had fallen down the page. Written as a
+   bare `.cine-lhero.is-bare { justify-content: center }` after the three
+   below, it won on source order alone: identical specificity, and a later
+   edit that moved or regrouped these rules would have silently un-centred the
+   empty state with nothing failing. Naming `.has-photo` removes the tie. */
+.cine-lhero.has-photo.pos-top { justify-content: flex-start; }
+.cine-lhero.has-photo.pos-center { justify-content: center; }
+.cine-lhero.has-photo.pos-bottom { justify-content: flex-end; }
+
+/* The bottom padding reserves the pinned scroll cue's height at EVERY
+   position, not just the one where they would otherwise collide — a value
+   that only applies to pos-bottom is a value somebody removes while looking
+   at pos-top and does not notice. */
+.cine-lhero__inner {
   position: relative;
   z-index: 2;
-  padding: 6% 7% 0;
+  padding: clamp(64px, 12vh, 120px) 22px
+           max(84px, calc(env(safe-area-inset-bottom, 0px) + 80px));
+}
+
+.cine-lhero__cue {
+  position: absolute;
+  z-index: 2;
+  inset-inline: 0;
+  bottom: max(20px, calc(env(safe-area-inset-bottom, 0px) + 16px));
+}
+
+/* px, not ch. `ch` resolves against THIS box's font-size, not the names' —
+   the block inherits ~16px, so 22ch came out at about 176px and wrapped
+   "Saturday, 12 September 2026" onto two lines inside a 390px screen that had
+   room for it twice over. A measure meant for a 66px display face cannot be
+   expressed in the units of the box that contains it. */
+.cine-lhero__type {
   text-align: center;
-  /* A whisper now, not a scrim. The type sits on plaster, so this exists only
-     to catch the case where a very pale photograph creeps up under the
-     feather — it must never be strong enough to read as a panel dropped on
-     the relief, which is what killed the previous version. */
-  background: radial-gradient(ellipse 106% 84% at 50% 44%,
-    rgba(var(--cine-ivory-rgb), 0.62),
-    rgba(var(--cine-ivory-rgb), 0.3) 62%,
-    rgba(var(--cine-ivory-rgb), 0) 86%);
+  max-width: min(100%, 340px);
+  margin-inline: auto;
 }
 
 .cine-lhero__kicker {
-  margin: 0 0 6px;
+  margin: 0 0 8px;
   font-family: var(--cine-label);
   font-size: clamp(12px, 3.4vw, 15px);
-  letter-spacing: 0.04em;
-  color: var(--cine-deep);
-  text-shadow: 0 1px 6px rgba(var(--cine-ivory-rgb), 0.95);
+  letter-spacing: 0.06em;
+  color: var(--cine-lhero-ink-soft);
+  text-shadow: var(--cine-lhero-glow);
 }
 
 .cine-lhero__names {
   margin: 0;
   font-family: var(--cine-display);
   font-weight: 700;
-  font-size: clamp(28px, 9.5vw, 54px);
-  line-height: 1.3;
-  color: #5a3a32;
-  text-shadow: 0 1px 10px rgba(var(--cine-ivory-rgb), 0.9);
+  font-size: clamp(34px, 11vw, 66px);
+  line-height: 1.24;
+  color: var(--cine-lhero-ink);
+  text-shadow: var(--cine-lhero-glow);
 }
 
-/* The gold sweep from the source, kept because it is this template's one
-   piece of perpetual motion and it costs nothing — a background-position
-   animation on the compositor.
+/* ── The gold sweep, on PAPER only ───────────────────────────────────────
+   The source template's one piece of perpetual motion, and it costs nothing —
+   a background-position animation on the compositor. On the bare hero, where
+   the ground is a flat cream, it is the thing that stops the page being
+   simply type on a rectangle.
 
-   background-clip: text needs a colour to clip, so the fill is transparent —
-   which means a browser that supports the animation but not the clip would
-   render INVISIBLE names. Both properties ship with the -webkit- prefix and
-   have for a decade, and the reduced-motion block below stops the animation
-   without touching the fill. */
-.cine-lhero__shimmer {
-  background: linear-gradient(100deg, #5a3a32 0%, #5a3a32 40%, var(--cine-gold-hi) 50%, #5a3a32 60%, #5a3a32 100%);
+   It is deliberately NOT applied over a photograph. The sweep spends half its
+   cycle with `--cine-gold-hi` (#ddc185, a mid-tone) across the letterforms,
+   and a mid-tone gold on a lit ballroom is the moment the couple's names stop
+   being readable — which the screenshot pass showed happening on both a
+   bright picture and a dark one. `background-clip: text` also forces
+   `-webkit-text-fill-color: transparent`, and text-shadow does not paint on
+   a clipped fill, so the one thing that WOULD rescue it is unavailable. Over
+   a photograph the names are solid ink with a real shadow, and the photograph
+   is the thing that is supposed to be moving anyway.
+
+   Scoped to .is-bare rather than overridden for .has-photo, so the transparent
+   fill can never be left standing without the gradient that fills it. */
+.cine-lhero.is-bare .cine-lhero__shimmer {
+  background: linear-gradient(100deg,
+    var(--cine-lhero-ink) 0%, var(--cine-lhero-ink) 40%,
+    var(--cine-gold-hi) 50%,
+    var(--cine-lhero-ink) 60%, var(--cine-lhero-ink) 100%);
   background-size: 250% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -1688,108 +1727,86 @@
   to   { background-position: -130% 0; }
 }
 
+/* The one piece of type that did NOT invert with the ground. It was
+   var(--cine-gold-dp) — #997b38, a dark gold that sits beautifully on cream
+   paper and disappears into a dark scrim, which is where it spent most of its
+   life once the photograph went full bleed. It follows the ink now, and keeps
+   the gold only on the bare hero where the gold was right. */
 .cine-lhero__amp {
   display: block;
   margin: -2px 0;
   font-family: var(--cine-serif);
   font-size: 0.5em;
-  color: var(--cine-gold-dp);
+  color: var(--cine-lhero-ink-soft);
 }
 
-/* Plain centred text, with no flanking hairlines — see the note in
-   LetterFrameHero. The measure here is the panel's, roughly 215px on a phone
-   and ~260px from 768px up, and it never grows past that because the frame
-   stops growing once it is bounded by height. Two rules and their gaps took a
-   quarter of it and cost the date a line; the date wins.
+.cine-lhero.is-bare .cine-lhero__amp { color: var(--cine-gold-dp); }
 
-   Capped at 15px for the same reason: a font that keeps scaling with the
-   viewport eventually wraps inside a box that stopped getting wider. */
+/* Plain centred text, with no flanking hairlines. The measure is capped by
+   .cine-lhero__type, and two rules plus their gaps took a quarter of it and
+   cost the date a line. An ornament that costs the information a line is not
+   an ornament. */
 .cine-lhero__date {
-  margin: 7px 0 0;
+  margin: 9px 0 0;
   font-family: var(--cine-display);
-  font-size: clamp(12px, 3.3vw, 15px);
+  font-size: clamp(13px, 3.6vw, 17px);
   line-height: 1.5;
-  color: var(--cine-gold-dp);
-  text-shadow: 0 1px 6px rgba(var(--cine-ivory-rgb), 0.95);
+  color: var(--cine-lhero-ink-soft);
+  text-shadow: var(--cine-lhero-glow);
 }
 
-.cine-lhero__sub {
-  margin: 8px 0 0;
-  font-family: var(--cine-serif);
-  font-size: clamp(13px, 3.6vw, 16px);
-  line-height: 1.8;
-  color: var(--cine-text);
-  text-shadow: 0 1px 6px rgba(var(--cine-ivory-rgb), 0.95);
-}
-
-/* ── The organizer's words, on their photograph ──────────────────────────
-   A caption plate at the foot of the portrait, the way a framed picture is
-   captioned rather than a banner laid across it. Rendered only when there is
-   something to say — an empty plate is a grey band across the couple's
-   faces. */
-.cine-lhero__plate {
-  position: absolute;
-  z-index: 3;
-  inset-inline: 0;
-  bottom: 0;
-  padding: 13% 8% 6%;
-  text-align: center;
-  /* Stronger than it first was. These words land on whatever the couple
-     uploaded — in the screenshot pass that was white roses and a lit
-     tablecloth, and brown type over a soft wash of ivory on top of THAT was
-     the weakest thing on the page. It still resolves to nothing at the top,
-     so it reads as light gathering at the foot of the picture rather than as
-     a bar laid across it. */
-  background: linear-gradient(180deg,
-    rgba(var(--cine-ivory-rgb), 0) 0%,
-    rgba(var(--cine-ivory-rgb), 0.42) 32%,
-    rgba(var(--cine-ivory-rgb), 0.82) 62%,
-    rgba(var(--cine-ivory-rgb), 0.96) 100%);
-}
-
+/* The organizer's own line, ON the picture rather than in a plate below it.
+   The scrim above is what makes this legible; there is no second panel. */
 .cine-lhero__caption {
-  margin: 0;
+  margin: 14px 0 0;
   font-family: var(--cine-display);
-  font-size: clamp(15px, 4.6vw, 22px);
-  line-height: 1.55;
-  color: #5a3a32;
-  text-shadow: 0 1px 6px rgba(var(--cine-ivory-rgb), 0.95);
+  font-size: clamp(16px, 4.8vw, 24px);
+  line-height: 1.5;
+  color: var(--cine-lhero-ink);
+  text-shadow: var(--cine-lhero-glow);
 }
 
 .cine-lhero__captionsub {
-  margin: 4px 0 0;
+  margin: 5px 0 0;
   font-family: var(--cine-serif);
-  font-size: clamp(12px, 3.4vw, 15px);
+  font-size: clamp(13px, 3.6vw, 16px);
   line-height: 1.7;
-  color: var(--cine-text);
-  text-shadow: 0 1px 6px rgba(var(--cine-ivory-rgb), 0.95);
+  color: var(--cine-lhero-ink-soft);
+  text-shadow: var(--cine-lhero-glow);
 }
 
-.cine-lhero__inner {
-  position: relative;
-  z-index: 2;
-  padding: 0 22px max(20px, calc(env(safe-area-inset-bottom, 0px) + 16px));
+.cine-lhero__sub {
+  margin: 12px 0 0;
+  font-family: var(--cine-serif);
+  font-size: clamp(13px, 3.6vw, 16px);
+  line-height: 1.8;
+  color: var(--cine-lhero-ink-soft);
+  text-shadow: var(--cine-lhero-glow);
 }
 
-/* Ink on paper, not gold on glass: this hero's foot is cream, and the shared
-   gold-on-translucent button loses contrast on it — the same override Door of
-   Joy and Swan Lake each needed for the same reason. */
-.cine-lhero .cine-hero__save {
+/* Two grounds, two buttons. On a photograph the shared gold-on-glass mark is
+   right at home; on bare paper it loses all contrast — the same override Door
+   of Joy and Swan Lake each needed, applied to only the half of this template
+   that needs it. */
+.cine-lhero.is-bare .cine-hero__save {
   color: #5a3a32;
   background: rgba(255, 253, 246, 0.78);
   border-color: rgba(var(--cine-gold-rgb), 0.6);
 }
 
-.cine-lhero .cine-hero__save:hover { background: rgba(255, 253, 246, 0.92); }
+.cine-lhero.is-bare .cine-hero__save:hover { background: rgba(255, 253, 246, 0.92); }
 
+/* No margin-top override here any more. The shared .cine-hero__cue carries one
+   for the heroes that keep the cue in flow; this one is absolutely positioned
+   against `bottom`, where a top margin cannot move it — an inert declaration
+   that reads as if it were doing something. */
 .cine-lhero .cine-hero__cue {
-  margin-top: clamp(10px, 2.4vw, 18px);
   font-family: var(--cine-serif);
-  color: var(--cine-gold-dp);
-  text-shadow: 0 1px 6px rgba(255, 250, 244, 0.9);
+  color: var(--cine-lhero-ink-soft);
+  text-shadow: var(--cine-lhero-glow);
 }
 
-.cine-lhero .cine-hero__cue-arrow { color: var(--cine-gold-dp); }
+.cine-lhero .cine-hero__cue-arrow { color: currentColor; }
 
 /* ── The entrance ────────────────────────────────────────────────────────
    The settled state is the DEFAULT and the arrival is the class, so a browser
@@ -1799,21 +1816,22 @@
 
    `transition: none` on the arriving state stops the hero animating INTO its
    entrance on mount, which would run the whole thing backwards behind a
-   sealed envelope. */
-.cine-lhero__frame,
-.cine-lhero__type,
-.cine-lhero__plate {
-  transition: opacity 0.9s ease, transform 1s cubic-bezier(0.2, 0.7, 0.3, 1);
+   sealed envelope.
+
+   The photograph gets a slow settle out of a slight scale rather than a fade:
+   it is the whole screen, and a full-bleed picture fading up from nothing
+   reads as a loading state. The words follow it. */
+.cine-lhero__photo,
+.cine-lhero__inner {
+  transition: opacity 0.9s ease, transform 1.4s cubic-bezier(0.2, 0.7, 0.3, 1);
 }
 
-.cine-lhero.is-arriving .cine-lhero__frame { opacity: 0; transform: scale(0.96); transition: none; }
-.cine-lhero.is-arriving .cine-lhero__type { opacity: 0; transform: translateY(16px); transition: none; }
-.cine-lhero.is-arriving .cine-lhero__plate { opacity: 0; transform: translateY(12px); transition: none; }
+.cine-lhero.is-arriving .cine-lhero__photo { transform: scale(1.06); transition: none; }
+.cine-lhero.is-arriving .cine-lhero__inner { opacity: 0; transform: translateY(18px); transition: none; }
 
-/* Staggered on the way IN only. The delays live on the settled state, so
-   removing the class starts the frame, then the type, then the caption. */
-.cine-lhero__type { transition-delay: 0.28s; }
-.cine-lhero__plate { transition-delay: 0.48s; }
+/* On the way OUT only — the delay lives on the settled state, so removing the
+   class starts the photograph settling and the words follow a beat later. */
+.cine-lhero__inner { transition-delay: 0.22s; }
 
 /* ═══════════════════════════════════════════════════════
    6. RESPONSIVE
@@ -1838,14 +1856,11 @@
      this width to give up the few percent at the top. */
   .cine-shero__scene { background-position: center 52%; }
 
-  /* Past the phone the frame is bounded by HEIGHT, not width — it stops
-     growing and simply centres on more paper, which is what a framed picture
-     on a wall does. Only the type inside it needs to keep up. */
-  .cine-lhero__names { font-size: clamp(34px, 4.4vw, 54px); }
-  .cine-lhero__type { padding-top: 6%; }
-  .cine-lhero__plate { padding-bottom: 5%; }
-  /* More room for the button and the cue once there is height to spare. */
-  .cine-lhero { --cine-lhero-foot: clamp(132px, 19vh, 190px); }
+  /* The photograph is full bleed at every width, so only the measure needs
+     attention: 22ch of a 66px display face is a very long line on a desktop,
+     and the names want to stay a title rather than become a paragraph. */
+  .cine-lhero__names { font-size: clamp(44px, 5.2vw, 78px); }
+  .cine-lhero__type { max-width: min(90%, 560px); }
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -1868,7 +1883,7 @@
   .cine-swan__sealed,
   .cine-swan__hint,
   .cine-letter__hint,
-  .cine-lhero__shimmer {
+  .cine-lhero.is-bare .cine-lhero__shimmer {
     animation: none !important;
   }
 
@@ -1885,14 +1900,14 @@
   .cine-letter.is-opening .cine-letter__anim { animation: none !important; }
   .cine-letter.is-revealed .cine-letter__anim { background-position-x: 100%; }
 
-  /* The entrance is how the hero arrives, not decoration — LetterFrameHero
+  /* The entrance is how the hero arrives, not decoration — LetterPortraitHero
      already renders the settled state outright under this preference (it
      never sets is-arriving), so there is nothing to animate. Killing the
      transitions as well means a stray re-render cannot reintroduce a
-     full-height scale on the couple's photograph. */
-  .cine-lhero__frame,
-  .cine-lhero__type,
-  .cine-lhero__plate {
+     full-screen scale on the couple's photograph, which is exactly the kind
+     of motion this preference exists to refuse. */
+  .cine-lhero__photo,
+  .cine-lhero__inner {
     transition: none !important;
   }
 

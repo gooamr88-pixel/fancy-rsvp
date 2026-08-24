@@ -2,10 +2,10 @@
    SEALED LETTER — the verification contact sheet.
 
    Everything about this template that a unit test cannot see, on one page:
-   the sprite cover in both languages, the hero WITH a photograph and WITHOUT
-   one (the frame's own illustration has to stand), the caption plate present
-   and absent, and the same landscape photograph at all three focal points —
-   which is the control the whole 1:2 panel argument rests on.
+   the sprite cover in both languages, the hero WITH the organizer's
+   photograph and WITHOUT one, the same photograph at all three focal points,
+   and the words anchored to all three edges — which is where a scrim that
+   does not follow the type would show up as unreadable names.
 
    ── Running it ───────────────────────────────────────────────────────────
    1. Stage the HTML (writes .visual/letter/stage/*.html and sheet-*.html):
@@ -38,7 +38,7 @@ vi.mock('framer-motion', async (importOriginal) => {
 });
 
 import SealedLetterOpening from '../../src/app/components/guest/openings/SealedLetterOpening';
-import LetterFrameHero from '../../src/app/components/templates/cinematic/LetterFrameHero';
+import LetterPortraitHero from '../../src/app/components/templates/cinematic/LetterPortraitHero';
 import LetterPortraitFields from '../../src/app/components/LetterPortraitFields';
 import { CINEMATIC_TEMPLATES } from '../../src/app/components/templates/cinematic/cinematicThemes';
 import { OPENING_TIMINGS } from '../../src/app/components/guest/openings/openingSafety';
@@ -50,14 +50,13 @@ const STAGE = path.join(OUT, 'stage');
 const CSS = fs.readFileSync(path.join(ROOT, 'src/app/styles/cinematic.css'), 'utf8');
 const PUBLIC = path.join(ROOT, 'public').replace(/\\/g, '/');
 
-/* A LANDSCAPE photograph, on purpose. The panel is 1:2, so this is the case
-   the focal-point control exists for — a portrait would look fine at every
-   setting and prove nothing. Already in public/, so nothing new ships. */
+/* A LANDSCAPE photograph, on purpose. A phone's fold is a tall portrait, so
+   this is the case the focal-point control exists for — a portrait would look
+   fine at every setting and prove nothing. Already in public/. */
 const PHOTO = '/images/hero-wedding.png';
-/* A DARK photograph, and the case the first pass never looked at. The caption
-   is dark brown on a translucent ivory plate — over white roses that is
-   obviously fine, and over a near-black frame it is the one place this design
-   can fail. Borrowed from another template's artwork rather than shipped. */
+/* A DARK photograph. The type is now ivory with a dark scrim behind it, so the
+   risk has INVERTED from the framed version: light words on a bright picture
+   is the case that can fail, and this is the control for it. */
 const DARK_PHOTO = '/templates/ring/video-poster.jpg';
 
 const FONTS = `
@@ -122,7 +121,7 @@ const heroBase = {
 };
 
 async function stageHero(name, props, opts) {
-  const r = render(<LetterFrameHero {...heroBase} {...props} />);
+  const r = render(<LetterPortraitHero {...heroBase} {...props} />);
   await act(async () => { await new Promise((res) => setTimeout(res, 250)); });
   stage(name, r.container.innerHTML, opts);
   r.unmount();
@@ -167,29 +166,40 @@ describe('sealed letter — contact sheet', () => {
       heroCaption: 'حيث يبدأ كل شيء', heroCaptionSub: 'بيروت · سبتمبر ٢٠٢٦',
     }, { dir: 'rtl' });
 
-    /* THE state that must not look broken: nothing uploaded, so the frame's
-       own illustrated couple has to stand on its own. This is also the ONLY
-       state that renders the occasion tagline — with a photograph there is no
-       room for it above the picture — so it is passed here and nowhere else,
-       and this is where that branch gets looked at. */
+    /* THE state that must not look broken: nothing uploaded at all. No
+       artwork ships for this hero, so what stands here is type on paper —
+       and it has to read as a finished invitation rather than as a page
+       waiting for something. This is also the only state that renders the
+       occasion tagline (the organizer's own words replace it otherwise), so
+       that branch gets looked at here. */
     await stageHero('hero-empty-en', {
       ...en,
       tagline: 'invite you to share the joy of their wedding',
     });
 
-    // A photograph but no words — the plate must be absent, not an empty band.
+    // A photograph and no words of their own — names and date only.
     await stageHero('hero-nocaption-en', { ...en, heroPhoto: PHOTO, heroFocus: 'top' });
 
-    // The contrast case: dark type on a translucent plate over a dark picture.
+    // The contrast case, now inverted: ivory type over a DARK picture.
     await stageHero('hero-dark-en', {
       ...en, heroPhoto: DARK_PHOTO, heroFocus: 'center',
       heroCaption: 'Where it all begins', heroCaptionSub: 'Beirut · September 2026',
     });
 
-    // The control, on a landscape photo in a 1:2 panel.
+    // The focal control, on a landscape photo in a tall fold.
     for (const focus of ['top', 'center', 'bottom']) {
       await stageHero(`hero-focus-${focus}`, {
         ...en, heroPhoto: PHOTO, heroFocus: focus, heroCaption: `Focus: ${focus}`,
+      });
+    }
+
+    /* The text-position control. The scrim is drawn from whichever edge the
+       words are anchored to, so this is where a scrim that failed to follow
+       the type would show up as unreadable names on bare photograph. */
+    for (const pos of ['top', 'center', 'bottom']) {
+      await stageHero(`hero-pos-${pos}`, {
+        ...en, heroPhoto: PHOTO, heroFocus: 'center', heroTextPos: pos,
+        heroCaption: `Words: ${pos}`, heroCaptionSub: 'Beirut · September 2026',
       });
     }
   });
@@ -199,8 +209,11 @@ describe('sealed letter — contact sheet', () => {
       <div style={{ padding: 20, background: '#fff', fontFamily: "'Segoe UI',sans-serif" }}>
         <LetterPortraitFields
           value={{
+            partner1: 'Noor',
+            partner2: 'Yusuf',
             letter_hero_photo: PHOTO,
             letter_hero_focus: 'center',
+            letter_hero_text_pos: 'bottom',
             letter_hero_caption: 'Where it all begins',
             letter_hero_caption_sub: 'Beirut · September 2026',
           }}
@@ -229,10 +242,13 @@ describe('sealed letter — contact sheet', () => {
       ['hero-focus-top', 'focus: top'],
       ['hero-focus-center', 'focus: centre'],
       ['hero-focus-bottom', 'focus: bottom'],
+      ['hero-pos-top', 'words: top'],
+      ['hero-pos-center', 'words: middle'],
+      ['hero-pos-bottom', 'words: bottom'],
     ]);
 
-    // 768px: the frame stops growing and centres on more paper. Worth seeing,
-    // because that is where the reserved foot and the type sizes change.
+    // 768px: the photograph is full bleed at every width, so what changes here
+    // is the measure and the type scale.
     sheet('sheet-768.html', 768, 1024, [
       ['hero-photo-en', 'hero · photo · en'],
       ['hero-empty-en', 'hero · NO photo'],

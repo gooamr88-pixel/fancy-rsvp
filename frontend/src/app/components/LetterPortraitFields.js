@@ -1,14 +1,18 @@
 'use client';
 
 import React, { useCallback, useId, useRef, useState } from 'react';
-import { LETTER_PANEL, LETTER_FOCUS, LETTER_FOCUS_DEFAULT } from './templates/cinematic/cinematicThemes';
+import {
+  LETTER_FOCUS, LETTER_FOCUS_DEFAULT,
+  LETTER_TEXT_POS, LETTER_TEXT_POS_DEFAULT,
+  LETTER_SCRIM,
+} from './templates/cinematic/cinematicThemes';
 
 /* ═══════════════════════════════════════════════════════════════
    SEALED LETTER — the organizer's side of the hero.
 
    Sealed Letter is the only template whose hero is different on every event:
-   a carved ivory frame with a panel in it, and the couple's own photograph
-   and words go in the panel. These are the three controls for that.
+   it ships no artwork of its own, so the couple's photograph IS the fold and
+   their words sit on it. These are the four controls for that.
 
    ── Why this is ONE component used by two screens ────────────────────────
    The wizard's Stage 2 and the dashboard's Event Details both edit these
@@ -20,12 +24,12 @@ import { LETTER_PANEL, LETTER_FOCUS, LETTER_FOCUS_DEFAULT } from './templates/ci
    render it.
 
    ── Why there is a live preview and not just a file input ────────────────
-   The panel is 1:2. A landscape photograph loses most of its width, and which
-   part survives is the difference between the couple's faces and their knees.
-   An organizer cannot be asked to imagine that, so the preview is the real
-   frame artwork at the real measured insets (LETTER_PANEL, shared with the
-   hero's own CSS) with the real crop applied. What they see here is what a
-   guest gets.
+   A phone's fold is a tall portrait and most photographs are not, so a real
+   crop happens — and which part survives is the difference between the
+   couple's faces and their knees. On top of that the words can be anchored to
+   any of three edges. Nobody can be asked to imagine the combination, so the
+   preview is the actual composition at the actual aspect ratio, reading the
+   same LETTER_FOCUS and LETTER_TEXT_POS constants the guest page does.
    ═══════════════════════════════════════════════════════════════ */
 
 /* Same values as the two dashboard surfaces this mounts inside. Restated
@@ -38,12 +42,14 @@ const C = {
   border: '#E8E2D6', white: '#FFFFFF', softBg: '#FAFAF8', faint: '#A09A91',
 };
 
-/* Budgets, not truncation. The caption is set in a display serif inside a
-   panel roughly 240px wide on a phone, which is about 24 characters a line —
-   so 48 is two comfortable lines and anything past it wraps to a third and
-   starts crowding the photograph. The counter warns; the maxLength stops. */
-const CAPTION_MAX = 48;
-const CAPTION_SUB_MAX = 64;
+/* Budgets, not truncation, and they were RAISED when the photograph went full
+   bleed. The measure was a 240px panel inside a carved frame — about 24
+   characters a line, so 48 bought two lines. It is now the hero's own 340px
+   at up to 24px, nearer 36 a line, and holding the old ceiling would have
+   been the interface refusing room the design has. The counter warns; the
+   maxLength stops. */
+const CAPTION_MAX = 60;
+const CAPTION_SUB_MAX = 80;
 const MAX_BYTES = 8 * 1024 * 1024;
 
 /* The labels are this screen's; the POSITIONS are LETTER_FOCUS, imported from
@@ -51,9 +57,16 @@ const MAX_BYTES = 8 * 1024 * 1024;
    a preview that can silently start cropping differently from the page it is
    previewing — the one failure mode a preview must not have. */
 const FOCUS_OPTIONS = [
-  { key: 'top', label: 'Top', hint: 'Keeps heads and faces when the photo is wider than the panel' },
+  { key: 'top', label: 'Top', hint: 'Keeps heads and faces when the photo is wider than the screen' },
   { key: 'center', label: 'Centre', hint: 'The middle of the photo' },
   { key: 'bottom', label: 'Bottom', hint: 'Keeps a full-length pose or a dress' },
+];
+
+/** Where the words sit ON the photograph. */
+const TEXT_POS_OPTIONS = [
+  { key: 'top', label: 'Top', hint: 'For a photo whose subject is low in the frame' },
+  { key: 'center', label: 'Middle', hint: 'Across the centre of the picture' },
+  { key: 'bottom', label: 'Bottom', hint: 'The default — a caption under the picture' },
 ];
 
 /* Two visually identical styles, deliberately used on two different elements.
@@ -77,68 +90,85 @@ const inputStyle = {
 };
 const hintStyle = { fontSize: 'var(--fx-micro)', color: C.faint, display: 'block', marginTop: 4 };
 
-/** The hero, at postage-stamp size, cropping exactly as the hero crops. */
-function PortraitPreview({ photo, focus, caption, captionSub }) {
+/**
+ * The hero at postage-stamp size — full bleed, cropped and anchored exactly
+ * as the guest page does it.
+ *
+ * A phone's fold, not a square: the whole reason the focal point matters is
+ * that a 4:3 photograph loses most of its width here, and a preview in the
+ * wrong shape would hide precisely the decision it exists to inform.
+ */
+function PortraitPreview({ photo, focus, textPos, names, caption, captionSub }) {
+  /* Centred with no photograph, mirroring `.cine-lhero`'s own base: the
+     position control anchors words against a PICTURE, and the page ignores it
+     until there is one. Applying it here regardless would have shown an
+     organizer their names pinned low on a page that will centre them. */
+  const align = photo
+    ? (LETTER_TEXT_POS[textPos] || LETTER_TEXT_POS[LETTER_TEXT_POS_DEFAULT])
+    : 'center';
   return (
     <div
       data-testid="letter-portrait-preview"
       style={{
         position: 'relative',
         width: 156,
-        aspectRatio: '780 / 1386',
+        aspectRatio: '390 / 844',
         flex: 'none',
-        borderRadius: 6,
+        borderRadius: 10,
         overflow: 'hidden',
         boxShadow: '0 8px 22px -10px rgba(0,0,0,0.4)',
-        background: '#f6efe4 url("/templates/letter/frame.jpg") center / 100% 100% no-repeat',
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: align,
+        // The bare state's paper, same as .cine-lhero's.
+        background: 'radial-gradient(circle at 50% 0%, #fbf6ec, transparent 55%), #f6efe4',
       }}
     >
-      {/* The measured panel, from the same constant the hero's stylesheet
-          documents. If these ever disagree, the preview is worse than none. */}
-      <div style={{
-        position: 'absolute',
-        insetInline: LETTER_PANEL.insetInline,
-        top: LETTER_PANEL.top,
-        bottom: LETTER_PANEL.bottom,
-        overflow: 'hidden',
-      }}>
-        {photo && (
-          /* eslint-disable-next-line @next/next/no-img-element */
+      {photo && (
+        <>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={photo}
             alt=""
             style={{
-              // Every one of these comes from LETTER_PANEL, which the hero's
-              // stylesheet also reads. A preview that crops differently from
-              // the page is worse than no preview: it is a confident answer to
-              // the wrong question.
-              position: 'absolute', insetInline: 0,
-              top: LETTER_PANEL.photoTop, height: LETTER_PANEL.photoHeight,
-              width: '100%',
+              position: 'absolute', inset: 0, width: '100%', height: '100%',
               objectFit: 'cover',
               objectPosition: LETTER_FOCUS[focus] || LETTER_FOCUS[LETTER_FOCUS_DEFAULT],
-              WebkitMaskImage: LETTER_PANEL.photoMask,
-              maskImage: LETTER_PANEL.photoMask,
             }}
           />
-        )}
-        {(caption || captionSub) && (
           <div style={{
-            position: 'absolute', insetInline: 0, bottom: 0, padding: '13% 8% 6%',
-            textAlign: 'center',
-            background: 'linear-gradient(180deg, rgba(248,242,233,0) 0%, rgba(248,242,233,0.42) 32%, rgba(248,242,233,0.82) 62%, rgba(248,242,233,0.96) 100%)',
+            position: 'absolute', inset: 0, pointerEvents: 'none',
+            background: LETTER_SCRIM[textPos] || LETTER_SCRIM[LETTER_TEXT_POS_DEFAULT],
+          }} />
+        </>
+      )}
+
+      <div style={{ position: 'relative', padding: '10% 8%', textAlign: 'center' }}>
+        <span style={{
+          display: 'block', fontSize: 11, lineHeight: 1.25, fontFamily: 'var(--font-serif)',
+          color: photo ? '#fdf8f0' : '#5a3a32',
+          textShadow: photo ? '0 1px 4px rgba(40,16,12,0.7)' : 'none',
+        }}>
+          {names}
+        </span>
+        {caption && (
+          <span style={{
+            display: 'block', marginTop: 4, fontSize: 6.5, lineHeight: 1.45,
+            fontFamily: 'var(--font-serif)',
+            color: photo ? '#fdf8f0' : '#5a3a32',
+            textShadow: photo ? '0 1px 4px rgba(40,16,12,0.7)' : 'none',
           }}>
-            {caption && (
-              <span style={{ display: 'block', fontSize: 6.5, lineHeight: 1.5, color: '#5a3a32', fontFamily: 'var(--font-serif)' }}>
-                {caption}
-              </span>
-            )}
-            {captionSub && (
-              <span style={{ display: 'block', fontSize: 5, lineHeight: 1.6, color: '#5f463f', marginTop: 1 }}>
-                {captionSub}
-              </span>
-            )}
-          </div>
+            {caption}
+          </span>
+        )}
+        {captionSub && (
+          <span style={{
+            display: 'block', marginTop: 1, fontSize: 5.5, lineHeight: 1.5,
+            color: photo ? 'rgba(253,248,240,0.86)' : '#5f463f',
+            textShadow: photo ? '0 1px 4px rgba(40,16,12,0.7)' : 'none',
+          }}>
+            {captionSub}
+          </span>
         )}
       </div>
     </div>
@@ -172,11 +202,19 @@ export default function LetterPortraitFields({
   const captionSubId = `${uid}-caption-sub`;
   const photoGroupId = `${uid}-photo-group`;
   const focusGroupId = `${uid}-focus-group`;
+  const textPosGroupId = `${uid}-textpos-group`;
 
   const photo = value.letter_hero_photo || '';
   const focus = value.letter_hero_focus || LETTER_FOCUS_DEFAULT;
+  const textPos = value.letter_hero_text_pos || LETTER_TEXT_POS_DEFAULT;
   const caption = value.letter_hero_caption || '';
   const captionSub = value.letter_hero_caption_sub || '';
+  /* Whatever the couple's names resolve to, so the preview is THEIR hero and
+     not a generic one. `partner1/partner2` are the keys every full-page
+     template stores a couple under. */
+  const previewNames = [value.partner1, value.partner2].filter(Boolean).join(' & ')
+    || value.custom_honoree
+    || 'Your names';
 
   const take = useCallback(async (file) => {
     if (!file) return;
@@ -239,14 +277,13 @@ export default function LetterPortraitFields({
             <span style={{ display: 'block', fontSize: 12, fontWeight: 600, color: C.stone, fontFamily: 'var(--font-sans)' }}>
               {busy ? 'Uploading…' : photo ? 'Drop a new photo, or click to replace' : 'Drop the photo here or click to browse'}
             </span>
-            {/* NOT "a tall portrait works best" — that was written when the
-                photograph filled the whole 1:2 panel, and it stopped being
-                true when the type moved onto the plaster above it. The window
-                is now about 250x290, so a square or a landscape photograph is
-                the easy case and a very tall one is the awkward one. Telling
-                organizers the opposite would have them cropping their photos
-                the wrong way before they ever upload. */}
-            <span style={hintStyle}>JPG, PNG, WebP • Max 8MB • Roughly square works best</span>
+            {/* The advice has to match the shape the photo is actually put
+                in, and that shape has changed once already. It now fills the
+                whole fold, which on a phone is a tall portrait — so a
+                portrait-orientation photo is the easy case again. Getting
+                this line wrong has organizers cropping their photographs the
+                wrong way before they ever upload one. */}
+            <span style={hintStyle}>JPG, PNG, WebP • Max 8MB • A tall portrait fills a phone best</span>
           </div>
           <input ref={fileRef} type="file" accept="image/*" onChange={onPick} disabled={busy} style={{ display: 'none' }} />
 
@@ -298,14 +335,49 @@ export default function LetterPortraitFields({
               })}
             </div>
             <span style={hintStyle}>
-              Your photo fills the lower part of the frame&apos;s panel, under your
-              names. A wide photo has to lose some height to fit — this chooses
-              which part survives.
+              Your photo fills the whole screen. A wide photo has to lose some
+              width to fit a phone — this chooses which part survives.
+            </span>
+          </div>
+
+          <div style={{ marginTop: 16 }}>
+            <span id={textPosGroupId} style={groupHeadingStyle}>Where Your Words Sit</span>
+            <div role="group" aria-labelledby={textPosGroupId} style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {TEXT_POS_OPTIONS.map((opt) => {
+                const active = textPos === opt.key;
+                return (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    aria-pressed={active}
+                    title={opt.hint}
+                    data-testid={`letter-textpos-${opt.key}`}
+                    onClick={() => onChange?.({ letter_hero_text_pos: opt.key })}
+                    style={{
+                      padding: '7px 14px', borderRadius: 8, cursor: 'pointer',
+                      border: `1px solid ${active ? C.gold : C.border}`,
+                      background: active ? 'rgba(184,148,79,0.1)' : C.white,
+                      color: active ? C.gold : C.stone,
+                      fontSize: 12, fontWeight: active ? 700 : 500,
+                      fontFamily: 'var(--font-sans)',
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+            <span style={hintStyle}>
+              Your names and your words move together, and the shading behind them
+              follows — so they stay readable wherever you put them.
             </span>
           </div>
         </div>
 
-        <PortraitPreview photo={photo} focus={focus} caption={caption} captionSub={captionSub} />
+        <PortraitPreview
+          photo={photo} focus={focus} textPos={textPos}
+          names={previewNames} caption={caption} captionSub={captionSub}
+        />
       </div>
 
       <div style={{ marginTop: 18 }}>
@@ -319,7 +391,7 @@ export default function LetterPortraitFields({
           style={inputStyle}
         />
         <span style={hintStyle}>
-          Set across the foot of your photograph. {CAPTION_MAX - caption.length} characters left.
+          Written across your photograph, under your names. {CAPTION_MAX - caption.length} characters left.
         </span>
       </div>
 

@@ -82,12 +82,44 @@ describe('the invitations are shown, and they are real', () => {
     });
   });
 
-  it('shows the opened page for each', async () => {
+  it('shows a real shot of each template, opened where there is one to show', async () => {
+    /* Three of these open onto photography we supply, so the OPENED page is
+       the thing worth showing and `hero-<key>.webp` is it.
+
+       Sealed Letter is the exception, and deliberately: it opens onto the
+       couple's own photograph, so there is no honest picture of its opened
+       page — anything here would be a stock couple standing in for theirs,
+       which is the exact impression that template exists to avoid giving. Its
+       plate shows the sealed envelope we really do ship, and says the rest in
+       words. Asserted as "one of the two", so a template cannot quietly end
+       up with NO shot at all. */
     const { container } = await renderBand();
     const srcs = [...container.querySelectorAll('img')].map((i) => i.getAttribute('src'));
     CINEMATIC_KEYS.forEach((key) => {
-      expect(srcs, `${key} has no opened page`).toContain(`/images/landing/hero-${key}.webp`);
+      const opened = `/images/landing/hero-${key}.webp`;
+      const sealed = `/images/landing/cover-${key}.webp`;
+      expect(
+        srcs.includes(opened) || srcs.includes(sealed),
+        `${key} has no shot on its plate at all`,
+      ).toBe(true);
     });
+  });
+
+  it('says whose photograph it is wherever it cannot show one', async () => {
+    /* The other half of the exception above. A plate that shows a sealed
+       envelope and says nothing has simply told the visitor less than the
+       other three did — the claim has to be made in words instead, and it is
+       the strongest thing this template has to say. */
+    const { container } = await renderBand();
+    const text = container.textContent;
+    expect(text, 'the "your own photograph" claim is gone')
+      .toMatch(/your own photograph/i);
+    // And the small stand-in beside it, at a size that cannot be mistaken for
+    // a picture the template ships.
+    const own = container.querySelector('.tss-own img');
+    expect(own, 'the "your photo here" inset is gone').toBeTruthy();
+    expect(own.getAttribute('alt') || '', 'the stand-in does not admit what it is')
+      .toMatch(/standing in for/i);
   });
 
   it('the sealed-and-opened pair is still made, in the hero', async () => {

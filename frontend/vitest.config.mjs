@@ -43,8 +43,9 @@ export default defineConfig({
     include: ['test/**/*.test.{js,jsx}'],
     css: false,
     /**
-     * 15s, not the 5s default, and this is about flakiness rather than slowness.
+     * 60s, not the 5s default, and this is about flakiness rather than slowness.
      *
+     * ── Why it started at 15s ────────────────────────────────────────────────
      * The FIRST test in invitationReveal.test.jsx pays for the whole reveal module
      * graph — framer-motion, the artwork manifest, a jsdom document — inside its own
      * timed window, because that import is what the first render triggers. On its
@@ -52,13 +53,29 @@ export default defineConfig({
      * 6.4s and failed against the 5s default, then passed twice in isolation moments
      * later.
      *
+     * ── Why it is now 60s ────────────────────────────────────────────────────
+     * The suite has grown FIVE separate whole-tree walks — parseCheck (twice, via a
+     * spawned child process), cinematicTemplates' third-party-residue scan, and
+     * responsiveCheck (twice) — and they all read every file under src/ at once, in
+     * parallel workers, on a machine that is already oversubscribed. Which one loses
+     * the race is different on every run: three consecutive full runs failed on
+     * three different tests, none of which had failed before, and all of which pass
+     * alone in seconds.
+     *
+     * That was being patched one `it(..., N)` at a time, which is whack-a-mole with
+     * a moving target and leaves five separate numbers to rediscover by failure.
+     * One ceiling, raised here. Per-test overrides now exist only where the work is
+     * genuinely heavier than the rest (see parseCheck.test.js and guestPreview's
+     * beforeAll) — and any override BELOW this value is a mistake, because it makes
+     * that test stricter than the suite it runs in.
+     *
      * A test that fails only when other tests are running is worse than a slow one:
      * it teaches everybody to re-run the suite instead of reading it. The cost of a
      * higher ceiling is that a genuinely hung test takes longer to report, which is
      * the cheaper failure by a distance.
      */
-    testTimeout: 15000,
-    hookTimeout: 15000,
+    testTimeout: 60000,
+    hookTimeout: 60000,
   },
   resolve: {
     alias: { '@': path.resolve(process.cwd(), 'src') },

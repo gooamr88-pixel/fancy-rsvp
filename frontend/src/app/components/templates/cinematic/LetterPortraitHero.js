@@ -54,7 +54,7 @@ const ARRIVE_BACKSTOP_MS = 140;
 
 export default function LetterPortraitHero({
   template, names, tagline, dateLine, coupleNames,
-  /* The organizer's four answers. An empty `heroPhoto` is a normal, finished
+  /* The organizer's five fields. An empty `heroPhoto` is a normal, finished
      state — see the header. */
   heroPhoto, heroFocus, heroTextPos, heroCaption, heroCaptionSub,
   invitationPattern, invitationTheme, invitationGuestName, invitationData,
@@ -152,6 +152,9 @@ export default function LetterPortraitHero({
           {tagline && !caption && !captionSub && <p className="cine-lhero__sub">{tagline}</p>}
         </div>
 
+        {/* Travels WITH the words. It is part of the invitation — the thing
+            the guest saves — so it belongs under the names wherever those
+            are, not stranded at an edge away from them. */}
         <HeroCardDownload
           pattern={invitationPattern}
           theme={invitationTheme}
@@ -160,12 +163,18 @@ export default function LetterPortraitHero({
           title={title}
           isRTL={isRTL}
         />
-
-        <span className="cine-hero__cue" aria-hidden="true">
-          <span className="cine-hero__cue-label">{copy.scroll}</span>
-          <span className="cine-hero__cue-arrow">&#8595;</span>
-        </span>
       </div>
+
+      {/* Pinned to the foot, and NOT part of the block above. A scroll cue
+          points at the edge you scroll from; carried along with the words it
+          ended up halfway up a photograph pointing at nothing in particular,
+          which the screenshot pass showed for both the top and middle
+          settings. `.cine-lhero__inner` reserves its height at every position
+          so the two never sit on top of each other. */}
+      <span className="cine-hero__cue cine-lhero__cue" aria-hidden="true">
+        <span className="cine-hero__cue-label">{copy.scroll}</span>
+        <span className="cine-hero__cue-arrow">&#8595;</span>
+      </span>
     </div>
   );
 }

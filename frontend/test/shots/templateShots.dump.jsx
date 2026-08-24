@@ -54,7 +54,7 @@ import SealedLetterOpening from '../../src/app/components/guest/openings/SealedL
 import VelvetRingHero from '../../src/app/components/templates/cinematic/VelvetRingHero';
 import DoorOfJoyHero from '../../src/app/components/templates/cinematic/DoorOfJoyHero';
 import SwanLakeHero from '../../src/app/components/templates/cinematic/SwanLakeHero';
-import LetterFrameHero from '../../src/app/components/templates/cinematic/LetterFrameHero';
+import LetterPortraitHero from '../../src/app/components/templates/cinematic/LetterPortraitHero';
 import { CINEMATIC_TEMPLATES } from '../../src/app/components/templates/cinematic/cinematicThemes';
 import { OPENING_TIMINGS } from '../../src/app/components/guest/openings/openingSafety';
 
@@ -129,7 +129,7 @@ const HEROES = [
      with the template. The plate's copy carries the claim instead — "with
      your own photograph inside it" — and the empty panel is the template's
      genuine, finished default state. */
-  ['letter', LetterFrameHero, ['Noor', 'Yusuf']],
+  ['letter', LetterPortraitHero, ['Noor', 'Yusuf']],
 ];
 
 describe('landing — template shots', () => {

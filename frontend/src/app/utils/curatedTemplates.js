@@ -121,13 +121,12 @@ export const TEMPLATES = [
   },
   /* ── Sealed Letter — the one the couple fills in themselves ───────────
      A blush envelope with a burgundy wax seal that gilds and opens. What is
-     behind it is not our photography but THEIRS: a carved ivory frame with a
-     panel for their own portrait and their own words on it. The only template
-     here whose hero is different on every event. */
+     behind it is not our photography but THEIRS, full screen, with their own
+     words on it. The only template here that ships no hero artwork at all. */
   {
     key: 'letter', label: 'Sealed Letter', tier: 'Cinematic',
     tagline: 'Cinematic · Blush & Wax',
-    desc: 'A blush envelope sealed in burgundy wax. Your guests touch it, the seal catches the light and gilds, and both flaps fall open onto a carved ivory frame — with your own photograph inside it and your own words across the picture.',
+    desc: 'A blush envelope sealed in burgundy wax. Your guests touch it, the seal catches the light and gilds, and both flaps fall open. It is the only template that ships no picture of its own — what lies behind the envelope is yours, and so are the words on it.',
     /* The POSTER, not the sprite sheet. The sheet is 7480px of seventeen
        frames side by side, and `object-fit: cover` in the card's 4:5 box
        would crop a sliver out of the middle of frame eight — 220KB fetched to
@@ -143,7 +142,7 @@ export const TEMPLATES = [
        read by someone choosing a wedding invitation, not by a developer. The
        thing worth promising about the sprite is what it buys them: it opens
        instantly, on any phone, because there is no video to load. */
-    specs: ['Opens Instantly On Any Phone', 'Your Own Photograph, Framed', 'Your Words On The Picture', 'Any Occasion You Choose', 'Every Section Toggleable'],
+    specs: ['Opens Instantly On Any Phone', 'Your Photograph Fills The Page', 'Your Words, Placed Where You Want', 'Any Occasion You Choose', 'Every Section Toggleable'],
     fields: ['Your Occasion', 'Names', 'Your Photograph', 'Your Story', 'Ceremony & Reception', 'Gift Registry'],
   },
   {
