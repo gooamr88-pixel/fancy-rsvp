@@ -927,10 +927,16 @@ export default function CreateEventWizard() {
     }
   }, []);
 
-  // Generic single-image upload that RETURNS the public URL (rather than writing
-  // a fixed template_data key) — used by list rows like Accommodation hotels so
-  // each row's photo becomes a real upload instead of a pasted URL.
-  const uploadRowImage = useCallback(async (file) => {
+  /* Generic single-image upload that RETURNS the public URL (rather than
+     writing a fixed template_data key) — used by list rows like Accommodation
+     hotels so each row's photo becomes a real upload instead of a pasted URL.
+
+     `folder` defaults to 'venues' because that is what every existing caller
+     is, and it was HARDCODED until Sealed Letter's hero portrait started using
+     this. That put a couple's photograph in `venues/` from the wizard while
+     the very same field written from Event Details landed in `covers/` — one
+     field, two folders, and one of them named after something else entirely. */
+  const uploadRowImage = useCallback(async (file, folder = 'venues') => {
     if (!file) return null;
     if (file.size > 8 * 1024 * 1024) {
       toast.error('File exceeds 8MB. Please use a smaller file.');
@@ -939,7 +945,7 @@ export default function CreateEventWizard() {
     try {
       if (!supabase) throw new Error('Storage client not configured.');
       const ext = file.name.split('.').pop();
-      const filePath = `venues/wizard-row-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
+      const filePath = `${folder}/wizard-row-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
       const { error: uploadErr } = await supabase.storage
         .from('event-assets')
         .upload(filePath, file, { cacheControl: '3600', upsert: true });

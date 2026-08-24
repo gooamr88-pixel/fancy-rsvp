@@ -15,6 +15,7 @@ import InvitationReveal, { REVEAL_TONES } from '../../components/guest/Invitatio
 import VelvetBoxOpening from '../../components/guest/openings/VelvetBoxOpening';
 import KnockDoorOpening from '../../components/guest/openings/KnockDoorOpening';
 import WaxEnvelopeOpening from '../../components/guest/openings/WaxEnvelopeOpening';
+import SealedLetterOpening from '../../components/guest/openings/SealedLetterOpening';
 import { getCinematicOccasion } from '../../components/templates/cinematic/cinematicThemes';
 import { preloadRevealAssets } from '../../components/guest/revealAssets';
 import ImageUploadField from './ImageUploadField';
@@ -30,6 +31,7 @@ import PreviewFrame from '../../components/templates/PreviewFrame';
 import { CUSTOM_CATEGORY_BY_KEY } from '../../utils/customEventCategories';
 import { resolveOccasion, occasionPolicyFor } from '../../utils/eventOccasion';
 import OccasionPicker from '../../components/OccasionPicker';
+import LetterPortraitFields from '../../components/LetterPortraitFields';
 
 const COLORS = {
   gold: '#B8944F', goldHover: '#a6833f', charcoal: '#191B1E', ivory: '#F8F4EC',
@@ -43,6 +45,7 @@ const CINEMATIC_OPENINGS = {
   velvetBox: VelvetBoxOpening,
   knockDoor: KnockDoorOpening,
   waxEnvelope: WaxEnvelopeOpening,
+  sealedLetter: SealedLetterOpening,
 };
 
 
@@ -299,6 +302,9 @@ export default function EventSettings({ eventId, event, onEventUpdated, onEventD
     ha_menu_courses: [], ha_things_to_do: [], ha_getting_there: '',
     ha_gift_bank_name: '', ha_gift_account_name: '', ha_gift_iban: '', ha_gift_registry_label: '', ha_gift_message: '',
     ha_dress_ladies: '', ha_dress_gentlemen: '', ha_closing_message: '',
+    // Sealed Letter's portrait — see the matching block in the hydration below.
+    letter_hero_photo: '', letter_hero_focus: 'center',
+    letter_hero_caption: '', letter_hero_caption_sub: '',
   });
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -689,6 +695,18 @@ export default function EventSettings({ eventId, event, onEventUpdated, onEventD
         ha_dress_ladies: event.template_data?.ha_dress_ladies || '',
         ha_dress_gentlemen: event.template_data?.ha_dress_gentlemen || '',
         ha_closing_message: event.template_data?.ha_closing_message || '',
+        /* Sealed Letter's portrait. These MUST be listed here even though the
+           save merges onto event.template_data and so would not lose them:
+           this object REPLACES the local state rather than extending it, so a
+           key that is missing reads as undefined in the editor — and the
+           organizer would open Event Details on an event that has a
+           photograph and be shown an empty upload box and a preview of the
+           frame's stock illustration. Every field this screen renders belongs
+           in this list. */
+        letter_hero_photo: event.template_data?.letter_hero_photo || '',
+        letter_hero_focus: event.template_data?.letter_hero_focus || 'center',
+        letter_hero_caption: event.template_data?.letter_hero_caption || '',
+        letter_hero_caption_sub: event.template_data?.letter_hero_caption_sub || '',
       });
     }
   }
@@ -2267,6 +2285,31 @@ export default function EventSettings({ eventId, event, onEventUpdated, onEventD
                 </div>
               </>
             )}
+          </div>
+        )}
+
+        {/* Sealed Letter's hero is the only one the organizer fills in. The
+            SAME component the create-event wizard mounts — one copy of the
+            control and one copy of its wording, so the screen they create on
+            and the screen they edit on cannot describe it differently. */}
+        {/* effectiveTemplateType, not event.template_type: this screen lets the
+            organizer change the Visual Template, and gating on the SAVED value
+            means picking Sealed Letter here shows no portrait fields until
+            after a save — a control that appears only once you have already
+            committed to it. Same live value occasionPolicy and isCustomTemplate
+            read. */}
+        {effectiveTemplateType === 'letter' && (
+          <div style={{ marginTop: '16px', padding: '16px', background: COLORS.softBg, borderRadius: '8px', border: `1px solid ${COLORS.border}` }}>
+            <h4 style={{ margin: '0 0 4px 0', fontSize: '13px', fontWeight: 600, color: COLORS.charcoal }}>The Portrait</h4>
+            <span style={hintStyle}>Your photograph goes inside the carved frame your guests open onto. Leave it empty and the frame keeps its own illustration.</span>
+            <div style={{ marginTop: 12 }}>
+              <LetterPortraitFields
+                value={templateData}
+                onChange={(patch) => setTemplateData(prev => ({ ...prev, ...patch }))}
+                onUploadImage={(file) => uploadFile(file, 'portraits')}
+                onError={(msg) => toast.error(msg)}
+              />
+            </div>
           </div>
         )}
 

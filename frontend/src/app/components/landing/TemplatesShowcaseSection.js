@@ -43,6 +43,7 @@ const SHOTS = {
   ring: "/images/landing/hero-ring.webp",
   bab: "/images/landing/hero-bab.webp",
   swans: "/images/landing/hero-swans.webp",
+  letter: "/images/landing/hero-letter.webp",
 };
 
 /** What a guest actually does to open each one — the thing worth showing. */
@@ -50,6 +51,7 @@ const ARRIVAL = {
   ring: "They touch the box. It opens on film.",
   bab: "They knock three times. It answers.",
   swans: "They break the seal. The card rises out.",
+  letter: "They touch the wax. Both flaps fall open.",
 };
 
 /** Lowercase roman, to pair with the section numeral without competing. */
@@ -137,17 +139,29 @@ export default async function TemplatesShowcaseSection() {
             <span aria-hidden="true" className="tss-kicker__rule" />
           </span>
           <span className="tss-secnum" aria-hidden="true">I</span>
-          <h2 id="tss-title" className="tss-title">Three ways to open a door.</h2>
+          <h2 id="tss-title" className="tss-title">Four ways to open a door.</h2>
           <p className="tss-sub">
-            Each one is filmed, not animated — and every one of them is yours to
-            fill in, in any language, for any occasion.
+            {/* "Filmed, not animated" was true of three and is not true of the
+                fourth — Sealed Letter is a sprite sheet, which is why it opens
+                instantly on a handset that cannot stream video. The claim that
+                covers all four is that they are photographed rather than
+                drawn, which is the one a visitor actually cares about. */}
+            Each one is photographed, not drawn — and every one of them is yours
+            to fill in, in any language, for any occasion.
           </p>
         </header>
 
         {/* .fx-grid walks 3 → 2 → 1 from --fx-col with no breakpoints of its
             own. A fixed three-column grid could not fit a phone — see
             AGENTS.md on min-content width. */}
-        <ul className="tss-plates fx-grid" style={{ "--fx-col": "290px", "--fx-gap": "clamp(44px, 3vw, 40px)" }}>
+        {/* 250px, not 290. .fx-grid is auto-fit, so the track count is
+            floor((container + gap) / (--fx-col + gap)) — at 290px a 1184px
+            container fits exactly THREE, which was right for three templates
+            and leaves the fourth stranded alone on a second row. 250 fits
+            four (4 x 250 + 3 x 44 = 1132 <= 1184) and still falls to two on a
+            tablet and one on a phone with no breakpoint of its own. The
+            plate's own max-width keeps the picture the size it was. */}
+        <ul className="tss-plates fx-grid" style={{ "--fx-col": "250px", "--fx-gap": "clamp(44px, 3vw, 40px)" }}>
           {shown.map((t, i) => (
             <TemplatePlate key={t.key} template={t} index={i} />
           ))}

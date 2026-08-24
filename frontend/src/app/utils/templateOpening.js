@@ -3,13 +3,15 @@ import { getCinematicTemplate } from '../components/templates/cinematic/cinemati
 /* ═══════════════════════════════════════════════════════════════════════════
    What a guest actually opens.
 
-   Four templates, four different arrivals — and only two of them are an
-   envelope, one of which is not the editable one:
+   Five templates, five different arrivals — and three of them are an
+   envelope, only one of which is the editable one:
 
      Velvet Ring   a velvet box on a dark stage; the guest touches it
      Door of Joy   a carved door; the guest knocks three times
      Swan Lake     an olive envelope whose ivory wax seal breaks on film —
                    photography, not the drawn seal, so still hasSeal: false
+     Sealed Letter a blush envelope whose wax seal gilds and opens — a sprite
+                   sheet rather than film, and again not the drawn seal
      everything    a wax-sealed envelope (InvitationReveal)
 
    The organizer's Design tab used to describe all of them as the third. It
@@ -77,6 +79,19 @@ const CINEMATIC_COPY = {
        and finds no monogram field would reasonably think the control is
        missing, when in fact the seal is part of the footage. */
     intro: 'Guests arrive at an olive envelope closed with an ivory wax seal of two swans. They touch it, the seal breaks on film, the flaps fall open, and the card rises out — then its engraving fills with colour. The seal is part of the film, so there is nothing to letter here.',
+    hasSeal: false,
+  },
+  sealedLetter: {
+    key: 'sealedLetter',
+    title: 'Invitation Opening',
+    toggleLabel: 'Open with the sealed letter',
+    toggleHint: 'On by default. Turn this off and guests land straight on the invitation, with no letter to open.',
+    replayLabel: 'Play the opening again on every visit',
+    previewLabel: 'Preview the opening',
+    /* Says the seal is part of the artwork, for the same reason Swan Lake's
+       does: an organizer who reads "wax seal" and finds no monogram field
+       would reasonably conclude the control is missing. */
+    intro: 'Guests arrive at a blush envelope closed with a burgundy wax seal. They touch it, the seal catches the light and gilds, and both flaps fall open onto your invitation. The seal is part of the artwork, so there is nothing to letter here.',
     hasSeal: false,
   },
 };

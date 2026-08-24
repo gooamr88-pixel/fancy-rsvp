@@ -10,12 +10,18 @@ import {
 /* ═══════════════════════════════════════════════════════════════
    The cinematic templates, as data.
 
-   Everything that differs between Velvet Ring, Door of Joy and Swan Lake
-   lives here: the asset paths, the CSS custom properties their shared
-   stylesheet reads, the type pairing, the ambient-FX recipe, and the copy
-   their openings and heroes need. cinematic.css holds the composition; this
-   holds the identity. Adding a fourth should mean adding an entry here plus
-   one opening component — not a new branch in five files.
+   Everything that differs between Velvet Ring, Door of Joy, Swan Lake and
+   Sealed Letter lives here: the asset paths, the CSS custom properties their
+   shared stylesheet reads, the type pairing, the ambient-FX recipe, and the
+   copy their openings and heroes need. cinematic.css holds the composition;
+   this holds the identity. Adding a fifth should mean adding an entry here
+   plus one opening component — not a new branch in five files.
+
+   That claim was false once, and it is worth saying how. Every dispatch site
+   used to be `opening === 'velvetBox' ? A : B`, so template #3 would silently
+   have rendered Door of Joy's cover. They are all keyed maps now, asserted
+   from CINEMATIC_KEYS by test/swanLakeTemplate.test.jsx — which is why adding
+   #4 needed no new branch anywhere.
 
    ── A template is a LOOK, not an occasion ─────────────────────────────────
    Each entry once carried `occasion: 'engagement' | 'wedding'`, and that key
@@ -293,7 +299,199 @@ export const CINEMATIC_TEMPLATES = {
       ar: { hint: 'المس الختم لفتح الدعوة', loading: 'جارٍ التحميل…', preparing: 'يجهَّز المشهد…', scroll: 'مرّر للأسفل', sub: 'يتشرّفان بدعوتكم لمشاركتهما فرحة الزفاف' },
     },
   },
+
+  /* ── Sealed Letter — the one that is not a video ───────────────────────
+     A blush envelope closed with a burgundy wax seal. Touch it: the seal
+     catches the light, gilds, and the flaps fall open.
+
+     ── Why a sprite and not a film ──────────────────────────────────────
+     Every other opening here streams an .mp4, and openingSafety.js exists
+     almost entirely to survive the ways that can fail — a refused autoplay, a
+     decode that stalls without firing an event, a device in low-power mode.
+     This one is 17 frames on a single 220KB JPEG, stepped by CSS. There is no
+     decoder to stall and no autoplay policy to be refused by: once the image
+     has loaded, the animation cannot fail. That makes it the right cover for
+     the slowest handsets on the worst connections, and it is worth having one
+     of those in the catalogue.
+
+     ── The hero is the ORGANIZER'S ─────────────────────────────────────
+     The other three heroes are photography we shipped. This one is a carved
+     ivory frame with an empty panel in it, and what goes in the panel is the
+     couple's own photograph plus their own words. See LetterFrameHero. */
+  letter: {
+    key: 'letter',
+    // A default, not a restriction — a sealed letter suits any celebration.
+    defaultOccasion: 'wedding',
+    occasions: 'any',
+    opening: 'sealedLetter',
+    hero: 'letterFrame',
+
+    assets: {
+      /* Frame 0, cut out of the sheet below — the same picture, 22KB instead
+         of 220. It earns its place three times over: the opening paints it
+         UNDER the sprite layer so the guest sees a sealed envelope
+         immediately rather than a blank cream screen while 220KB arrives; the
+         picker card shows it (`object-fit: cover` on the sheet itself would
+         crop a smear out of the middle of frame eight); and it is what the
+         landing page photographs. Because it is cut from the sheet rather
+         than shot separately, none of those three can drift from what the
+         guest actually lands on. */
+      poster: '/templates/letter/envelope-poster.jpg',
+      /* 7480×782: SEVENTEEN frames of 440×782, laid out horizontally. Frame 0
+         is the sealed envelope with no glow; frame 16 has both flaps open.
+         440/782 is 9:16, which is why the cover can be sized to the viewport
+         with `aspect-ratio` and never letterbox on a phone. */
+      sprite: '/templates/letter/envelope-sprite.jpg',
+      /* The hero's stage: a carved plaster frame, 780×1386, with a flat
+         damask panel in the middle. LETTER_PANEL below is that panel, measured
+         off the artwork rather than eyeballed. */
+      frame: '/templates/letter/frame.jpg',
+      /* No sealSfx ships. useOpeningSfx falls through to its synthesiser when
+         the URL is missing, so the seal is never silent; dropping a real
+         recording in at a path here upgrades it with no code change. */
+    },
+
+    /* The sprite's own clock. `spriteFrames` drives BOTH the background-size
+       (frames × 100%) and the step count (frames − 1) — see the note on
+       .cine-letter__anim in cinematic.css. Deriving both from one number is
+       what stops a re-cut sheet from producing an animation that ends one
+       frame early and freezes on a half-open envelope. */
+    spriteFrames: 17,
+    spriteDurationMs: 1150,
+    /* When the cross-fade to the invitation begins, measured from the tap.
+       Deliberately BEFORE spriteDurationMs: the flaps are mid-swing at 950ms
+       and the dark gap between them is opening, so starting the dissolve here
+       covers that gap with the hero instead of holding on it. */
+    revealAtMs: 950,
+
+    // Cream ground — buildPalette resolves this as a LIGHT theme, like Door of
+    // Joy and Swan Lake and unlike Velvet Ring.
+    colors: {
+      primary: '#a6705f',    // deep rose — headings
+      secondary: '#c2a05a',  // gold — eyebrow labels, dividers
+      accent: '#8c1f2b',     // the wax
+      background: '#f6efe4', // the source's own cream
+    },
+
+    cssVars: {
+      // The envelope, three depths. Blush paper rather than a dark stage —
+      // this is the only cover here that is lighter than the page below it.
+      '--cine-deep': '#a6705f',
+      '--cine-mid': '#c39a8e',
+      '--cine-hi': '#f3e3dd',
+      '--cine-gold': '#c2a05a',
+      '--cine-gold-hi': '#ddc185',
+      '--cine-gold-dp': '#997b38',
+      // See the note on Velvet Ring's triplets: rgba(var(--x-rgb), a) rather
+      // than color-mix(), which invalidates the whole declaration below
+      // Safari 16.2 / Chrome 111.
+      '--cine-deep-rgb': '166, 112, 95',
+      '--cine-gold-rgb': '194, 160, 90',
+      '--cine-gold-hi-rgb': '221, 193, 133',
+      '--cine-accent': '#8c1f2b',
+      '--cine-blush': '#f3e3dd',
+      '--cine-text': '#5f463f',
+      /* The wax. This template's own, and the only one that needs it by name:
+         it is what the cover's tap hint is set in. */
+      '--cine-wax': '#8c1f2b',
+      /* The ivory the hero's type sits on, as CHANNELS only — every rule that
+         uses it wants a partial alpha (the halo behind the names, the caption
+         plate), so a hex form would be declared and never read. `--cine-wax-hi`
+         and `--cine-ivory` were both here for exactly that reason and both
+         were dead; the scope-aware var test in cinematicTemplates.test.jsx
+         catches the opposite mistake, not this one. */
+      '--cine-ivory-rgb': '248, 242, 233',
+      /* El Messiri for display here, not Aref Ruqaa: this artwork is a
+         plaster relief with clean geometric scrollwork, and Aref Ruqaa's
+         calligraphic stroke fights it. Both are already self-hosted through
+         layout.js — never reach for a remote font host, which is why the
+         residue test scans these files for one. */
+      '--cine-display': 'var(--font-messiri), "El Messiri", serif',
+      '--cine-serif': 'var(--font-amiri), "Amiri", serif',
+      '--cine-label': 'var(--font-messiri), "El Messiri", sans-serif',
+      '--cine-body': 'var(--font-tajawal), "Tajawal", system-ui, sans-serif',
+      '--cine-latin': 'var(--font-cormorant), "Cormorant Garamond", serif',
+    },
+
+    /* Falling petals only. No gold dust and no pointer trail, for the same
+       reason Door of Joy and Swan Lake have neither: the page below is cream,
+       and a sparkle on a pale ground reads as dirt rather than as light.
+       Glyphs restricted to the Dingbats block the other two use — '⚘'
+       (U+2698) renders as tofu in fonts that lack it, and this drifts across
+       a guest's whole page. */
+    fx: { dust: false, petals: true, trail: false, petalEveryMs: 3400, petalGlyphs: ['❀', '✿', '❁'] },
+
+    /* No `sub`. The source page's line said what the occasion catalogue
+       already says, and two copies of one sentence is one too many — see the
+       note on Door of Joy's, which is kept only because it is about the door
+       itself. */
+    copy: {
+      en: { hint: 'Touch to open the letter', loading: 'Loading…', preparing: 'Preparing the scene…', scroll: 'Scroll down' },
+      ar: { hint: 'المس الرسالة لفتحها', loading: 'جارٍ التحميل…', preparing: 'يجهَّز المشهد…', scroll: 'مرّر للأسفل' },
+    },
+  },
 };
+
+/**
+ * The flat damask panel inside Sealed Letter's carved frame, as fractions of
+ * the artwork.
+ *
+ * MEASURED off frame.jpg (780×1386) with a per-column and per-row luminance-
+ * variance scan, not eyeballed: the carved relief has high local variance and
+ * the flat panel has almost none, so the boundaries fall out of the data. The
+ * panel is x 140→640, y 188→1188 — 500×1000, a 1:2 portrait.
+ *
+ * Every one of these numbers is load-bearing. The panel is where the
+ * organizer's photograph goes, and the artwork has a couple ILLUSTRATED into
+ * the bottom third of it — so a photo inset even slightly too far leaves a
+ * printed bride's veil showing beside a real one. Exported rather than
+ * inlined in the CSS so the test can assert the hero and the artwork agree.
+ */
+export const LETTER_PANEL = {
+  /** Both sides are symmetric on this artwork; one number serves both. */
+  insetInline: '17.95%',  // 140 / 780
+  top: '13.56%',          // 188 / 1386
+  bottom: '14.29%',       // (1386 − 1188) / 1386
+  /* Where inside the panel the photograph goes: the LOWER 62%, leaving the
+     top for the names on clean plaster.
+
+     Filling the whole panel was tried and the screenshot pass killed it — the
+     names and the date landed on chandeliers and white roses, and a scrim
+     strong enough to fix that only muddied the photograph. The artwork itself
+     says the same thing: its illustrated couple occupies 69%–97% of this
+     rectangle and the rest is bare relief, because that is where the words
+     go. 62% covers the illustration completely with margin to spare.
+
+     Read by both the hero's stylesheet and the editor's live preview, so the
+     crop an organizer is shown is the crop a guest gets. */
+  /* 42/58, not 38/62. At 38% the date line — which wraps to two lines at a
+     250px panel width in both languages — put its second line ("2026") down
+     on the photograph's feathered edge, over a chandelier. Four percent of the
+     panel is 20px, which is exactly the line it needed. The photograph is
+     still 250x290 on a phone and still covers the printed couple outright. */
+  photoTop: '42%',
+  photoHeight: '58%',
+  /** The feather along the photograph's top edge, shared for the same reason. */
+  photoMask: 'linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.45) 9%, rgba(0, 0, 0, 0.88) 18%, #000 26%, #000 100%)',
+};
+
+/**
+ * What the organizer's focal-point choice means, as an `object-position`.
+ *
+ * Lives here rather than in the hero because the EDITOR needs it too: its live
+ * preview has to crop the way the guest page crops, and a second copy of these
+ * three values is a preview that can quietly start lying. The panel's
+ * photograph window is about 250×290 on a phone, so a 4:3 or 16:9 photograph
+ * really is being cut — this is what decides whether the couple's faces or
+ * their knees survive it.
+ */
+export const LETTER_FOCUS = {
+  top: '50% 18%',
+  center: '50% 50%',
+  bottom: '50% 82%',
+};
+/** The fallback when `letter_hero_focus` is absent or unrecognised. */
+export const LETTER_FOCUS_DEFAULT = 'center';
 
 /** The template keys that render a cinematic opening instead of the envelope. */
 export const CINEMATIC_KEYS = Object.keys(CINEMATIC_TEMPLATES);
@@ -405,6 +603,11 @@ export function getCinematicCopy(template, { isRTL = false, occasion = null } = 
  * itself — preloading those here would compete for bandwidth with the very
  * poster the guest is looking at while they load.
  *
+ * Sealed Letter is the exception that proves the rule: its `sprite` IS the
+ * animation — a 220KB JPEG, not a stream — so it is not merely worth
+ * preloading, it is the asset the tap gate waits on. It is fetched at high
+ * priority alongside the poster rather than behind the hero artwork.
+ *
  * The mirror of preloadRevealAssets() (components/guest/revealAssets.js), for
  * the templates that open on a box or a door instead of an envelope. Both are
  * called during render, never from an effect: React hoists them into <head>,
@@ -413,10 +616,15 @@ export function getCinematicCopy(template, { isRTL = false, occasion = null } = 
 export function preloadCinematicAssets(templateType) {
   const tpl = getCinematicTemplate(templateType);
   if (!tpl) return;
-  const stills = [tpl.assets.poster, tpl.assets.revealed, tpl.assets.heroPoster, tpl.assets.lake].filter(Boolean);
-  stills.forEach((href, i) => {
-    // Only the cover's own first frame is urgent; the rest are needed a
-    // beat later and must not be allowed to delay it.
-    preload(href, { as: 'image', fetchPriority: i === 0 ? 'high' : 'low' });
-  });
+  /* Priority is stated per asset rather than inferred from position, because
+     "urgent" is not always just the first one. The cover's first frame is
+     urgent everywhere; for Sealed Letter the SPRITE is urgent too, since the
+     tap gate stays shut until it decodes — a guest looking at a poster whose
+     sheet is still queued behind the hero artwork is a cover that cannot be
+     opened. Everything else is wanted a beat later and must not delay those. */
+  const urgent = [tpl.assets.poster, tpl.assets.sprite];
+  const later = [tpl.assets.revealed, tpl.assets.heroPoster, tpl.assets.lake, tpl.assets.frame];
+
+  urgent.filter(Boolean).forEach((href) => preload(href, { as: 'image', fetchPriority: 'high' }));
+  later.filter(Boolean).forEach((href) => preload(href, { as: 'image', fetchPriority: 'low' }));
 }

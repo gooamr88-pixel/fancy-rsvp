@@ -40,6 +40,71 @@ import { buildPalette } from '../src/app/components/templates/heritageArch/theme
 const RING = CINEMATIC_TEMPLATES.ring;
 const BAB = CINEMATIC_TEMPLATES.bab;
 
+/* Which template each block of cinematic.css belongs to. The stylesheet is
+   organised by template, and a rule under one of these prefixes can only ever
+   match that template's own subtree — so a var it reads is that template's to
+   declare, and nobody else's. Anything not under one of them is shared and is
+   every template's responsibility. */
+const BLOCK_OWNER = {
+  'cine-ring': 'ring', 'cine-vhero': 'ring',
+  'cine-door': 'bab', 'cine-dhero': 'bab',
+  'cine-swan': 'swans', 'cine-shero': 'swans',
+  'cine-letter': 'letter', 'cine-lhero': 'letter',
+};
+
+/**
+ * Partitions the `var(--cine-*)` reads in cinematic.css into "every template
+ * must declare this" and "only this template must", and drops the ones no
+ * theme should declare at all.
+ *
+ * @returns {{ requiredOf: (key: string) => Set<string> }}
+ */
+function varsByScope() {
+  const root = process.cwd();
+  const css = fs.readFileSync(path.join(root, 'src/app/styles/cinematic.css'), 'utf8')
+    // Comments first: several of them discuss the very properties being
+    // searched for, in prose explaining why a template does NOT set them.
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+
+  /* Not a theme's to declare:
+     1. anything the stylesheet declares itself, and
+     2. anything a component sets inline at runtime — the sprite's geometry
+        and the frame's URL, which are per-render values, not palette. */
+  const exempt = new Set([...css.matchAll(/(--cine-[a-z-]+)\s*:/g)].map((m) => m[1]));
+  ['src/app/components/guest/openings', 'src/app/components/templates/cinematic']
+    .forEach((dir) => {
+      fs.readdirSync(path.join(root, dir))
+        .filter((f) => f.endsWith('.js'))
+        .forEach((f) => {
+          const src = fs.readFileSync(path.join(root, dir, f), 'utf8');
+          [...src.matchAll(/'(--cine-[a-z-]+)'/g)].forEach((m) => exempt.add(m[1]));
+        });
+    });
+  // Coloured by the FX pool per particle, never by the theme.
+  exempt.add('--cine-blush');
+
+  const shared = new Set();
+  const owned = {};
+  CINEMATIC_KEYS.forEach((k) => { owned[k] = new Set(); });
+
+  /* `[^{}]+\{[^{}]*\}` cannot cross a brace, so an `@media (...) {` wrapper is
+     simply skipped over and the rules inside it are matched on their own. */
+  for (const [, selector, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const vars = [...body.matchAll(/var\((--cine-[a-z-]+)/g)]
+      .map((m) => m[1])
+      .filter((v) => !exempt.has(v));
+    if (!vars.length) continue;
+
+    const prefix = Object.keys(BLOCK_OWNER).find((p) => selector.includes(`.${p}`));
+    const bucket = prefix ? owned[BLOCK_OWNER[prefix]] : shared;
+    vars.forEach((v) => bucket.add(v));
+  }
+
+  return {
+    requiredOf: (key) => new Set([...shared, ...(owned[key] || [])]),
+  };
+}
+
 /** jsdom implements no media methods at all; these are the ones we touch. */
 function stubMediaElements({ play = () => Promise.resolve() } = {}) {
   window.HTMLMediaElement.prototype.play = vi.fn(play);
@@ -250,22 +315,42 @@ describe('cinematic templates — registration', () => {
     CINEMATIC_KEYS.forEach((key) => {
       expect(TEMPLATE_PREVIEW_PATTERN[key], `${key} has no invitation-card pattern`).toBeTruthy();
       const tpl = getCinematicTemplate(key);
-      expect(tpl.assets.poster).toMatch(/^\/templates\//);
-      expect(tpl.assets.video).toMatch(/^\/templates\//);
+      expect(tpl.assets.poster, `${key} has no first frame`).toMatch(/^\/templates\//);
+      /* A cover source, which is NOT always a video any more. Sealed Letter
+         opens on a CSS-stepped sprite sheet — deliberately, because it is the
+         one cover that cannot stall a decode or be refused by an autoplay
+         policy. Requiring `assets.video` of every template asserted an
+         implementation, not a guarantee; what every template genuinely owes
+         is a first frame plus something to animate it with. */
+      const cover = tpl.assets.video || tpl.assets.sprite;
+      expect(cover, `${key} has neither a video nor a sprite to open with`).toMatch(/^\/templates\//);
       expect(tpl.copy.en).toBeTruthy();
       expect(tpl.copy.ar).toBeTruthy();
     });
   });
 
-  it('each ships every CSS custom property cinematic.css reads', () => {
-    const css = fs.readFileSync(path.join(process.cwd(), 'src/app/styles/cinematic.css'), 'utf8');
-    const used = new Set([...css.matchAll(/var\((--cine-[a-z-]+)/g)].map((m) => m[1]));
-    // Set by the pool per-particle rather than by the theme.
-    used.delete('--cine-blush');
+  it('each ships every CSS custom property cinematic.css reads of it', () => {
+    /* "…of it" is the change here, and it is not a weakening.
 
+       This file used to be one shared palette read by shared rules, so every
+       var it mentioned had to exist on every template. It now also has
+       per-template sections, and three kinds of custom property that no theme
+       should declare:
+
+         • vars the stylesheet DECLARES itself (--cine-lhero-foot)
+         • vars a COMPONENT sets inline at runtime (the sprite's geometry)
+         • vars used only inside one template's own block (--cine-wax)
+
+       Demanding all of those from all four templates would force three
+       templates to declare a wax colour they never draw with — and the moment
+       a test asks for something meaningless, the next person deletes the
+       test. Scoping it keeps the real guarantee (an unset property renders as
+       nothing, silently) AND gains one: a template-specific var missing from
+       its OWN template now fails, which the blanket version could not see. */
+    const { requiredOf } = varsByScope();
     CINEMATIC_KEYS.forEach((key) => {
       const declared = new Set(Object.keys(getCinematicTemplate(key).cssVars));
-      const missing = [...used].filter((v) => !declared.has(v));
+      const missing = [...requiredOf(key)].filter((v) => !declared.has(v));
       expect(missing, `${key} never sets ${missing.join(', ')}`).toEqual([]);
     });
   });
@@ -362,11 +447,13 @@ describe('cinematic templates — no third-party residue', () => {
   });
 
   it('every --cine-*-rgb the stylesheet reads is a real channel triplet', () => {
-    const css = fs.readFileSync(path.join(process.cwd(), 'src/app/styles/cinematic.css'), 'utf8');
-    const used = new Set([...css.matchAll(/var\((--cine-[a-z-]+-rgb)\)/g)].map((m) => m[1]));
+    // Scoped the same way as the completeness test above: --cine-ivory-rgb is
+    // read only inside Sealed Letter's own block, so it is Sealed Letter's to
+    // declare and meaningless on the other three.
+    const { requiredOf } = varsByScope();
     CINEMATIC_KEYS.forEach((key) => {
       const vars = getCinematicTemplate(key).cssVars;
-      used.forEach((name) => {
+      [...requiredOf(key)].filter((n) => n.endsWith('-rgb')).forEach((name) => {
         expect(vars[name], `${key} never sets ${name}`).toBeTruthy();
         // "r, g, b" — anything else produces an invalid rgba() and the same
         // silent dropped-declaration failure color-mix caused.
@@ -403,10 +490,20 @@ describe('rewired modules still load', () => {
     ['AmbientFx', () => import('../src/app/components/guest/fx/AmbientFx')],
     ['HeroCardDownload', () => import('../src/app/components/templates/cinematic/HeroCardDownload')],
     ['curatedTemplates', () => import('../src/app/utils/curatedTemplates')],
+    ['SealedLetterOpening', () => import('../src/app/components/guest/openings/SealedLetterOpening')],
+    ['LetterFrameHero', () => import('../src/app/components/templates/cinematic/LetterFrameHero')],
+    ['LetterPortraitFields', () => import('../src/app/components/LetterPortraitFields')],
+    ['GuestExperiencePreview', () => import('../src/app/components/templates/GuestExperiencePreview')],
   ])('%s imports cleanly', async (_name, load) => {
     const mod = await load();
     expect(mod).toBeTruthy();
-  });
+    /* 30s, not the 15s default. These are whole module GRAPHS, not modules —
+       EventPageClient and GuestExperiencePreview between them pull in the
+       page engine, every section, all four openings and both heroes, and the
+       first one to be asked pays for transforming the lot. On this machine
+       that alone has crossed 15s. A timeout here reports as "the module is
+       broken", which is the most misleading failure this file can produce. */
+  }, 30000);
 });
 
 /* ════════════════════════════════════════════════════════════════════

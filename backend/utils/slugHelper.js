@@ -62,13 +62,14 @@ const deriveBaseSlug = ({ title, templateType, templateData = {} } = {}) => {
     case 'wedding':
     case 'engagement':
     // The cinematic couple templates. They store the same partner1/partner2
-    // keys, so without them here a Velvet Ring, Door of Joy or Swan Lake
-    // event silently fell to the `default` arm and took its URL from the
-    // title ("our-big-day") instead of the couple ("julian-sophia") — unlike
-    // every other wedding template.
+    // keys, so without them here a Velvet Ring, Door of Joy, Swan Lake or
+    // Sealed Letter event silently fell to the `default` arm and took its URL
+    // from the title ("our-big-day") instead of the couple ("julian-sophia")
+    // — unlike every other wedding template.
     case 'ring':
     case 'bab':
     case 'swans':
+    case 'letter':
       if (td.partner1 || td.partner2) {
         source = [td.partner1, td.partner2].filter(Boolean).join('-');
       }

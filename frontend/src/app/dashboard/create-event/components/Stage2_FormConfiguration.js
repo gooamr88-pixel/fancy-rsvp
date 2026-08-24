@@ -12,6 +12,7 @@ import { getHaDays } from '../../../utils/haDays';
 import { CUSTOM_CATEGORY_BY_KEY } from '../../../utils/customEventCategories';
 import { resolveOccasion, occasionPolicyFor } from '../../../utils/eventOccasion';
 import OccasionPicker from '../../../components/OccasionPicker';
+import LetterPortraitFields from '../../../components/LetterPortraitFields';
 import { getCinematicTemplate } from '../../../components/templates/cinematic/cinematicThemes';
 import EventCategoryIcon from '../../../components/icons/EventCategoryIcon';
 import Icon from '../../../components/icons/Icon';
@@ -573,6 +574,26 @@ export default function Stage2_FormConfiguration({
                     placeholder="co-host@email.com" style={iStyle} onFocus={onFocus} onBlur={onBlur} />
                 </Field>
               </div>
+            )}
+
+            {/* Sealed Letter's hero is the ONLY one an organizer fills in —
+                the other templates open onto photography we shipped. Gated on
+                the template key, not on the occasion: this is about the
+                artwork having a panel in it, which no occasion changes. The
+                same block, from the same component, is in EventSettings. */}
+            {templateType === 'letter' && (
+              <Field
+                label="The Portrait"
+                hint="Your photograph goes inside the carved frame your guests open onto. Leave it empty and the frame keeps its own illustration."
+              >
+                <LetterPortraitFields
+                  value={templateData}
+                  onChange={(patch) => setTemplateData(d => ({ ...d, ...patch }))}
+                  // 'portraits', the same folder Event Details writes to — see
+                  // uploadRowImage. Without it this lands in `venues/`.
+                  onUploadImage={(file) => onRowImageUpload?.(file, 'portraits')}
+                />
+              </Field>
             )}
 
             {isFullPage(templateType) && (

@@ -267,6 +267,35 @@ describe('it survives a phone', () => {
     expect(rule.slice(0, rule.indexOf('}'))).toMatch(/max-width:\s*\d/);
   });
 
+  it('fits every template on one desktop row', async () => {
+    /* .fx-grid is auto-fit, so the column count is arithmetic, not a
+       declaration: floor((container + gap) / (--fx-col + gap)). Nothing in
+       the DOM shows it — the plate count test above passes just as happily
+       with the last template stranded alone on a second row, which is exactly
+       what happened when a fourth was added against the old 290px value.
+
+       At the desktop target the container is .fx-container--5xl (1280) less
+       two --fx-pad-x gutters of 48 = 1184, and this band overrides the gap to
+       44 (its clamp has min > max, so it is always the min).
+
+       Verified by arithmetic rather than in a browser, per AGENTS.md — there
+       is no dev server here and the compiled CSS needs a build. */
+    const col = Number(SECTION.match(/"--fx-col":\s*"(\d+)px"/)?.[1]);
+    expect(col, 'the band no longer sets --fx-col').toBeTruthy();
+
+    const CONTAINER = 1280 - 2 * 48;
+    const GAP = 44;
+    const columns = Math.floor((CONTAINER + GAP) / (col + GAP));
+    expect(columns, `${col}px fits ${columns} plates, not ${CINEMATIC_KEYS.length}`)
+      .toBeGreaterThanOrEqual(CINEMATIC_KEYS.length);
+
+    // And the track still has to be wide enough for the capped plate, or the
+    // cap does nothing and the pictures shrink instead.
+    const track = (CONTAINER - (columns - 1) * GAP) / columns;
+    const cap = Number(SECTION.match(/\.tss-plate \{[^}]*max-width:\s*(\d+)px/)?.[1]);
+    expect(track, `a ${track}px track cannot hold a ${cap}px plate`).toBeGreaterThanOrEqual(cap);
+  });
+
   it('uses only breakpoints on the four-value scale', async () => {
     const widths = [...SECTION.matchAll(/\((?:max|min)-width: *([\d.]+)px\)/g)].map((m) => m[1]);
     const ALLOWED = new Set(['639.98', '640', '767.98', '768', '1023.98', '1024', '1279.98', '1280', '44']);

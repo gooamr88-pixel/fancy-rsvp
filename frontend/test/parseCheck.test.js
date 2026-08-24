@@ -29,7 +29,13 @@ describe('parse check', () => {
       throw new Error(`${err.stdout || ''}${err.stderr || ''}`);
     }
     expect(out).toMatch(/^ok — \d+ files parse/);
-  });
+    /* 45s, not the 15s default. Both tests here shell out to a script that
+       parses EVERY file under src/, and that cost grows with the codebase —
+       it crossed 15s on this machine on the pass that added a fourth
+       template. A timeout reports as "the source does not parse", which is
+       the single most alarming and most misleading failure the suite can
+       produce; the check itself is cheap to let run to completion. */
+  }, 45000);
 
   it('still fails on a file that does not parse', () => {
     /* The real bug, reproduced: an import inserted inside another import.
@@ -56,5 +62,6 @@ describe('parse check', () => {
 
     expect(failed, 'the checker passed a file that cannot parse').toBe(true);
     expect(output).toMatch(/__parsecheck_decoy__/);
-  });
+    // Same full walk of src/ as above, so the same budget.
+  }, 45000);
 });

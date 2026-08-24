@@ -29,6 +29,7 @@ logs/
 # `/templates/` anchors the match to this file's own directory.
 /templates/
 /envelop/
+/envelop1/
 
 # ── Screenshot scratch ──
 # Where test/shots/*.dump.jsx stages HTML and the headless-Chrome captures

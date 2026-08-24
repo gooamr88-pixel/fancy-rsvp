@@ -31,6 +31,7 @@ const TEMPLATE_PREVIEW_MAP = {
   ring:       { name: 'Velvet Ring',       pattern: 'serif',       accent: '#d4af6a' },
   bab:        { name: 'Door of Joy',       pattern: 'serif',       accent: '#a97fc0' },
   swans:      { name: 'Swan Lake',         pattern: 'serif',       accent: '#6d6f4e' },
+  letter:     { name: 'Sealed Letter',     pattern: 'serif',       accent: '#a6705f' },
   tuscany:    { name: 'Tuscan Vineyard',   pattern: 'tuscany',     accent: '#6B7A4F' },
   marrakesh:  { name: 'Marrakesh Nights',  pattern: 'marrakesh',   accent: '#D9A94E' },
   kyoto:      { name: 'Kyoto Blossom',     pattern: 'kyoto',       accent: '#B23A48' },

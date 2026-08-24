@@ -50,9 +50,11 @@ vi.mock('framer-motion', async (importOriginal) => {
 import VelvetBoxOpening from '../../src/app/components/guest/openings/VelvetBoxOpening';
 import KnockDoorOpening from '../../src/app/components/guest/openings/KnockDoorOpening';
 import WaxEnvelopeOpening from '../../src/app/components/guest/openings/WaxEnvelopeOpening';
+import SealedLetterOpening from '../../src/app/components/guest/openings/SealedLetterOpening';
 import VelvetRingHero from '../../src/app/components/templates/cinematic/VelvetRingHero';
 import DoorOfJoyHero from '../../src/app/components/templates/cinematic/DoorOfJoyHero';
 import SwanLakeHero from '../../src/app/components/templates/cinematic/SwanLakeHero';
+import LetterFrameHero from '../../src/app/components/templates/cinematic/LetterFrameHero';
 import { CINEMATIC_TEMPLATES } from '../../src/app/components/templates/cinematic/cinematicThemes';
 import { OPENING_TIMINGS } from '../../src/app/components/guest/openings/openingSafety';
 
@@ -106,20 +108,32 @@ beforeEach(() => {
   }));
 });
 
-/* Sample couples, one per template, so the three rows do not repeat a name. */
+/* Sample couples, one per template, so the rows do not repeat a name. */
 const OPENINGS = [
   ['ring', VelvetBoxOpening, 'Aria & Julian'],
   ['bab', KnockDoorOpening, 'Layla & Karim'],
   ['swans', WaxEnvelopeOpening, 'Adam & Mira'],
+  ['letter', SealedLetterOpening, 'Noor & Yusuf'],
 ];
 const HEROES = [
   ['ring', VelvetRingHero, ['Aria', 'Julian']],
   ['bab', DoorOfJoyHero, ['Layla', 'Karim']],
   ['swans', SwanLakeHero, ['Adam', 'Mira']],
+  /* Sealed Letter is photographed AS SHIPPED — no organizer photograph in the
+     panel, so the frame keeps its own illustration.
+
+     That is a deliberate choice, not an omission. The band's whole guarantee
+     is that every picture is the real template and not an artist's
+     impression; dropping a stand-in couple into the panel would be
+     photographing an event that does not exist and implying the picture came
+     with the template. The plate's copy carries the claim instead — "with
+     your own photograph inside it" — and the empty panel is the template's
+     genuine, finished default state. */
+  ['letter', LetterFrameHero, ['Noor', 'Yusuf']],
 ];
 
 describe('landing — template shots', () => {
-  it('stages the three covers', async () => {
+  it('stages every cover', async () => {
     for (const [key, Comp, names] of OPENINGS) {
       vi.useFakeTimers();
       const { container, unmount } = render(
@@ -134,7 +148,7 @@ describe('landing — template shots', () => {
     }
   });
 
-  it('stages the three heroes', async () => {
+  it('stages every hero', async () => {
     for (const [key, Comp, couple] of HEROES) {
       const r = render(
         <Comp

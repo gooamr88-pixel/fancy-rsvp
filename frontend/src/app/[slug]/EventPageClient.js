@@ -93,6 +93,7 @@ const CINEMATIC_OPENINGS = {
   velvetBox: dynamic(() => import('../components/guest/openings/VelvetBoxOpening')),
   knockDoor: dynamic(() => import('../components/guest/openings/KnockDoorOpening')),
   waxEnvelope: dynamic(() => import('../components/guest/openings/WaxEnvelopeOpening')),
+  sealedLetter: dynamic(() => import('../components/guest/openings/SealedLetterOpening')),
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -118,6 +119,7 @@ const INVITATION_PATTERN_BY_TEMPLATE = {
   ring: 'serif',
   bab: 'serif',
   swans: 'serif',
+  letter: 'serif',
   tuscany: 'tuscany',
   marrakesh: 'marrakesh',
   kyoto: 'kyoto',

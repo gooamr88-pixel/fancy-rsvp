@@ -29,6 +29,14 @@ import { useEffect, useRef, useState } from 'react';
 
    All of it is plain DOM so it can be unit-tested against a stub element
    with no browser and no video decoder.
+
+   ── Not every opening is a video ─────────────────────────────────────────
+   Sealed Letter's cover is a CSS-stepped sprite sheet, which removes rungs
+   3 and 4 outright — an image that has loaded cannot stall mid-animation and
+   cannot be refused by an autoplay policy. It uses useImageReadiness (rung 1)
+   and its own end-signal/backstop pair in place of watchOpeningVideo. The
+   invariant is unchanged and is the only one that matters: whatever the cover
+   is made of, the guest reaches the invitation.
    ═══════════════════════════════════════════════════════════════ */
 
 export const OPENING_TIMINGS = {
@@ -175,6 +183,60 @@ export function useMediaReadiness(mediaRef, { enabled = true, timings = OPENING_
       el.removeEventListener?.('canplay', arm);
     };
   }, [mediaRef, enabled, timings.readyHardArmMs]);
+
+  return ready;
+}
+
+/**
+ * Rung 1, for an opening whose cover is an IMAGE rather than a video.
+ *
+ * Sealed Letter animates a sprite sheet with CSS steps(), so most of the
+ * ladder above does not apply to it: there is no decoder to stall, no autoplay
+ * policy to be refused by, and no playback position to watch. What is left is
+ * the one thing that CAN still fail — the sheet not having arrived — and the
+ * one thing that must not happen either way: a tap that is silently ignored
+ * forever.
+ *
+ * So this keeps `useMediaReadiness`'s contract exactly: `ready` goes true when
+ * the image is decoded, and goes true ANYWAY after readyHardArmMs. A cover
+ * whose tap does nothing is indistinguishable from a broken page; the gate
+ * exists to let the UI say "loading", not to withhold the tap indefinitely.
+ *
+ * Uses a detached Image() rather than a ref, because the sprite is painted as
+ * a CSS `background-image` — there is no element to listen to. The browser
+ * serves both from one cache entry, so this costs no second request.
+ *
+ * @param {string} src
+ * @param {{enabled?: boolean, timings?: object}} [options]
+ */
+export function useImageReadiness(src, { enabled = true, timings = OPENING_TIMINGS } = {}) {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (!enabled || !src) { setReady(true); return undefined; }
+
+    let settled = false;
+    const arm = () => { if (!settled) { settled = true; setReady(true); } };
+
+    const img = new Image();
+    /* An error arms too, deliberately. A 404'd sprite means the guest is
+       looking at a blank cover, and the ONLY thing worse than that is a blank
+       cover whose tap is also dead — the opening's own timers still run and
+       still deliver them to the invitation. */
+    img.onload = arm;
+    img.onerror = arm;
+    img.src = src;
+    // Already in cache: some browsers fire no event for a complete image.
+    if (img.complete) arm();
+
+    const hardArm = setTimeout(arm, timings.readyHardArmMs);
+
+    return () => {
+      clearTimeout(hardArm);
+      img.onload = null;
+      img.onerror = null;
+    };
+  }, [src, enabled, timings.readyHardArmMs]);
 
   return ready;
 }

@@ -37,6 +37,9 @@ const FAMILIES = {
   ring:  { colors: ['#d4af6a', '#ffe9b0', '#8f3c52', '#FFFFFF'], shapes: ['star', 'petal'], ambient: 'petal', ambientColor: '#d4af6a' },
   bab:   { colors: ['#a97fc0', '#c9a45c', '#7d5694', '#FFFFFF'], shapes: ['petal'], ambient: 'petal', ambientColor: '#a97fc0' },
   swans: { colors: ['#6d6f4e', '#5c2331', '#a98a5c', '#f8f4e9'], shapes: ['petal', 'circle'], ambient: 'petal', ambientColor: '#e8dcc0' },
+  // Blush paper, burgundy wax and gold — the three colours a Sealed Letter
+  // guest has been looking at since the cover.
+  letter: { colors: ['#c39a8e', '#8c1f2b', '#c2a05a', '#fbf6ec'], shapes: ['petal', 'circle'], ambient: 'petal', ambientColor: '#c39a8e' },
 };
 
 const DEFAULT_FAMILY = { colors: undefined, shapes: ['ribbon', 'circle'], ambient: 'circle', ambientColor: '#D7BE80' };

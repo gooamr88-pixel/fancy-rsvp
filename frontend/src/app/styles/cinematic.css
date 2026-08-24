@@ -1349,6 +1349,473 @@
    against them. See the note in SwanLakeHero.js. */
 
 /* ═══════════════════════════════════════════════════════
+   5d. SEALED LETTER OPENING — a sprite sheet, not a film
+
+   The only cover here with no <video> in it. Seventeen frames of a blush
+   envelope, laid out horizontally on one 220KB JPEG and stepped by CSS.
+
+   THE ARITHMETIC, because getting it wrong freezes a half-open envelope:
+   N frames side by side are N x 100% wide, and walking background-position-x
+   from 0% to 100% across them takes N-1 steps — 0% lands on frame 0 and 100%
+   on frame N-1. Both numbers come from ONE value in cinematicThemes.js
+   (spriteFrames) and are handed here as custom properties by the component,
+   so a re-cut sheet cannot leave the two disagreeing.
+   ═══════════════════════════════════════════════════════ */
+
+/* Lighter than the page below it — the only opening here that is. The other
+   three are dark stages; this is paper. */
+.cine-letter { background: radial-gradient(ellipse at 50% 38%, #fdf7ee 0%, var(--cine-hi) 60%, #f6efe4 100%); }
+
+.cine-letter__scene {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  /* PHYSICAL left, with `right` left alone, and a transform for both axes.
+     Two wrong ways to do this, both of which put the wax seal off-centre in
+     one language only:
+
+     1. `inset: 0` (or `inset-inline: 0`) TOGETHER with `left: 50%` is an
+        over-constrained absolute box, and which side the spec discards
+        depends on `direction` — LTR drops `right`, RTL drops `left`. That is
+        the exact bug that put Swan Lake's Arabic hero at [-195, 195] of a
+        390px screen.
+     2. `inset-inline: 0; margin-inline: auto` centres correctly ONLY while
+        the box fits. This one is deliberately WIDER than the viewport on a
+        narrow screen (see the width below), and CSS 2.1 §10.3.7 resolves two
+        auto margins that would come out negative by zeroing the start-side
+        one — margin-left in LTR, margin-right in RTL. So the crop would
+        anchor left in English and right in Arabic.
+
+     `left: 50%` + `translate(-50%, -50%)` has neither problem: nothing is
+     over-constrained, and a transform is physical in both directions. */
+  left: 50%;
+  transform: translate(-50%, -50%);
+  /* The frames are 440x782, which is 9:16. Sized to COVER the viewport on
+     that ratio so the envelope is full-bleed on a phone and cropped rather
+     than letterboxed on anything wider. */
+  width: max(100%, calc(100lvh * 9 / 16));
+  aspect-ratio: 9 / 16;
+}
+
+/* The still that holds the composition until the sheet arrives. Beneath the
+   sprite layer and pixel-identical to its first frame, so the handover is
+   invisible — the same guarantee Door of Joy's poster gives, and for the same
+   reason: a <video poster> or a bare container is discarded the moment a real
+   frame exists, and what the guest sees before that must already be the
+   picture. */
+.cine-letter__poster {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cine-letter__anim {
+  position: absolute;
+  inset: 0;
+  /* background-image is set inline by the component; only the geometry is
+     here. `0% center` is frame 0: the sealed envelope, seal unlit. */
+  background-position: 0% center;
+  background-size: var(--cine-letter-sheet) 100%;
+  background-repeat: no-repeat;
+}
+
+@keyframes cine-letter-open {
+  from { background-position-x: 0%; }
+  to   { background-position-x: 100%; }
+}
+
+.cine-letter.is-opening .cine-letter__anim {
+  animation: cine-letter-open var(--cine-letter-dur) steps(var(--cine-letter-steps)) forwards;
+}
+
+/* Sits under the cover UI, not over the envelope's middle: the seal is dead
+   centre and the corners are where the flaps' shadows fall, so darkening the
+   edges deepens the paper instead of dulling the wax. */
+.cine-letter__vignette {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: radial-gradient(ellipse 78% 62% at 50% 46%, transparent 40%, rgba(var(--cine-deep-rgb), 0.22) 100%);
+}
+
+.cine-letter__ui {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  text-align: center;
+  padding: 6vh 22px max(5vh, calc(env(safe-area-inset-bottom, 0px) + 26px));
+  transition: opacity 0.3s ease;
+}
+
+/* Gone the instant the guest commits, not when the animation ends. The flaps
+   swing through where the names sit, and type left standing on a moving
+   envelope reads as a rendering fault rather than as a title. */
+.cine-letter.is-opening .cine-letter__ui { opacity: 0; }
+
+.cine-letter__kicker {
+  margin: 0;
+  font-family: var(--cine-display);
+  font-size: clamp(17px, 5vw, 22px);
+  color: var(--cine-gold-dp);
+  text-shadow: 0 1px 8px rgba(255, 250, 244, 0.85), 0 1px 3px rgba(120, 80, 60, 0.25);
+}
+
+.cine-letter__caption {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.cine-letter__names {
+  margin: 0;
+  padding: 0 16px;
+  font-family: var(--cine-display);
+  font-weight: 700;
+  font-size: clamp(26px, 7.5vw, 40px);
+  line-height: 1.25;
+  color: var(--cine-deep);
+  text-shadow: 0 1px 12px rgba(255, 250, 244, 0.9), 0 2px 6px rgba(120, 80, 60, 0.3);
+}
+
+.cine-letter__hint {
+  margin: 0;
+  font-family: var(--cine-body);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--cine-wax);
+  text-shadow: 0 1px 8px rgba(255, 250, 244, 0.9);
+  animation: cine-letter-bob 2.2s ease-in-out infinite;
+}
+
+@keyframes cine-letter-bob {
+  0%, 100% { opacity: 0.7; }
+  50%      { opacity: 1; }
+}
+
+/* ── The cross-fade ───────────────────────────────────────────────────────
+   Starts at revealAtMs, which is BEFORE the sprite finishes: the flaps are
+   mid-swing and the dark gap between them is opening, so the hero rises into
+   that gap rather than the guest watching it yawn.
+
+   Both halves of the shorthand are restated, and that is not tidiness. This
+   rule sits after `.cine-open`, carries equal specificity to `.cine-open
+   .is-done`, and so REPLACES the shared shorthand entirely — declaring only
+   `opacity` here would drop the shared `visibility 0s linear 1.2s` and hide
+   the cover the instant is-done landed, cutting its own fade in half. */
+.cine-letter.is-revealed {
+  opacity: 0;
+  transition: opacity 0.7s ease, visibility 0s linear 0.9s;
+}
+
+/* ═══════════════════════════════════════════════════════
+   5e. SEALED LETTER HERO — the couple's own photograph, framed
+
+   Everything below hangs off one idea: the carved frame is a real object with
+   a real panel in it, and the panel's position is KNOWN (LETTER_PANEL in
+   cinematicThemes.js, measured off the artwork). That is why the frame is a
+   sized element rather than a `background-size: contain` on the stage —
+   `contain` fits the picture but tells CSS nothing about where it landed, and
+   a panel placed against the stage instead of against the artwork drifts at
+   every viewport.
+   ═══════════════════════════════════════════════════════ */
+
+.cine-lhero {
+  justify-content: flex-end;
+  /* The paper the frame sits on, and what the sections below inherit through
+     buildPalette — so the join between the hero and the first section is
+     invisible. */
+  background:
+    radial-gradient(circle at 50% 0%, #fbf6ec, transparent 55%),
+    radial-gradient(circle at 100% 100%, #f7ede0, transparent 45%),
+    #f6efe4;
+  /* Room reserved at the foot for the save button and the scroll cue. The
+     frame's own size is computed from what is left, so the two can never
+     overlap however tall the viewport is. */
+  --cine-lhero-foot: clamp(104px, 17vh, 168px);
+}
+
+.cine-lhero__frame {
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  /* Auto margins are safe HERE and not on .cine-letter__scene, and the
+     difference is the width below: this box is `min(100%, …)`, so it can
+     never exceed its container and the two auto margins can never resolve
+     negative — which is the case §10.3.7 makes direction-sensitive. Nothing
+     is over-constrained either, because the width is definite. */
+  inset-inline: 0;
+  margin-inline: auto;
+  /* Fit-and-centre without relying on how aspect-ratio interacts with a
+     max-* clamp: BOTH dimensions fall out of the same min(), so the artwork's
+     780x1386 ratio is exact at every viewport and nothing is ever
+     over-constrained. Wide screens are bounded by the height term, phones by
+     the 100% term. */
+  width: min(100%, calc((100lvh - var(--cine-lhero-foot)) * 780 / 1386));
+  aspect-ratio: 780 / 1386;
+  /* `100% 100%` rather than `contain`: the box already IS the artwork's ratio,
+     so this is exact and leaves no letterbox for the panel to drift into.
+
+     The URL comes from the component as --cine-letter-frame, NOT hardcoded
+     here. Two reasons, one of which is a real bug this file used to have: the
+     path would have existed in two places (assets.frame in cinematicThemes.js
+     and a literal here) with nothing checking they agreed, and a stylesheet
+     with a baked-in absolute path cannot be staged for the screenshot
+     harness — which rewrites asset paths in the markup and so silently
+     rendered the hero with no frame around it at all. */
+  background: var(--cine-letter-frame) center / 100% 100% no-repeat;
+  /* A cast shadow, because past ~768px the frame stops growing (it is bounded
+     by height on this ratio) and centres on a field of cream. Without one it
+     read as an image pasted onto a background; with one it is a framed
+     picture standing on paper, which is what the artwork is. Costs nothing on
+     a phone, where the frame is full-width and the shadow barely shows. */
+  box-shadow:
+    0 2px 6px rgba(120, 80, 60, 0.10),
+    0 18px 44px -14px rgba(120, 80, 60, 0.30);
+}
+
+/* The flat damask panel, measured: x 140-640 and y 188-1188 of 780x1386.
+   These four numbers are the whole design. The artwork has a couple
+   ILLUSTRATED into the bottom third of this rectangle, so a photograph inset
+   even slightly too far leaves a printed veil showing beside a real one. */
+.cine-lhero__panel {
+  position: absolute;
+  inset-inline: 17.95%;
+  top: 13.56%;
+  bottom: 14.29%;
+  overflow: hidden;
+}
+
+/* ── Where the photograph actually sits ──────────────────────────────────
+   The LOWER 62% of the panel, not the whole of it, and this is the
+   composition rather than a compromise.
+
+   The artwork puts its illustrated couple in the bottom third of the panel
+   and leaves the top as clean damask relief, because that is where the words
+   go. Filling the entire panel with a photograph was tried first and the
+   screenshot pass killed it: the names and the date landed on chandeliers and
+   white roses, and no amount of scrim rescued small gold type over a busy
+   picture — it only muddied the picture instead. Type belongs on the plaster.
+
+   62% still covers every pixel of the printed couple (they end at 97% of the
+   panel and begin at 69%), and it gives the photograph a 250x310 window on a
+   phone — a friendlier crop for the landscape and square photographs most
+   people actually have than the 1:2 slot would be. */
+.cine-lhero__photo {
+  position: absolute;
+  inset-inline: 0;
+  top: 42%;
+  bottom: 0;
+  width: 100%;
+  height: 58%;
+  object-fit: cover;
+  /* object-position is set inline from the organizer's focal point — see
+     LetterFrameHero. Still needed: 250x310 out of a 4:3 photograph is a real
+     vertical crop, and it decides between their faces and their knees. */
+
+  /* Feathered along its TOP edge only. Fading the sides would expose damask
+     down both edges of the portrait; the panel's own bevel is a real edge in
+     the artwork, so a hard vertical join reads as the photograph sitting in
+     the frame's rebate. The top fade is what stops it reading as a rectangle
+     pasted onto the relief. */
+  -webkit-mask-image: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.45) 9%, rgba(0, 0, 0, 0.88) 18%, #000 26%, #000 100%);
+  mask-image: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.45) 9%, rgba(0, 0, 0, 0.88) 18%, #000 26%, #000 100%);
+}
+
+.cine-lhero__type {
+  position: relative;
+  z-index: 2;
+  padding: 6% 7% 0;
+  text-align: center;
+  /* A whisper now, not a scrim. The type sits on plaster, so this exists only
+     to catch the case where a very pale photograph creeps up under the
+     feather — it must never be strong enough to read as a panel dropped on
+     the relief, which is what killed the previous version. */
+  background: radial-gradient(ellipse 106% 84% at 50% 44%,
+    rgba(var(--cine-ivory-rgb), 0.62),
+    rgba(var(--cine-ivory-rgb), 0.3) 62%,
+    rgba(var(--cine-ivory-rgb), 0) 86%);
+}
+
+.cine-lhero__kicker {
+  margin: 0 0 6px;
+  font-family: var(--cine-label);
+  font-size: clamp(12px, 3.4vw, 15px);
+  letter-spacing: 0.04em;
+  color: var(--cine-deep);
+  text-shadow: 0 1px 6px rgba(var(--cine-ivory-rgb), 0.95);
+}
+
+.cine-lhero__names {
+  margin: 0;
+  font-family: var(--cine-display);
+  font-weight: 700;
+  font-size: clamp(28px, 9.5vw, 54px);
+  line-height: 1.3;
+  color: #5a3a32;
+  text-shadow: 0 1px 10px rgba(var(--cine-ivory-rgb), 0.9);
+}
+
+/* The gold sweep from the source, kept because it is this template's one
+   piece of perpetual motion and it costs nothing — a background-position
+   animation on the compositor.
+
+   background-clip: text needs a colour to clip, so the fill is transparent —
+   which means a browser that supports the animation but not the clip would
+   render INVISIBLE names. Both properties ship with the -webkit- prefix and
+   have for a decade, and the reduced-motion block below stops the animation
+   without touching the fill. */
+.cine-lhero__shimmer {
+  background: linear-gradient(100deg, #5a3a32 0%, #5a3a32 40%, var(--cine-gold-hi) 50%, #5a3a32 60%, #5a3a32 100%);
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: cine-letter-shimmer 6s ease-in-out infinite;
+}
+
+@keyframes cine-letter-shimmer {
+  from { background-position: 130% 0; }
+  to   { background-position: -130% 0; }
+}
+
+.cine-lhero__amp {
+  display: block;
+  margin: -2px 0;
+  font-family: var(--cine-serif);
+  font-size: 0.5em;
+  color: var(--cine-gold-dp);
+}
+
+/* Plain centred text, with no flanking hairlines — see the note in
+   LetterFrameHero. The measure here is the panel's, roughly 215px on a phone
+   and ~260px from 768px up, and it never grows past that because the frame
+   stops growing once it is bounded by height. Two rules and their gaps took a
+   quarter of it and cost the date a line; the date wins.
+
+   Capped at 15px for the same reason: a font that keeps scaling with the
+   viewport eventually wraps inside a box that stopped getting wider. */
+.cine-lhero__date {
+  margin: 7px 0 0;
+  font-family: var(--cine-display);
+  font-size: clamp(12px, 3.3vw, 15px);
+  line-height: 1.5;
+  color: var(--cine-gold-dp);
+  text-shadow: 0 1px 6px rgba(var(--cine-ivory-rgb), 0.95);
+}
+
+.cine-lhero__sub {
+  margin: 8px 0 0;
+  font-family: var(--cine-serif);
+  font-size: clamp(13px, 3.6vw, 16px);
+  line-height: 1.8;
+  color: var(--cine-text);
+  text-shadow: 0 1px 6px rgba(var(--cine-ivory-rgb), 0.95);
+}
+
+/* ── The organizer's words, on their photograph ──────────────────────────
+   A caption plate at the foot of the portrait, the way a framed picture is
+   captioned rather than a banner laid across it. Rendered only when there is
+   something to say — an empty plate is a grey band across the couple's
+   faces. */
+.cine-lhero__plate {
+  position: absolute;
+  z-index: 3;
+  inset-inline: 0;
+  bottom: 0;
+  padding: 13% 8% 6%;
+  text-align: center;
+  /* Stronger than it first was. These words land on whatever the couple
+     uploaded — in the screenshot pass that was white roses and a lit
+     tablecloth, and brown type over a soft wash of ivory on top of THAT was
+     the weakest thing on the page. It still resolves to nothing at the top,
+     so it reads as light gathering at the foot of the picture rather than as
+     a bar laid across it. */
+  background: linear-gradient(180deg,
+    rgba(var(--cine-ivory-rgb), 0) 0%,
+    rgba(var(--cine-ivory-rgb), 0.42) 32%,
+    rgba(var(--cine-ivory-rgb), 0.82) 62%,
+    rgba(var(--cine-ivory-rgb), 0.96) 100%);
+}
+
+.cine-lhero__caption {
+  margin: 0;
+  font-family: var(--cine-display);
+  font-size: clamp(15px, 4.6vw, 22px);
+  line-height: 1.55;
+  color: #5a3a32;
+  text-shadow: 0 1px 6px rgba(var(--cine-ivory-rgb), 0.95);
+}
+
+.cine-lhero__captionsub {
+  margin: 4px 0 0;
+  font-family: var(--cine-serif);
+  font-size: clamp(12px, 3.4vw, 15px);
+  line-height: 1.7;
+  color: var(--cine-text);
+  text-shadow: 0 1px 6px rgba(var(--cine-ivory-rgb), 0.95);
+}
+
+.cine-lhero__inner {
+  position: relative;
+  z-index: 2;
+  padding: 0 22px max(20px, calc(env(safe-area-inset-bottom, 0px) + 16px));
+}
+
+/* Ink on paper, not gold on glass: this hero's foot is cream, and the shared
+   gold-on-translucent button loses contrast on it — the same override Door of
+   Joy and Swan Lake each needed for the same reason. */
+.cine-lhero .cine-hero__save {
+  color: #5a3a32;
+  background: rgba(255, 253, 246, 0.78);
+  border-color: rgba(var(--cine-gold-rgb), 0.6);
+}
+
+.cine-lhero .cine-hero__save:hover { background: rgba(255, 253, 246, 0.92); }
+
+.cine-lhero .cine-hero__cue {
+  margin-top: clamp(10px, 2.4vw, 18px);
+  font-family: var(--cine-serif);
+  color: var(--cine-gold-dp);
+  text-shadow: 0 1px 6px rgba(255, 250, 244, 0.9);
+}
+
+.cine-lhero .cine-hero__cue-arrow { color: var(--cine-gold-dp); }
+
+/* ── The entrance ────────────────────────────────────────────────────────
+   The settled state is the DEFAULT and the arrival is the class, so a browser
+   that freezes transitions — or a render that never reaches the effect —
+   shows the finished hero rather than one stuck mid-entrance. Same shape as
+   .cine-shero.is-embossed, and for the same reason.
+
+   `transition: none` on the arriving state stops the hero animating INTO its
+   entrance on mount, which would run the whole thing backwards behind a
+   sealed envelope. */
+.cine-lhero__frame,
+.cine-lhero__type,
+.cine-lhero__plate {
+  transition: opacity 0.9s ease, transform 1s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+.cine-lhero.is-arriving .cine-lhero__frame { opacity: 0; transform: scale(0.96); transition: none; }
+.cine-lhero.is-arriving .cine-lhero__type { opacity: 0; transform: translateY(16px); transition: none; }
+.cine-lhero.is-arriving .cine-lhero__plate { opacity: 0; transform: translateY(12px); transition: none; }
+
+/* Staggered on the way IN only. The delays live on the settled state, so
+   removing the class starts the frame, then the type, then the caption. */
+.cine-lhero__type { transition-delay: 0.28s; }
+.cine-lhero__plate { transition-delay: 0.48s; }
+
+/* ═══════════════════════════════════════════════════════
    6. RESPONSIVE
    Note the 768px literal: the source used 760px, which is off this
    codebase's four-value breakpoint scale and would fail the allowlist
@@ -1370,6 +1837,15 @@
      down lifts them back into open water above it, and there is enough sky at
      this width to give up the few percent at the top. */
   .cine-shero__scene { background-position: center 52%; }
+
+  /* Past the phone the frame is bounded by HEIGHT, not width — it stops
+     growing and simply centres on more paper, which is what a framed picture
+     on a wall does. Only the type inside it needs to keep up. */
+  .cine-lhero__names { font-size: clamp(34px, 4.4vw, 54px); }
+  .cine-lhero__type { padding-top: 6%; }
+  .cine-lhero__plate { padding-bottom: 5%; }
+  /* More room for the button and the cue once there is height to spare. */
+  .cine-lhero { --cine-lhero-foot: clamp(132px, 19vh, 190px); }
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -1390,8 +1866,34 @@
   .cine-door__hint,
   .cine-door__knocks,
   .cine-swan__sealed,
-  .cine-swan__hint {
+  .cine-swan__hint,
+  .cine-letter__hint,
+  .cine-lhero__shimmer {
     animation: none !important;
+  }
+
+  /* ── Sealed Letter ──
+     The component never reaches its `opening` phase under this preference —
+     it goes straight to `revealed` — but `is-opening` is still on the root at
+     that point, so the rule that starts the sprite would still match. Killing
+     it here and pinning the sheet to its LAST frame is what makes the reduced
+     -motion path show an opened envelope rather than a sealed one dissolving.
+
+     This has to be checked on every pass that adds motion to this file: a new
+     effect that is not listed here still plays for a guest who asked for less
+     of it, and the failure is silent. */
+  .cine-letter.is-opening .cine-letter__anim { animation: none !important; }
+  .cine-letter.is-revealed .cine-letter__anim { background-position-x: 100%; }
+
+  /* The entrance is how the hero arrives, not decoration — LetterFrameHero
+     already renders the settled state outright under this preference (it
+     never sets is-arriving), so there is nothing to animate. Killing the
+     transitions as well means a stray re-render cannot reintroduce a
+     full-height scale on the couple's photograph. */
+  .cine-lhero__frame,
+  .cine-lhero__type,
+  .cine-lhero__plate {
+    transition: none !important;
   }
 
   /* The bloom is the one piece of motion here that is not decoration — it is

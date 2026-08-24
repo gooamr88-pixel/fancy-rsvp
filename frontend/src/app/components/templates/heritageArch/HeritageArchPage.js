@@ -11,6 +11,7 @@ import { getCinematicTemplate, getCinematicOccasion, getCinematicCopy } from '..
 import VelvetRingHero from '../cinematic/VelvetRingHero';
 import DoorOfJoyHero from '../cinematic/DoorOfJoyHero';
 import SwanLakeHero from '../cinematic/SwanLakeHero';
+import LetterFrameHero from '../cinematic/LetterFrameHero';
 
 /* Keyed by `cinematic.hero`, not chosen by a ternary — see the note on
    CINEMATIC_OPENINGS in [slug]/EventPageClient.js. The ternary this replaces
@@ -19,6 +20,7 @@ const CINEMATIC_HEROES = {
   velvetRing: VelvetRingHero,
   doorOfJoy: DoorOfJoyHero,
   swanLake: SwanLakeHero,
+  letterFrame: LetterFrameHero,
 };
 import AmbientFx from '../../guest/fx/AmbientFx';
 import HeroSection from './sections/HeroSection';
@@ -512,10 +514,27 @@ export default function HeritageArchPage({
           tagline={(isPreview ? D.tagline : heroTagline) || cinematicCopy.sub}
           dateLine={[dateLine, timeLine].filter(Boolean).join(isRTL ? ' — ' : ' — ')}
           coverImageUrl={event.cover_image_url || null}
+          /* Sealed Letter's own three, and only it reads them. Deliberately
+             NOT event.cover_image_url: that is the social card, the dashboard
+             tile and its own cover-photo section, and it is landscape. This
+             one goes into a 1:2 panel inside a carved frame, so it is a
+             different picture with a different crop — reusing the cover would
+             have printed the same image twice on one page and made a portrait
+             the invitation's OG image. See LetterFrameHero.
+
+             No `isPreview` sample fallback here, unlike most of this file. An
+             empty panel is not an empty state on this template: the artwork's
+             own illustrated couple stands, which IS the finished look. There
+             is nothing missing for sample content to stand in for. */
+          heroPhoto={td.letter_hero_photo || null}
+          heroFocus={td.letter_hero_focus}
+          heroCaption={td.letter_hero_caption}
+          heroCaptionSub={td.letter_hero_caption_sub}
           invitationPattern={invitationPattern} invitationTheme={invitationTheme}
           invitationGuestName={invitationGuestName} invitationData={invitationData}
           title={heroTitle} isRTL={isRTL}
-          // Only Swan Lake reads these two; the other heroes ignore them.
+          // Only Swan Lake and Sealed Letter read these two; the others ignore
+          // them.
           occasion={cinematicOccasion} openingActive={openingActive}
         />
       ) : (

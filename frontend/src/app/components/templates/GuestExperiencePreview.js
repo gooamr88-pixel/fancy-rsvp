@@ -7,6 +7,7 @@ import InvitationReveal from '../guest/InvitationReveal';
 import VelvetBoxOpening from '../guest/openings/VelvetBoxOpening';
 import KnockDoorOpening from '../guest/openings/KnockDoorOpening';
 import WaxEnvelopeOpening from '../guest/openings/WaxEnvelopeOpening';
+import SealedLetterOpening from '../guest/openings/SealedLetterOpening';
 import { getCinematicTemplate, getCinematicOccasion } from './cinematic/cinematicThemes';
 
 /* Keyed, not chosen by a ternary — see CINEMATIC_OPENINGS in
@@ -17,6 +18,7 @@ const CINEMATIC_OPENINGS = {
   velvetBox: VelvetBoxOpening,
   knockDoor: KnockDoorOpening,
   waxEnvelope: WaxEnvelopeOpening,
+  sealedLetter: SealedLetterOpening,
 };
 import { translations } from '../../utils/translations';
 // From the shared util, NOT from [slug]/EventPageClient. Importing one named

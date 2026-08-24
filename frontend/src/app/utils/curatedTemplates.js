@@ -119,6 +119,33 @@ export const TEMPLATES = [
     specs: ['Wax-Seal Film Opening', 'Engraving Blooms Into Colour', 'Any Occasion You Choose', 'Arabic Display Typography', 'Every Section Toggleable'],
     fields: ['Your Occasion', 'Names', 'Your Story', 'Ceremony & Reception', 'Gift Registry'],
   },
+  /* ── Sealed Letter — the one the couple fills in themselves ───────────
+     A blush envelope with a burgundy wax seal that gilds and opens. What is
+     behind it is not our photography but THEIRS: a carved ivory frame with a
+     panel for their own portrait and their own words on it. The only template
+     here whose hero is different on every event. */
+  {
+    key: 'letter', label: 'Sealed Letter', tier: 'Cinematic',
+    tagline: 'Cinematic · Blush & Wax',
+    desc: 'A blush envelope sealed in burgundy wax. Your guests touch it, the seal catches the light and gilds, and both flaps fall open onto a carved ivory frame — with your own photograph inside it and your own words across the picture.',
+    /* The POSTER, not the sprite sheet. The sheet is 7480px of seventeen
+       frames side by side, and `object-fit: cover` in the card's 4:5 box
+       would crop a sliver out of the middle of frame eight — 220KB fetched to
+       show a smear. The poster is frame 0 cut out of that same sheet, so the
+       card still cannot drift from what the guest lands on. */
+    preview: { kind: 'poster', src: '/templates/letter/envelope-poster.jpg', position: '50% 46%', tone: 'light' },
+    presets: [
+      { name: 'Blush & Wax', primary: '#a6705f', secondary: '#c2a05a', accent: '#8c1f2b', background: '#f6efe4' },
+      { name: 'Rose Gold', primary: '#b57c6c', secondary: '#ddc185', accent: '#a6705f', background: '#fbf6ec' },
+      { name: 'Sage Letter', primary: '#7e8c63', secondary: '#c2a05a', accent: '#5f463f', background: '#f4f1e6' },
+    ],
+    /* "Sprite" and "Hero" are OUR words, not an organizer's — this card is
+       read by someone choosing a wedding invitation, not by a developer. The
+       thing worth promising about the sprite is what it buys them: it opens
+       instantly, on any phone, because there is no video to load. */
+    specs: ['Opens Instantly On Any Phone', 'Your Own Photograph, Framed', 'Your Words On The Picture', 'Any Occasion You Choose', 'Every Section Toggleable'],
+    fields: ['Your Occasion', 'Names', 'Your Photograph', 'Your Story', 'Ceremony & Reception', 'Gift Registry'],
+  },
   {
     key: 'custom', label: 'Custom Canvas', tier: 'Build your own',
     tagline: 'Fully editable',
@@ -152,6 +179,7 @@ export const TEMPLATE_PREVIEW_PATTERN = {
   ring: 'serif',
   bab: 'serif',
   swans: 'serif',
+  letter: 'serif',
   custom: 'custom',
 };
 
