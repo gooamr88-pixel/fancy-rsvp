@@ -318,8 +318,8 @@ test('the day-before text still exists, and is the only one left', () => {
   const start = src.indexOf('async function jobEventReminders');
   const body = src.slice(start, src.indexOf('\n}', start));
   assert.match(body, /type: 'seating_reminder'/);
-  assert.match(body, /ref: `evday:\$\{party\.id\}`/,
-    'the day-before ref is evday:, and it is now the only ref this type uses');
+  assert.match(body, /ref: `evday:\$\{party\.id\}:\$\{dateKey\}`/,
+    'the day-before ref is evday:<party>:<date>, and it is now the only ref this type uses');
 });
 
 test('the per-channel move ledger is gone with the text it served', () => {

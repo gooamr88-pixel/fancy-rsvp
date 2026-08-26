@@ -113,6 +113,12 @@ router.patch('/profile', [
   validate
 ], authController.updateProfile);
 
+/* Apply the account timezone to existing events: POST /api/v1/auth/profile/timezone/apply
+   The confirm half of the proposal PATCH /profile returns. Deliberately a
+   separate call — it rewrites stored instants on every event the organization
+   owns, which is not something a profile save should do as a side effect. */
+router.post('/profile/timezone/apply', requireAuth, authController.applyTimezoneToEvents);
+
 // Change password (requires current password): POST /api/v1/auth/change-password
 router.post('/change-password', [
   requireAuth,

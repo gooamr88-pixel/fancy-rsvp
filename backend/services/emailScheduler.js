@@ -286,6 +286,33 @@ async function jobEventReminders() {
     .limit(100);
   let sent = 0;
   for (const ev of (events || [])) {
+    /**
+     * THE DEDUPE KEY CARRIES THE DATE IT IS ABOUT.
+     *
+     * It used to be `rsvp:<party>` — which reads as "this guest has been
+     * reminded", full stop, forever. `email_log` has a UNIQUE (kind, ref)
+     * index and dispatch() checks it before every send, so once that row
+     * existed nothing could ever remind that guest again.
+     *
+     * Which broke the case an organizer is most likely to need: move an event
+     * that has already crossed its 24-hour mark, and the new mark produces the
+     * same key, dispatch drops it as a duplicate, and NOBODY is told about the
+     * new date. The "your event has changed" notice is a different message on
+     * a different path and does not fill the gap — it is a one-off
+     * announcement, not the reminder that carries the table and the pass.
+     *
+     * Adding the target instant makes the key mean "reminded ABOUT THIS DATE".
+     * Rescheduling mints a new one and the reminder goes again; the sweep
+     * re-running against an unchanged date keeps hitting the same key and is
+     * still swallowed, which is the whole point of having one.
+     *
+     * EPOCH MILLISECONDS, not the ISO string. Postgres hands back
+     * "…T03:00:00+00:00" while other paths produce "…T03:00:00.000Z" — the same
+     * instant, different text, and a text key would treat them as two dates and
+     * send twice. getTime() has exactly one representation.
+     */
+    const dateKey = new Date(ev.event_date).getTime();
+
     const parties = await fetchConfirmedParties(
       ev.id,
       'id, label, response, preferred_lang, guests(is_primary_contact, email), seating_assignments(tables(table_name))',
@@ -301,12 +328,17 @@ async function jobEventReminders() {
       /**
        * THE DAY-BEFORE TEXT.
        *
-       * ref is `evday:` and NOT `seat:` on purpose. The seating sweep uses
-       * `seat:<party>:<table>`, so a guest seated at table 7 and then reminded
-       * about table 7 would collide on the (kind, ref) unique index and the
-       * reminder would be swallowed as a DUPLICATE. A distinct ref lets exactly
-       * one of each through, and the `evday:` key is itself unique per party, so
-       * the scheduler re-running every fifteen minutes still only sends once.
+       * ref is `evday:` and NOT `seat:` on purpose. The seating sweep used
+       * `seat:<party>:<table>` while it existed, and a guest seated at table 7
+       * and then reminded about table 7 would have collided on the (kind, ref)
+       * unique index with one of them swallowed as a DUPLICATE. The prefixes
+       * stay distinct even now that the seating text is retired, because
+       * `sms_log` still holds those historical rows.
+       *
+       * Carries `dateKey` for the same reason the email does — see the note
+       * above. Both channels have to move together: an organizer who reschedules
+       * and gets the mail resent but not the text would have half their guests
+       * told, split by which channel each one happens to use.
        *
        * Additive to the email below, never a replacement — `replacesEmail` is
        * false for every current type, so `viaSms` is not consulted and the mail
@@ -315,7 +347,7 @@ async function jobEventReminders() {
       await trySms(ev, {
         type: 'seating_reminder',
         partyId: party.id,
-        ref: `evday:${party.id}`,
+        ref: `evday:${party.id}:${dateKey}`,
         // The language this guest actually used when they RSVP'd. Without it a
         // guest who replied in Arabic gets an English reminder days later.
         lang,
@@ -340,7 +372,7 @@ async function jobEventReminders() {
         en: `Your table and entry pass for ${ev.title}`,
         ar: `طاولتك وتذكرة دخولك لـ ${ev.title}`,
       });
-      const res = await dispatchWithRetry({ kind: 'event_reminder', ref: `rsvp:${party.id}`, to: email, subject, html, eventId: ev.id });
+      const res = await dispatchWithRetry({ kind: 'event_reminder', ref: `rsvp:${party.id}:${dateKey}`, to: email, subject, html, eventId: ev.id });
       if (res.sent) sent++;
     }
   }

@@ -45,9 +45,11 @@ test('the reminder sweep and the seating reveal use the SAME 24h window', () => 
 });
 
 test('the day-before text uses a ref that cannot collide with the seating one', () => {
-  // `seat:<party>:<table>` vs `evday:<party>`. Sharing a key means one of the
-  // two is silently dropped as a duplicate.
-  assert.match(SCHEDULER, /ref: `evday:\$\{party\.id\}`/);
+  // `seat:<party>:<table>` vs `evday:<party>:<date>`. Sharing a key means one
+  // of the two is silently dropped as a duplicate. The PREFIX is what keeps
+  // them apart; the date suffix exists so that rescheduling an event mints a
+  // new key and the reminder can go again.
+  assert.match(SCHEDULER, /ref: `evday:\$\{party\.id\}:\$\{dateKey\}`/);
   assert.ok(!/ref: `seat:\$\{party\.id\}`(?=[\s\S]*jobEventReminders)/.test(SCHEDULER));
 });
 

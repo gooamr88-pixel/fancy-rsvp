@@ -1,7 +1,7 @@
 'use client';
 
 import { Component } from 'react';
-import ErrorState from './ErrorState';
+import BoundaryError from './BoundaryError';
 
 export default class ErrorBoundary extends Component {
   constructor(props) {
@@ -37,7 +37,7 @@ export default class ErrorBoundary extends Component {
          outright; using it here would blow a broken card up into a
          viewport-filling apology. */
       return (
-        <ErrorState
+        <BoundaryError
           inline
           title="Something went wrong"
           /* Never interpolate error.message — a caught render exception is a

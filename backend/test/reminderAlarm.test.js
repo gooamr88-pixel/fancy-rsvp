@@ -128,3 +128,39 @@ test('the guest fetch is bounded so one event cannot exhaust memory', () => {
   const body = fnBody('async function fetchConfirmedParties');
   assert.match(body, /MAX_PARTIES_PER_EVENT/);
 });
+
+/* ── Rescheduling ────────────────────────────────────────────────────────── */
+
+test('the dedupe key names the date it is about, on BOTH channels', () => {
+  const body = fnBody('async function jobEventReminders');
+
+  // `rsvp:<party>` alone reads as "this guest has been reminded, ever". With a
+  // UNIQUE (kind, ref) index behind it, that made the FIRST reminder the only
+  // one a guest could ever receive — so moving an event that had already
+  // crossed its 24h mark told nobody about the new date.
+  assert.match(body, /ref: `rsvp:\$\{party\.id\}:\$\{dateKey\}`/,
+    'the email ref must carry the target instant');
+  assert.match(body, /ref: `evday:\$\{party\.id\}:\$\{dateKey\}`/,
+    'the text ref must carry it too — one channel moving without the other splits the guest list');
+
+  assert.doesNotMatch(body, /ref: `rsvp:\$\{party\.id\}`/, 'the bare per-party key must not come back');
+  assert.doesNotMatch(body, /ref: `evday:\$\{party\.id\}`/, 'the bare per-party key must not come back');
+});
+
+test('the date key is an instant, not its text', () => {
+  const body = fnBody('async function jobEventReminders');
+  // Postgres returns "…+00:00" and other paths produce "…000Z" for the same
+  // moment. A string key would read those as two different dates and remind
+  // every guest twice.
+  assert.match(body, /const dateKey = new Date\(ev\.event_date\)\.getTime\(\)/,
+    'getTime() has exactly one representation; the ISO text does not');
+});
+
+test('the reminder still dedupes against itself on an unchanged date', () => {
+  const body = fnBody('async function jobEventReminders');
+  // The key varies with the DATE, never with the run. Anything per-attempt in
+  // there — a timestamp, a counter, a random — would defeat the unique index
+  // and re-send on every sweep, which is worse than the bug being fixed.
+  assert.doesNotMatch(body, /ref: `[^`]*Date\.now\(\)/);
+  assert.doesNotMatch(body, /ref: `[^`]*Math\.random/);
+});

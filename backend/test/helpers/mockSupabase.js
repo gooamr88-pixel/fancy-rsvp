@@ -14,7 +14,7 @@
  * `state` shape passed to the resolver:
  *   { table, op, cols, count, payload, upsertOpts, filters, fn, params, terminal }
  *   - op:      'select' | 'insert' | 'update' | 'upsert' | 'delete' | 'rpc'
- *   - filters: { eq:[[col,val]], neq, in, ilike, like, is, not, or, match }
+ *   - filters: { eq:[[col,val]], neq, gt, gte, lt, lte, in, ilike, like, is, not, or, match }
  *   - terminal:'single' | 'maybeSingle' | 'list'
  *
  * The resolver returns { data, error, count }. Returning undefined => empty result
@@ -69,8 +69,17 @@ function createMockSupabase() {
       not(c, op, v) { return pushFilter('not', c, op, v); },
       or(s) { return pushFilter('or', s); },
       match(o) { state.filters.match = o; return builder; },
-      gt() { return builder; }, gte() { return builder; },
-      lt() { return builder; }, lte() { return builder; },
+      /* RANGE FILTERS ARE RECORDED, not swallowed.
+         These were chainable no-ops, which meant no test could assert that a
+         query is bounded by a date at all — so a dropped `.gte('event_date',
+         …)` was invisible to the whole suite. Date bounds are exactly where
+         this codebase keeps getting hurt (the reminder window, the seating
+         quiet period, upcoming-only sweeps), so they are the last thing that
+         should be untestable. Recorded in the same shape as eq/neq. */
+      gt(c, v) { return pushFilter('gt', c, v); },
+      gte(c, v) { return pushFilter('gte', c, v); },
+      lt(c, v) { return pushFilter('lt', c, v); },
+      lte(c, v) { return pushFilter('lte', c, v); },
       contains() { return builder; },
       order() { return builder; }, range() { return builder; }, limit() { return builder; },
 

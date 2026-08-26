@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import Link from 'next/link';
-import ErrorState from '../components/ErrorState';
+import BoundaryError from '../components/BoundaryError';
 
 export default function DashboardError({ error, reset }) {
   const headingRef = useRef(null);
@@ -15,7 +15,7 @@ export default function DashboardError({ error, reset }) {
   }, [error]);
 
   return (
-    <ErrorState
+    <BoundaryError
       ref={headingRef}
       title="Something went wrong"
       /* Never interpolate error.message — a caught render exception is a

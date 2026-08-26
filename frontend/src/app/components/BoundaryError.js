@@ -3,7 +3,19 @@
 import { forwardRef, useId } from 'react';
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   THE ONE ERROR SCREEN.
+   THE ONE ERROR SCREEN — what every error BOUNDARY renders.
+
+   ── NOT TO BE CONFUSED WITH THE TWO `ErrorState`s ──
+
+   `admin/_components/ErrorState.js` and the local one in
+   OrganizerOverview.js are a different thing with a different job: "this fetch
+   failed, here is a Retry button", rendered inline where the data would have
+   been. They take `{ message, onRetry }`.
+
+   This is what an error BOUNDARY shows after a render has already thrown —
+   there is no data to retry, the subtree is gone. It was briefly named
+   ErrorState too, which put three components with that name and three
+   different prop shapes in one codebase.
 
    There were three, in three files, drifting: the root boundary
    (app/error.js), the dashboard segment boundary (dashboard/error.js) and the
@@ -163,7 +175,7 @@ function BrokenSeal({ size = 82 }) {
  * The heading takes the forwarded ref so each boundary can move focus to it —
  * a client-side navigation into an error state announces nothing on its own.
  */
-const ErrorState = forwardRef(function ErrorState(
+const BoundaryError = forwardRef(function BoundaryError(
   { title = 'Something went wrong', message, actions, details, inline = false },
   headingRef,
 ) {
@@ -181,6 +193,11 @@ const ErrorState = forwardRef(function ErrorState(
         {actions && <div className="fx-errstate__actions">{actions}</div>}
       </div>
 
+      {/* The class prefix stays `fx-errstate-` after the component was renamed
+          from ErrorState. It describes the thing on screen — an error state —
+          rather than the component, it is referenced from three other files
+          and from the tests, and renaming it would be diff noise with no
+          behavioural change. */}
       <style jsx>{`
         .fx-errstate {
           min-height: 100vh;
@@ -386,4 +403,4 @@ const ErrorState = forwardRef(function ErrorState(
    something else wanted the mark; nothing did, and an exported symbol with no
    callers is a standing invitation to use this error glyph somewhere it does
    not belong. */
-export default ErrorState;
+export default BoundaryError;

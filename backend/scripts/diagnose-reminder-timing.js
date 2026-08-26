@@ -123,6 +123,7 @@ const show = (iso, zone) => (iso
 
   console.log('══ EVENTS ══');
   let mismatches = 0;
+  let unset = 0;
 
   for (const ev of events) {
     const org = orgById.get(ev.org_id);
@@ -139,8 +140,28 @@ const show = (iso, zone) => (iso
     // Offset gap at the event's own instant, not "now" — DST makes those differ.
     const at = ev.event_date ? new Date(ev.event_date).getTime() : Date.now();
     const gapMs = zoneOffsetMs(at, orgZone) - zoneOffsetMs(at, evZone);
-    const zoneMismatch = evZone !== orgZone && gapMs !== 0;
+
+    /**
+     * THREE STATES, NOT TWO — and the third is the one that matters.
+     *
+     * The first version of this script asked only "do the event's zone and the
+     * organization's zone agree?" On a row where BOTH are null, safeZone()
+     * resolves both to the platform default, they compare equal, and it printed
+     * a reassuring "zones agree" over an event that has no timezone at all.
+     *
+     * That is the opposite of the truth. Two guesses matching is not agreement;
+     * it is the same guess made twice. An organizer in Cairo whose event is
+     * silently filed as San Diego gets a tick from a tool built to catch
+     * exactly that.
+     *
+     * So an absent zone is now its own verdict, and it is louder than a
+     * mismatch: a mismatch is a known error of known size, while this is the
+     * platform not knowing what clock the event keeps.
+     */
+    const zoneUnset = !ev.timezone;
+    const zoneMismatch = !zoneUnset && evZone !== orgZone && gapMs !== 0;
     if (zoneMismatch) mismatches++;
+    if (zoneUnset) unset++;
 
     const dueAt = ev.event_date ? new Date(new Date(ev.event_date).getTime() - DAY_MS) : null;
 
@@ -154,7 +175,20 @@ const show = (iso, zone) => (iso
     console.log(`     the event reads as : ${asStored}`);
     console.log(`     organizer reads it : ${asOrgReads}`);
 
-    if (zoneMismatch) {
+    if (zoneUnset) {
+      const typed = instantToWallClock(ev.event_date, evZone);
+      console.log(`     ⚠ NO TIMEZONE — this event is running on the platform default`);
+      console.log(`        The platform believes this event starts at "${typed}" ${evZone}.`);
+      console.log(`        That is a GUESS, not something the organizer chose. If the venue`);
+      console.log(`        clock says something else, the reminder, the seating reveal and`);
+      console.log(`        every printed time are all wrong by the difference.`);
+      console.log(`        Same moment on other clocks, to check against the real start time:`);
+      for (const z of ['Africa/Cairo', 'Asia/Riyadh', 'Asia/Dubai', 'America/New_York']) {
+        console.log(`          ${z.padEnd(18)} ${show(ev.event_date, z)}`);
+      }
+      console.log(`        Fix: open the event's settings and set Event Timezone. That keeps`);
+      console.log(`        the hour on screen and moves the real moment to match it.`);
+    } else if (zoneMismatch) {
       /* Recovering the typed digits: the instant was BUILT from a wall clock in
          the frozen zone, so rendering it back in that zone returns exactly what
          was typed. Comparing that to the organizer's zone is what turns "the
@@ -177,13 +211,28 @@ const show = (iso, zone) => (iso
   }
 
   console.log(`\n══ VERDICT ══`);
+  if (unset > 0) {
+    console.log(`  ⚠ ${unset} event(s) have NO timezone and are running on ${PLATFORM_TIMEZONE}.`);
+    console.log('    Nothing here proves that is right or wrong — the platform simply was not');
+    console.log('    told. Check each one against the real start time above. If it is off, the');
+    console.log('    error is HOURS and no scheduler change touches it.');
+  }
   if (mismatches > 0) {
-    console.log(`  ${mismatches} event(s) carry a timezone that disagrees with their organizer's.`);
-    console.log('  This is the HOURS-scale error. Fixing the sweep interval will not help these.');
-  } else {
-    console.log('  No timezone mismatches. Any lateness is the sweep interval — MINUTES, not hours.');
+    console.log(`  ⚠ ${mismatches} event(s) carry a timezone that disagrees with their organizer's.`);
+    console.log('    This is the HOURS-scale error. Fixing the sweep interval will not help these.');
+  }
+  if (unset === 0 && mismatches === 0) {
+    console.log('  Every event names its own timezone and it agrees with the organizer.');
+    console.log('  Any lateness is the sweep interval — MINUTES, not hours.');
   }
   if (!enabled) console.log('  ⚠ EMAIL_AUTOMATION_ENABLED is not "true": nothing is being sent at all.');
+  /* Organizations with no zone are a FUTURE problem, not a past one: every new
+     event they create freezes the platform default the moment it is created. */
+  if (missingZone.length > 0) {
+    console.log(`  ⚠ ${missingZone.length} organization(s) have no timezone — every NEW event they`);
+    console.log('    create will be filed as ' + PLATFORM_TIMEZONE + ' too. Run');
+    console.log('    scripts/propose-organizer-timezones.js, review it, then apply.');
+  }
 
   process.exit(0);
 })();

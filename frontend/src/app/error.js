@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import Link from 'next/link';
-import ErrorState from './components/ErrorState';
+import BoundaryError from './components/BoundaryError';
 
 export default function Error({ error, reset }) {
   const headingRef = useRef(null);
@@ -36,7 +36,7 @@ export default function Error({ error, reset }) {
   }, [error]);
 
   return (
-    <ErrorState
+    <BoundaryError
       ref={headingRef}
       title="Something went wrong"
       // Never interpolate error.message here — a render-time exception is a

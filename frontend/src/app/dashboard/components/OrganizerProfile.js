@@ -59,6 +59,10 @@ function getDeviceIcon(label = '') {
 
 export default function OrganizerProfile({ events = [], forcePasswordReset = false, onPasswordReset }) {
   const [profile, setProfile] = useState(null);
+  /* The propose-then-confirm state for pushing the account zone onto existing
+     events. Null until a save reports events on a different clock. */
+  const [tzProposal, setTzProposal] = useState(null);
+  const [applyingTz, setApplyingTz] = useState(false);
   const [form, setForm] = useState({
     name: '',
     phone: '',
@@ -211,11 +215,59 @@ export default function OrganizerProfile({ events = [], forcePasswordReset = fal
       });
       const p = res.profile || res;
       setProfile(prev => ({ ...prev, ...p }));
-      toast.success('Profile updated successfully.');
+
+      /**
+       * Confirm what the SERVER stored, not what we sent.
+       *
+       * A hardcoded "updated successfully" here was reporting on the request,
+       * not on the result. The profile endpoint has a degraded path that saves
+       * only the core fields when a column write fails, and it says so in its
+       * `message` — which this ignored, so a save that quietly dropped fields
+       * looked identical to one that worked.
+       *
+       * The timezone is the field that matters most, because nothing on this
+       * screen re-reads it: an organizer who sets it, sees a green toast and
+       * has it not stick has no way to find out until an event goes out on the
+       * wrong clock.
+       */
+      const askedForZone = form.timezone && form.timezone !== profile?.timezone;
+      if (askedForZone && p?.timezone !== form.timezone) {
+        toast.error('Your other details were saved, but the timezone was not. Please try again.');
+      } else {
+        toast.success(res.message || 'Profile updated successfully.');
+      }
+
+      /* Existing events do NOT follow the account zone on their own — see the
+         note in authController.updateProfile. The save reports which ones are
+         on a different clock and the organizer applies it deliberately, which
+         is the same propose-then-confirm shape as the event-change notice. */
+      setTzProposal(res.timezonePropagation || null);
     } catch (err) {
       toast.error(err.message || 'Failed to update profile');
     } finally {
       setSaving(false);
+    }
+  };
+
+  /**
+   * Push the saved account zone onto the events that are still on another one.
+   *
+   * Re-anchoring: the hour every event shows stays exactly as it is, on screen
+   * and in invitations already sent. What moves is the real moment underneath,
+   * and with it the reminder and the seating reveal. That is why this is safe
+   * to offer and also why it needs a deliberate press.
+   */
+  const handleApplyTimezone = async () => {
+    setApplyingTz(true);
+    try {
+      const res = await apiFetch('/auth/profile/timezone/apply', { method: 'POST' });
+      if (res?.failed > 0) toast.error(res.message || 'Some events could not be updated.');
+      else toast.success(res?.message || 'Your events now follow your account timezone.');
+      setTzProposal(null);
+    } catch (err) {
+      toast.error(err.message || 'Could not apply the timezone to your events.');
+    } finally {
+      setApplyingTz(false);
     }
   };
 
@@ -467,10 +519,80 @@ export default function OrganizerProfile({ events = [], forcePasswordReset = fal
                   {formatInZone(Date.now(), form.timezone, { hour: 'numeric', minute: '2-digit' })} {zoneAbbreviation(Date.now(), form.timezone)}
                 </strong> there.</>
               )}
-              {' '}Changing it does not move events you have already created.
+              {' '}Changing it does not move events you have already created —
+              after saving you can choose to apply it to them.
             </p>
           </div>
         </div>
+
+        {/* THE PROPOSAL. Appears only after a save that found events on another
+            clock, and it states the one thing an organizer needs to weigh: the
+            hours on their invitations do NOT change, the reminders do. */}
+        {tzProposal && (
+          <div style={{
+            marginTop: 4, padding: '16px 18px', borderRadius: 12,
+            border: `1px solid ${COLORS.gold}55`, background: 'rgba(184,148,79,0.06)',
+          }}>
+            {/* "At least N" when the server hit its per-account cap. Quoting a
+                limit as though it were a count is how a number on screen ends
+                up not describing what the button does. */}
+            <p style={{ margin: 0, fontFamily: 'var(--font-serif)', fontSize: 15, fontWeight: 600, color: COLORS.charcoal }}>
+              {tzProposal.truncated ? 'At least ' : ''}{tzProposal.count}{' '}
+              {tzProposal.count === 1 ? 'event is' : 'events are'} on a different clock
+            </p>
+            <p style={{ margin: '6px 0 0', fontFamily: 'var(--font-sans)', fontSize: 12.5, color: COLORS.stone, lineHeight: 1.6 }}>
+              Applying <strong style={{ color: COLORS.charcoal }}>{tzProposal.timezone}</strong> keeps every
+              time exactly as your guests already see it. What changes is when reminders
+              and the seating reveal actually fire.
+            </p>
+
+            <ul style={{ margin: '10px 0 0', padding: 0, listStyle: 'none' }}>
+              {tzProposal.events.map((e) => (
+                <li key={e.id} style={{ fontFamily: 'var(--font-sans)', fontSize: 12, color: COLORS.stone, padding: '3px 0' }}>
+                  <strong style={{ color: COLORS.charcoal }}>{e.title || 'Untitled'}</strong>
+                  {' — '}stays at {e.readsAs}
+                  {e.shiftHours !== 0 && (
+                    <>; reminders shift {Math.abs(e.shiftHours)}h {e.shiftHours > 0 ? 'later' : 'earlier'}</>
+                  )}
+                </li>
+              ))}
+              {tzProposal.count > tzProposal.events.length && (
+                <li style={{ fontFamily: 'var(--font-sans)', fontSize: 12, color: COLORS.stone, padding: '3px 0' }}>
+                  …and {tzProposal.count - tzProposal.events.length} more
+                </li>
+              )}
+            </ul>
+
+            <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={handleApplyTimezone}
+                disabled={applyingTz}
+                style={{
+                  minHeight: 44, padding: '10px 20px', borderRadius: 9, border: 'none',
+                  background: COLORS.gold, color: '#fff', fontFamily: 'var(--font-sans)',
+                  fontSize: 13.5, fontWeight: 600, cursor: applyingTz ? 'default' : 'pointer',
+                  opacity: applyingTz ? 0.6 : 1,
+                }}
+              >
+                {applyingTz ? 'Applying…' : `Apply to ${tzProposal.count === 1 ? 'this event' : 'all events'}`}
+              </button>
+              <button
+                type="button"
+                onClick={() => setTzProposal(null)}
+                disabled={applyingTz}
+                style={{
+                  minHeight: 44, padding: '10px 20px', borderRadius: 9,
+                  border: `1px solid ${COLORS.border}`, background: 'transparent',
+                  color: COLORS.stone, fontFamily: 'var(--font-sans)', fontSize: 13.5,
+                  fontWeight: 600, cursor: 'pointer',
+                }}
+              >
+                Leave them as they are
+              </button>
+            </div>
+          </div>
+        )}
 
         <div style={fieldGroupStyle}>
           <label style={labelStyle}>Organizer Bio</label>

@@ -3,6 +3,21 @@ const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
 const { supabase } = require('../config/supabase');
 const logger = require('../utils/logger');
+
+/**
+ * How many of an organization's events the timezone proposal and its apply
+ * will consider — ONE constant, used by both.
+ *
+ * They were 200 and 500. An organization with 250 events would have been told
+ * "200 events are on a different clock" and then had 250 of them changed: a
+ * number on screen that did not describe what the button did. The mismatch was
+ * invisible in every realistic test because nobody has 200 events.
+ *
+ * The cap itself is a memory guard, not a business rule. `truncated` is
+ * reported when it binds, because the alternative is the same silent-cap bug
+ * this file has already been bitten by elsewhere.
+ */
+const MAX_EVENTS_PER_ORG = 500;
 const { escapeHtml, getEmailVerificationTemplate, getPasswordResetTemplate, getOrganizerWelcomeTemplate, getPasswordChangedTemplate } = require('../utils/emailTemplates');
 const { setAuthCookie, clearAuthCookie, COOKIE_NAME } = require('../middleware/auth');
 const { sendEmailViaBrevo } = require('../utils/notificationService');
@@ -11,7 +26,10 @@ const { getAccessContext } = require('../services/rbacService');
 const { generateUniqueReferralCode, resolveReferrerOrgId } = require('../services/referralService');
 const { captureRequestMeta } = require('../middleware/adminAudit');
 const { resolveTimezoneFromIp } = require('../utils/timezoneFromIp');
-const { PLATFORM_TIMEZONE, isValidTimeZone } = require('../utils/timezone');
+const {
+  PLATFORM_TIMEZONE, isValidTimeZone, safeZone, formatInZone, zoneOffsetMs,
+  instantToWallClock, wallClockToInstant,
+} = require('../utils/timezone');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) throw new Error('FATAL: JWT_SECRET environment variable is required');
@@ -896,7 +914,34 @@ const updateProfile = async (req, res, next) => {
         if (Object.keys(coreUpdates).length === 0) {
           return res.status(400).json({ success: false, error: 'MIGRATION_REQUIRED', message: 'Branding columns do not exist in the database. Please apply migrations.' });
         }
-        
+
+        /**
+         * A DROPPED TIMEZONE IS NOT A PARTIAL SUCCESS — IT IS A FAILURE.
+         *
+         * This fallback exists so a database missing the optional branding
+         * columns can still save a name and a phone number. Fine for a bio or a
+         * logo: the organizer sees the field did not stick and tries again.
+         *
+         * The timezone is different in kind. It is invisible after saving —
+         * nothing on this screen re-reads it against the server — so silently
+         * discarding it and answering `success: true` teaches the organizer
+         * their clock is set when the column is still null. Every event they
+         * then create is filed under the platform default, and the first
+         * symptom is a reminder arriving at the wrong hour days later, with
+         * nothing connecting it back to this request.
+         *
+         * So: refuse. A visible error costs one confused save; a silent one
+         * costs an event.
+         */
+        if (updates.timezone !== undefined) {
+          logger.error({ err: error }, 'updateProfile: timezone could not be written — refusing to report success');
+          return res.status(500).json({
+            success: false,
+            error: 'TIMEZONE_NOT_SAVED',
+            message: 'Your timezone could not be saved. Nothing was changed — please try again or contact support.',
+          });
+        }
+
         const { data: retryOrg, error: retryErr } = await supabase
           .from('organizations')
           .update(coreUpdates)
@@ -914,7 +959,233 @@ const updateProfile = async (req, res, next) => {
       throw error;
     }
 
-    res.json({ success: true, profile: org, message: 'Profile updated successfully' });
+    /**
+     * ── THE ACCOUNT ZONE DOES NOT REACH EXISTING EVENTS BY ITSELF ──
+     *
+     * `events.timezone` is a snapshot taken at creation, and that freeze is
+     * deliberate: reading the organization's zone live would mean that
+     * correcting a misdetected account silently moved every event, including
+     * ones whose invitations already went out.
+     *
+     * The freeze is right and it is also incomplete — it left an organizer who
+     * was filed under the wrong zone with no way to fix the events they already
+     * had. So the answer is neither "follow live" nor "never follow": the save
+     * REPORTS which events are on a different clock and the organizer applies
+     * it in one deliberate step (POST /auth/profile/timezone/apply).
+     *
+     * The same propose-then-confirm shape the event-change notice already uses
+     * — see eventController's `changeNotice`. Nothing here writes to events.
+     */
+    let timezonePropagation = null;
+    if (updates.timezone) {
+      try {
+        const { data: stale } = await supabase
+          .from('events')
+          .select('id, title, event_date, timezone')
+          .eq('org_id', org.id)
+          .neq('status', 'cancelled')
+          // The SAME set the apply will act on — including the upcoming-only
+          // bound. A proposal that counts a different population than the
+          // button changes is a number that lies, which is the failure this
+          // whole propose-then-confirm shape exists to avoid.
+          .gte('event_date', new Date().toISOString())
+          .limit(MAX_EVENTS_PER_ORG);
+
+        /**
+         * A NULL ZONE ALWAYS NEEDS STAMPING — even when it resolves to the
+         * target already.
+         *
+         * The obvious filter is `safeZone(e.timezone) !== target`, and it has a
+         * hole that swallows the most common case on this platform: set the
+         * account to America/Los_Angeles — which IS `PLATFORM_TIMEZONE` — and
+         * every null-zone event resolves to exactly that, compares equal, and
+         * is dropped from the proposal. The organizer is told nothing needs
+         * changing while their events stay pinned to nothing at all.
+         *
+         * Two guesses matching is not agreement. A null row is not "already
+         * correct", it is running on a value that lives in an environment
+         * variable: the day `PLATFORM_TIMEZONE` changes — a second region, a
+         * test box, a typo in an env file — every one of those events moves,
+         * with no migration and no log line.
+         *
+         * So null is always included. Re-anchoring it is a no-op on the dates
+         * when the effective zone already matches; the point is to write the
+         * column down.
+         */
+        const affected = (stale || []).filter(
+          (e) => !e.timezone || safeZone(e.timezone) !== updates.timezone,
+        );
+        if (affected.length > 0) {
+          timezonePropagation = {
+            timezone: updates.timezone,
+            count: affected.length,
+            // True when the cap bound, so the UI can say "at least N" rather
+            // than quoting a number that is really a limit.
+            truncated: (stale || []).length >= MAX_EVENTS_PER_ORG,
+            /**
+             * `readsAs` and `shiftHours`, NOT a before/after pair of times.
+             *
+             * A first draft sent both a "reads now" and a "would read" and they
+             * came out identical — which is not a bug in the formatting, it is
+             * the whole point of re-anchoring: the hour the organizer typed is
+             * kept and the underlying instant is what moves. Showing the same
+             * string twice would tell them nothing changes, when in fact their
+             * reminders move by `shiftHours`.
+             *
+             * So: the hour that stays, and the size of the move underneath it.
+             */
+            events: affected.slice(0, 20).map((e) => {
+              const at = e.event_date ? new Date(e.event_date).getTime() : Date.now();
+              const from = safeZone(e.timezone);
+              // Positive = the real moment moves LATER.
+              const shiftMs = zoneOffsetMs(at, from) - zoneOffsetMs(at, updates.timezone);
+              return {
+                id: e.id,
+                title: e.title,
+                currentTimezone: e.timezone || null,
+                readsAs: formatInZone(e.event_date, from, {
+                  year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+                }),
+                shiftHours: Number((shiftMs / 3600000).toFixed(2)),
+              };
+            }),
+          };
+        }
+      } catch (propErr) {
+        // Never fail the profile save over the proposal — the zone IS saved.
+        logger.warn({ err: propErr }, 'updateProfile: could not build the timezone propagation proposal');
+      }
+    }
+
+    res.json({ success: true, profile: org, timezonePropagation, message: 'Profile updated successfully' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Applies the organization's timezone to its existing events.
+ * POST /api/v1/auth/profile/timezone/apply
+ *
+ * The confirm half of the proposal `updateProfile` returns. Separate endpoint,
+ * separate deliberate action — see the note there for why the account zone does
+ * not simply flow through to events on its own.
+ *
+ * ── WHAT THIS ACTUALLY DOES TO A DATE ──
+ *
+ * RE-ANCHORS it: the wall clock the organizer typed is kept and the stored
+ * instant is recomputed. An event showing "18:30" still shows "18:30"
+ * afterwards, on every screen and in every invitation already sent — what moves
+ * is the moment that 18:30 refers to, and with it the reminder, the seating
+ * reveal and every "is this over yet" check.
+ *
+ * That is the correct direction for the case this exists to fix — an account
+ * filed under the wrong zone — and it is the reason the operation is safe to
+ * offer at all: nothing a guest has ever been shown changes.
+ *
+ * Idempotent: an event already on the target zone is skipped, so running it
+ * twice cannot double-shift anything. That guard is load-bearing — a double
+ * shift is silent and looks exactly like the original error.
+ */
+const applyTimezoneToEvents = async (req, res, next) => {
+  try {
+    const { data: org, error: orgErr } = await supabase
+      .from('organizations')
+      .select('id, timezone')
+      .eq('owner_user_id', req.user.id)
+      .single();
+
+    if (orgErr || !org) {
+      return res.status(403).json({ success: false, error: 'ORG_NOT_FOUND', message: 'No organization found for this user' });
+    }
+    if (!org.timezone) {
+      return res.status(400).json({
+        success: false,
+        error: 'NO_ACCOUNT_TIMEZONE',
+        message: 'Set your account timezone first.',
+      });
+    }
+
+    const target = org.timezone;
+    /**
+     * UPCOMING EVENTS ONLY — a past one is left exactly as recorded.
+     *
+     * Re-anchoring a finished event buys nothing: the hour it displays is
+     * computed in its own zone, so moving both together leaves every screen
+     * reading identically. There is no visible gain.
+     *
+     * There is a real loss. Shifting a just-finished event forward can push it
+     * back inside the 24-hour reminder window, and the reminder's dedupe ref
+     * now carries the event date — so the new instant mints a NEW key and the
+     * day-before reminder fires again, to every confirmed guest, about a party
+     * that has already happened. Charged texts for an event that is over.
+     *
+     * `event_date >= now` is the cheapest boundary that cannot do that.
+     */
+    const { data: events, error: evErr } = await supabase
+      .from('events')
+      .select('id, event_date, event_end_date, rsvp_deadline, timezone')
+      .eq('org_id', org.id)
+      .neq('status', 'cancelled')
+      .gte('event_date', new Date().toISOString())
+      .limit(MAX_EVENTS_PER_ORG);
+
+    if (evErr) throw evErr;
+
+    let updated = 0;
+    const failures = [];
+
+    for (const ev of (events || [])) {
+      const from = safeZone(ev.timezone);
+      /**
+       * The idempotency guard — and it deliberately does NOT skip a null zone.
+       *
+       * `ev.timezone &&` is the load-bearing half. Without it, an event with no
+       * zone whose default happens to resolve to the target is skipped as
+       * "already done" and its column stays null forever — which is precisely
+       * the state this endpoint exists to end. See the matching note in
+       * updateProfile.
+       *
+       * For such a row the re-anchor below is a no-op on every date (same zone
+       * in, same zone out) and the only real write is the column itself.
+       *
+       * What the guard DOES stop is a second run re-anchoring an event that has
+       * already moved. That matters: a double shift is silent (18:30 → 01:30 →
+       * 08:30), looks exactly like the original error, and nothing in the row
+       * records that it happened twice.
+       */
+      if (ev.timezone && from === target) continue;
+
+      const patch = { timezone: target };
+      for (const field of ['event_date', 'event_end_date', 'rsvp_deadline']) {
+        const stored = ev[field];
+        if (!stored) continue;
+        const wall = instantToWallClock(stored, from);
+        if (!wall) continue;
+        patch[field] = wallClockToInstant(wall, target);
+      }
+
+      // One row at a time, and a failure does not abandon the rest: a partial
+      // apply leaves some events corrected and some not, which the organizer
+      // can see and re-run, whereas aborting on the first error leaves them
+      // with no idea how far it got.
+      const { error: upErr } = await supabase.from('events').update(patch).eq('id', ev.id);
+      if (upErr) failures.push(ev.id); else updated += 1;
+    }
+
+    if (failures.length > 0) {
+      logger.error({ orgId: org.id, failures }, 'applyTimezoneToEvents: some events could not be updated');
+    }
+
+    return res.json({
+      success: failures.length === 0,
+      timezone: target,
+      updated,
+      failed: failures.length,
+      message: failures.length === 0
+        ? `${updated} event${updated === 1 ? '' : 's'} moved to ${target}. The times shown to guests are unchanged.`
+        : `${updated} updated, ${failures.length} could not be changed. Please try again.`,
+    });
   } catch (err) {
     next(err);
   }
@@ -1248,6 +1519,7 @@ module.exports = {
   resetPassword,
   getProfile,
   updateProfile,
+  applyTimezoneToEvents,
   changePassword,
   googleAuth,
   stopImpersonating,
