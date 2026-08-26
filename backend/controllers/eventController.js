@@ -7,7 +7,9 @@ const { isAcceptedResponse, isDeclinedResponse, isMaybeResponse } = require('../
 const { getPlatformConfig } = require('../utils/configCache');
 const { resolveTier } = require('../utils/tierResolver');
 const { hashEventPassword, verifyEventPassword, isHashedEventPassword } = require('../utils/eventPassword');
-const { safeZone, wallClockToInstant, formatInZone } = require('../utils/timezone');
+const {
+  safeZone, wallClockToInstant, instantToWallClock, formatInZone, isValidTimeZone,
+} = require('../utils/timezone');
 const tokenService = require('../services/tokenService');
 const logger = require('../utils/logger');
 
@@ -228,6 +230,24 @@ const createEvent = async (req, res, next) => {
     // becomes the instant that wall clock actually names in the organizer's
     // zone instead of being filed as though the organizer lived in UTC.
     const eventTimezone = safeZone(org.timezone);
+
+    /* An organization with no zone of its own silently gets the platform's.
+       That is the right FALLBACK — a plausible local time beats an alien one —
+       but it is a guess, and it is about to be frozen onto this event and used
+       to compute the instant every reminder fires from. Left unlogged, an
+       organizer in Cairo gets a San Diego event with no trace anywhere of the
+       assumption, and the first symptom is a reminder arriving ten hours off.
+
+       Only legacy rows reach this: signup resolves a zone from IP and falls
+       back to the platform default explicitly, so `null` means the row predates
+       the timezone migration and the backfill has not been run for it. */
+    if (!org.timezone) {
+      logger.warn(
+        { orgId, assumedTimezone: eventTimezone },
+        'createEvent: organization has no timezone — event frozen to the platform default. '
+        + 'Run scripts/propose-organizer-timezones.js, or the organizer can correct the event in its settings.',
+      );
+    }
     const eventDateIso = wallClockToInstant(finalEventDate, eventTimezone);
     const eventEndDateIso = eventEndDate ? wallClockToInstant(eventEndDate, eventTimezone) : null;
     const rsvpDeadlineIso = rsvpDeadline ? wallClockToInstant(rsvpDeadline, eventTimezone) : null;
@@ -711,7 +731,29 @@ const updateEvent = async (req, res, next) => {
     // The sealed-envelope reveal. Both default true in the schema, so an
     // organizer who never opens the setting keeps exactly today's behaviour.
     'reveal_enabled',
-    'reveal_replay'
+    'reveal_replay',
+    /**
+     * THE EVENT'S OWN ZONE — correctable, deliberately, despite being a snapshot.
+     *
+     * It was left out of this list on purpose: `events.timezone` is frozen at
+     * creation so that correcting an ACCOUNT's zone never silently moves events
+     * whose invitations already went out. That reasoning is still right, and
+     * nothing below reads the organization's zone.
+     *
+     * What it missed is that a zone can be frozen WRONG. An event created while
+     * the organization had no zone froze the platform default instead, and from
+     * that moment the stored instant was hours away from the hour the organizer
+     * typed — so the day-before reminder, the seating reveal and every "is this
+     * event over?" check ran on the wrong clock. With no way to edit the column
+     * and no screen displaying it, that was permanent AND invisible: the
+     * organizer's only visible symptom was reminders arriving at strange times,
+     * and the one thing they would naturally try — fixing their account
+     * timezone — cannot help, because this column never reads it.
+     *
+     * Frozen from ACCIDENTAL change, not from deliberate repair. See the
+     * re-anchoring below for what changing it actually does.
+     */
+    'timezone',
   ];
 
   // Status transitions the organizer may request:
@@ -813,19 +855,114 @@ const updateEvent = async (req, res, next) => {
   // the update payload itself, and any extra key on it is a column PostgREST
   // does not know, which fails the whole write.
   let currentEventDate = null;
-  if (touchesDates) {
+  /**
+   * True when the stored instants moved ONLY because the zone was corrected,
+   * and the organizer did not retype any date. Read much further down to decide
+   * whether guests should be offered a "the event moved" notice — see there for
+   * why the honest answer is no.
+   */
+  let reanchoredOnly = false;
+  const changesZone = filteredUpdates.timezone !== undefined;
+  const DATE_FIELDS = ['event_date', 'event_end_date', 'rsvp_deadline'];
+
+  if (touchesDates || changesZone) {
     const { data: current } = await supabase
-      .from('events').select('event_date, timezone').eq('id', eventId).single();
+      .from('events')
+      .select('event_date, event_end_date, rsvp_deadline, timezone')
+      .eq('id', eventId)
+      .single();
 
     // The event's own frozen zone — never the organization's current one. An
     // admin correcting a misdetected account must not silently move the times
     // on events whose invitations already went out.
-    eventTimezone = safeZone(current?.timezone);
+    const oldZone = safeZone(current?.timezone);
 
-    for (const field of ['event_date', 'event_end_date', 'rsvp_deadline']) {
-      if (filteredUpdates[field] !== undefined) {
-        filteredUpdates[field] = wallClockToInstant(filteredUpdates[field], eventTimezone);
+    if (changesZone) {
+      // Rejected here rather than absorbed by safeZone(), which would quietly
+      // substitute the platform default: a typo'd zone that silently becomes
+      // San Diego is the exact failure this whole endpoint exists to repair.
+      if (!isValidTimeZone(filteredUpdates.timezone)) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_TIMEZONE',
+          message: 'That is not a recognised timezone name.',
+        });
       }
+    }
+    eventTimezone = changesZone ? filteredUpdates.timezone : oldZone;
+
+    // Captured BEFORE re-anchoring writes into the payload, because afterwards
+    // the two cases are indistinguishable — and they must be converted from
+    // different sources.
+    const retypedByOrganizer = new Set(DATE_FIELDS.filter((f) => filteredUpdates[f] !== undefined));
+    // The raw wall clocks exactly as submitted, kept because the conversion
+    // below overwrites them in place and the pure-re-anchor test needs the
+    // original digits.
+    const submitted = {};
+    for (const f of retypedByOrganizer) submitted[f] = filteredUpdates[f];
+
+    /**
+     * RE-ANCHORING — what correcting a zone actually means.
+     *
+     * The organizer typed "18:30" meaning the clock on the venue wall. If the
+     * event was filed under the wrong zone, that 18:30 is the half that was
+     * right and the stored instant is the half that was wrong. So the wall
+     * clock is recovered by reading the instant back in the OLD zone — which
+     * returns exactly the digits that were typed, because that is how the
+     * instant was built — and re-converted through the corrected zone.
+     *
+     * The alternative, keeping the instant and letting the displayed hour move,
+     * would preserve the bug and relabel it.
+     *
+     * Only fields the organizer did NOT retype: anything they typed in this
+     * same request is a fresh wall clock and belongs to the new zone already.
+     */
+    if (changesZone && eventTimezone !== oldZone) {
+      for (const field of DATE_FIELDS) {
+        if (retypedByOrganizer.has(field)) continue;
+        const stored = current?.[field];
+        if (!stored) continue;
+        const wall = instantToWallClock(stored, oldZone);
+        if (!wall) continue;
+        filteredUpdates[field] = wallClockToInstant(wall, eventTimezone);
+      }
+
+      /**
+       * IS THIS PURELY A ZONE CORRECTION?
+       *
+       * The obvious test — "the organizer sent no dates" — is wrong here, and
+       * wrong in the only way that matters: it is never true from the actual
+       * settings screen. EventSettings submits `{ ...form }`, so `event_date`
+       * rides along on every save whether it was touched or not. The guard
+       * would have been permanently dead, and a correction of nothing but the
+       * timezone would still have offered to tell every guest their event
+       * moved.
+       *
+       * So ask the question about the VALUE instead of about the payload: read
+       * each submitted wall clock back in the OLD zone and compare it to what
+       * the row already held. If they name the same instant, those digits are
+       * unchanged and every bit of movement came from the zone.
+       *
+       * Compared as instants, not as strings: Postgres returns
+       * "…T01:30:00+00:00" while wallClockToInstant produces "…T01:30:00.000Z".
+       * The same moment, and never equal with ===.
+       */
+      const sameInstant = (a, b) => {
+        if (!a && !b) return true;
+        if (!a || !b) return false;
+        const ta = new Date(a).getTime();
+        const tb = new Date(b).getTime();
+        return Number.isFinite(ta) && ta === tb;
+      };
+      reanchoredOnly = DATE_FIELDS.every((field) => (
+        retypedByOrganizer.has(field)
+          ? sameInstant(wallClockToInstant(submitted[field], oldZone), current?.[field])
+          : true // not submitted at all — this loop re-anchored it a moment ago
+      ));
+    }
+
+    for (const field of retypedByOrganizer) {
+      filteredUpdates[field] = wallClockToInstant(filteredUpdates[field], eventTimezone);
     }
 
     currentEventDate = current?.event_date;
@@ -944,7 +1081,20 @@ const updateEvent = async (req, res, next) => {
     let changeNotice = null;
     if (event && event.status === 'active') {
       const newWhere = event.location_name || event.location_address || null;
-      const dateChanged = priorWhen !== null && String(priorWhen) !== String(event.event_date);
+      /**
+       * A pure re-anchor is NOT a date change as far as a guest is concerned.
+       *
+       * The stored instant moves by hours, so the raw comparison below fires —
+       * but every guest-facing surface renders `event_date` in `event.timezone`,
+       * and re-anchoring changes both together precisely so the printed hour
+       * stays put. The invitation said 18:30 before and says 18:30 after.
+       *
+       * Offering to tell a hundred people their event moved, when the only
+       * thing they could check still reads exactly the same, would spend the
+       * organizer's message allowance to deliver confusion.
+       */
+      const dateChanged = !reanchoredOnly
+        && priorWhen !== null && String(priorWhen) !== String(event.event_date);
       const venueChanged = (filteredUpdates.location_name !== undefined || filteredUpdates.location_address !== undefined) && priorWhere !== newWhere;
       if (dateChanged || venueChanged) {
         const changed = [];

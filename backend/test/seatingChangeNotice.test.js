@@ -247,69 +247,96 @@ test('the subject line carries the news, in the guest\'s language', () => {
 
 /* ── 5. The text says it too ─────────────────────────────────────────────── */
 
-test('the seating text distinguishes a move from a first seating', () => {
+test('the table text states the table plainly', () => {
   const base = {
     guestName: 'Sara', eventTitle: 'The Wedding', tableName: 'Table 3',
     ticketUrl: 'https://fancyrsvp.com/i/Ab3xK9',
   };
   assert.match(renderSmsBody('seating_reminder', 'en', base), /Your table at The Wedding is Table 3/);
-  assert.match(
-    renderSmsBody('seating_reminder', 'en', { ...base, changed: true }),
-    /has changed to Table 3/,
-    'a move must not read identically to the text the guest already has',
-  );
-  assert.match(renderSmsBody('seating_reminder', 'ar', { ...base, changed: true }), /تغيّرت طاولتك/);
+  assert.match(renderSmsBody('seating_reminder', 'ar', base), /طاولتك/);
 });
 
-test('an unseated text never claims a table changed', () => {
-  // There is no table to have changed, and the queue row for an unseated guest
-  // is deleted anyway — but the template must not depend on that.
-  const body = renderSmsBody('seating_reminder', 'en', {
-    guestName: 'Sara', eventTitle: 'The Wedding', tableName: null,
-    ticketUrl: 'https://fancyrsvp.com/i/Ab3xK9', changed: true,
+test('no text can claim a table changed', () => {
+  /**
+   * The "has changed to" / "تغيّرت طاولتك" wording is GONE, along with the
+   * seating text it was written for. This type now fires from one place only —
+   * the day-before sweep — where it is the guest's first and only text about
+   * their table and so has nothing to contradict.
+   *
+   * Pinned as an absence rather than deleted outright: a `changed` flag is the
+   * obvious thing to reach for the next time someone wires a move to SMS, and
+   * a template that silently accepts and ignores it would read as working.
+   */
+  const base = {
+    guestName: 'Sara', eventTitle: 'The Wedding', tableName: 'Table 3',
+    ticketUrl: 'https://fancyrsvp.com/i/Ab3xK9',
+  };
+  ['en', 'ar'].forEach((lang) => {
+    const plain = renderSmsBody('seating_reminder', lang, base);
+    const withFlag = renderSmsBody('seating_reminder', lang, { ...base, changed: true });
+    assert.equal(withFlag, plain, `a stray changed flag must not alter the ${lang} body`);
   });
-  assert.doesNotMatch(body, /changed/);
+  assert.doesNotMatch(renderSmsBody('seating_reminder', 'en', base), /changed/);
+  assert.doesNotMatch(renderSmsBody('seating_reminder', 'ar', base), /تغيّرت/);
 });
 
 /* ── 6. The sweep is wired to all of it ──────────────────────────────────── */
 
-test('the seating sweep mails as well as texts', () => {
+const seatingSweepBody = () => {
   const src = read('services/emailScheduler.js');
   const start = src.indexOf('async function jobSeatingNotices');
-  assert.notEqual(start, -1);
-  const body = src.slice(start, src.indexOf('\n}', start));
+  assert.notEqual(start, -1, 'jobSeatingNotices was renamed — this file is pinned to it');
+  return src.slice(start, src.indexOf('\n}', start));
+};
 
-  assert.match(body, /sendQrTicketEmail\(/, 'the sweep must send the email leg');
+test('the seating sweep mails the pass', () => {
+  const body = seatingSweepBody();
+  assert.match(body, /sendQrTicketEmail\(/, 'the sweep must send the email');
   assert.match(body, /skipIfUnchanged: true/,
     'without the skip, every scheduler pass re-sends the same pass forever');
-  assert.match(body, /changed: movedByText/, 'and the text must be told when it is a move');
 });
 
-test('a failed email does not cost the guest their text', () => {
-  // The two legs are independent: the mail is free and carries the pass, the
-  // text is charged and carries the link. One throwing must not take the other.
-  const src = read('services/emailScheduler.js');
-  const start = src.indexOf('async function jobSeatingNotices');
-  const body = src.slice(start, src.indexOf('\n}', start));
-  const mailAt = body.indexOf('sendQrTicketEmail');
-  const catchAt = body.indexOf('catch (mailErr)');
-  assert.ok(catchAt > mailAt && catchAt !== -1, 'the email leg must be caught on its own');
-  assert.ok(body.indexOf('sendTransactionalSms') > catchAt,
-    'the text is sent after the mail has been caught, not inside its try');
-});
-
-test('the move is detected per channel, from that channel\'s own ledger', () => {
+test('the seating sweep sends NO text', () => {
   /**
-   * A guest with no phone was emailed table 7 and never texted anything. A text
-   * telling them their table "has changed" would be the first message they ever
-   * received about seating — announcing a change from a table they were never
-   * told about.
+   * The seating text was retired on request. This sweep is the only thing that
+   * ever sent it, so its absence here IS the removal — pinned so that a future
+   * change cannot quietly reinstate a charged message on every drag of a chart.
    *
-   * So the email asks the invitations ledger what IT last sent, and the text
-   * asks sms_log what IT last sent. The two are allowed to disagree.
+   * The `seating_reminder` TYPE deliberately survives: jobEventReminders still
+   * texts it in the 24 hours before the event, under the `evday:` ref. So this
+   * has to be asserted about the sweep specifically and not about the file.
+   */
+  const body = seatingSweepBody();
+  assert.doesNotMatch(body, /sendTransactionalSms/, 'seating a guest must not send a text');
+  assert.doesNotMatch(body, /seat:\$\{/, 'the seat: SMS idempotency ref should be gone with it');
+});
+
+test('the day-before text still exists, and is the only one left', () => {
+  // Guards the other half: "remove the seating text" must not become "remove
+  // the table text", which would leave guests with no text about their table.
+  const src = read('services/emailScheduler.js');
+  const start = src.indexOf('async function jobEventReminders');
+  const body = src.slice(start, src.indexOf('\n}', start));
+  assert.match(body, /type: 'seating_reminder'/);
+  assert.match(body, /ref: `evday:\$\{party\.id\}`/,
+    'the day-before ref is evday:, and it is now the only ref this type uses');
+});
+
+test('the per-channel move ledger is gone with the text it served', () => {
+  /**
+   * `textedADifferentTable` read sms_log for `seat:<party>:%` to decide whether
+   * a text should say "your table has changed". With no seating text, there is
+   * no such decision, and the query was the scheduler's only reason to read
+   * sms_log at all.
+   *
+   * The EMAIL keeps its own equivalent — sendQrTicketEmail asks the invitations
+   * ledger what it last delivered — which is what makes skipIfUnchanged work.
    */
   const src = read('services/emailScheduler.js');
-  assert.match(src, /\.from\('sms_log'\)/);
-  assert.match(src, /\.like\('ref', `seat:\$\{partyId\}:%`\)/,
-    'the seat: ref doubles as the record of which table each text announced');
+  // Matched WITH the paren: the identifier still appears in the prose above the
+  // sweep explaining what was removed and why, which is worth keeping. What
+  // must not come back is a declaration or a call.
+  assert.doesNotMatch(src, /textedADifferentTable\(/,
+    'a helper with no callers reads as a live feature to whoever finds it next');
+  assert.doesNotMatch(src, /\.from\('sms_log'\)/);
 });

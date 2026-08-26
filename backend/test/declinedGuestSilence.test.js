@@ -73,11 +73,26 @@ const fnBody = (src, decl) => {
 
 const scheduler = read('services/emailScheduler.js');
 
+/**
+ * Both guest-facing sweeps now read their audience through one paged helper
+ * rather than each running its own `.eq('response', 'yes')`, so the rule is
+ * pinned where it actually lives. Asserted once here, and each caller is
+ * asserted to go through it — a job that hand-rolled its own query again would
+ * fail the caller test, not slip past this one.
+ */
+test('the shared guest fetch selects only parties at yes', () => {
+  const body = fnBody(scheduler, 'async function fetchConfirmedParties');
+  assert.match(body, /\.eq\('response', 'yes'\)/,
+    'fetchConfirmedParties is the single audience filter for the guest sweeps');
+});
+
 test('the day-before reminder goes to confirmed guests only', () => {
   // Carries the table AND the entry pass, so a leak here is the door case.
   const body = fnBody(scheduler, 'async function jobEventReminders');
-  assert.match(body, /\.eq\('response', 'yes'\)/,
-    'jobEventReminders must select only parties at yes');
+  assert.match(body, /fetchConfirmedParties\(/,
+    'jobEventReminders must take its audience from the confirmed-only fetch');
+  assert.doesNotMatch(body, /\.from\('rsvp_parties'\)/,
+    'jobEventReminders must not query guests directly — that bypasses the audience filter');
 });
 
 test('the RSVP nudge chases only guests who have not answered', () => {
@@ -90,8 +105,10 @@ test('the RSVP nudge chases only guests who have not answered', () => {
 
 test('the post-event thank-you goes to attendees only', () => {
   const body = fnBody(scheduler, 'async function jobPostEvent');
-  assert.match(body, /\.eq\('response', 'yes'\)/,
+  assert.match(body, /fetchConfirmedParties\(/,
     'jobPostEvent must thank only the guests who came');
+  assert.doesNotMatch(body, /\.from\('rsvp_parties'\)/,
+    'jobPostEvent must not query guests directly — that bypasses the audience filter');
 });
 
 test('the seating notice is not texted to somebody who declined after being seated', () => {

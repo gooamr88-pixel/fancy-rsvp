@@ -33,7 +33,13 @@ const invitationService = require('./invitationService');
 
 const HOUR = 3600 * 1000;
 const DAY = 24 * HOUR;
-const LIMIT = 250; // per-event guest cap per run (safety)
+const LIMIT = 250; // rows per page when walking an event's guest list
+/**
+ * A ceiling on how much of one event we will hold in memory at once. Not a
+ * business rule — no tier sells this many — just the guard that keeps a
+ * runaway or corrupted event from taking the scheduler down with it.
+ */
+const MAX_PARTIES_PER_EVENT = 20000;
 const MAX_RETRIES = 3; // max retry attempts for failed email sends
 const RETRY_BASE_MS = 1000; // base delay for exponential backoff (1s, 2s, 4s)
 const nowISO = () => new Date().toISOString();
@@ -111,7 +117,9 @@ const ticketLinksFor = (party, ev, tableName = null) => {
     return null;
   }
 };
-const ticketUrlFor = (party, ev, tableName = null) => ticketLinksFor(party, ev, tableName)?.ticketUrl || null;
+/* `ticketUrlFor` lived here too — the bare link the seating TEXT carried, since
+   an SMS cannot hold the pass itself. The day-before text builds its link from
+   ticketLinksFor directly, so retiring the seating text left it with no callers. */
 
 /**
  * Try to deliver a lifecycle message by SMS, and report whether the email should
@@ -145,6 +153,50 @@ async function trySms(ev, { type, partyId = null, ref, context, lang = 'en' }) {
     logger.warn({ err, type, eventId: ev.id }, '[email-scheduler] SMS attempt failed; falling back to email');
     return false;
   }
+}
+
+/**
+ * Every confirmed party for an event, walked a page at a time.
+ *
+ * ── WHY THIS IS NOT `.limit(250)` ──
+ *
+ * It used to be. A bare `.limit(LIMIT)` reads like a safety valve, and on a
+ * job that re-runs every few minutes it looks self-correcting — the next sweep
+ * picks up where this one left off. It does not. There is no cursor: every run
+ * asks for the same first 250 rows, and dedupe then drops all 250 as already
+ * sent. Guest 251 onward is never selected by any run, so on an event with 300
+ * confirmed guests, fifty people simply never receive their table and entry
+ * pass. Nothing errors and the job reports success.
+ *
+ * `.order('id')` is what makes paging safe rather than decorative: without a
+ * deterministic sort, PostgREST may return rows in any order per request, so
+ * `.range()` windows can overlap and skip. Ordering by the primary key gives a
+ * stable sequence for the length of the walk.
+ */
+async function fetchConfirmedParties(eventId, select) {
+  const out = [];
+  for (let from = 0; from < MAX_PARTIES_PER_EVENT; from += LIMIT) {
+    const { data, error } = await supabase
+      .from('rsvp_parties').select(select)
+      .eq('event_id', eventId).eq('response', 'yes')
+      .order('id', { ascending: true })
+      .range(from, from + LIMIT - 1);
+
+    // A failed page is not a reason to abandon the guests already collected —
+    // sending to the ones we have beats sending to nobody — but it must be
+    // loud, because the silent version of this is the bug described above.
+    if (error) {
+      logger.warn({ err: error, eventId, from }, '[email-scheduler] guest page failed; continuing with a partial list');
+      break;
+    }
+    if (!data || data.length === 0) break;
+    out.push(...data);
+    if (data.length < LIMIT) break;
+  }
+  if (out.length >= MAX_PARTIES_PER_EVENT) {
+    logger.warn({ eventId, cap: MAX_PARTIES_PER_EVENT }, '[email-scheduler] guest list hit the memory cap — remaining guests not processed this run');
+  }
+  return out;
 }
 
 /* ─── 1. RSVP reminders — invited, still-pending guests as the deadline nears ─── */
@@ -234,10 +286,11 @@ async function jobEventReminders() {
     .limit(100);
   let sent = 0;
   for (const ev of (events || [])) {
-    const { data: parties } = await supabase
-      .from('rsvp_parties').select('id, label, response, preferred_lang, guests(is_primary_contact, email), seating_assignments(tables(table_name))')
-      .eq('event_id', ev.id).eq('response', 'yes').limit(LIMIT);
-    for (const party of (parties || [])) {
+    const parties = await fetchConfirmedParties(
+      ev.id,
+      'id, label, response, preferred_lang, guests(is_primary_contact, email), seating_assignments(tables(table_name))',
+    );
+    for (const party of parties) {
       // Inside the window by construction, so the chart is revealed and this is
       // the real, final table — no `revealed` check left to get out of step
       // with the send window.
@@ -292,6 +345,40 @@ async function jobEventReminders() {
     }
   }
   return sent;
+}
+
+/**
+ * The next instant at which some event will CROSS the T-24h mark, or null.
+ *
+ * ── WHY A POLLING SWEEP CANNOT BE ON TIME, AND WHAT THIS REPLACES IT WITH ──
+ *
+ * `jobEventReminders` asks "is anything inside the 24h window?" — a question
+ * whose answer only changes at one precise moment per event, and which the
+ * scheduler was asking on a 15-minute cadence phased to whenever the process
+ * last restarted. So the reminder landed somewhere in a fifteen-minute smear
+ * after the mark, at an offset that had nothing to do with the event and moved
+ * every deploy. Organizers reasonably read "24 hours before" as a promise.
+ *
+ * Rather than sweeping faster — which costs a full six-job run every minute to
+ * buy a minute of accuracy — this asks the database for the ONE moment that
+ * matters next and sleeps until exactly then.
+ *
+ * `.gt()` and not `.gte()`: an event already inside the window is this run's
+ * work, not the next alarm. Including it would arm a timer for a moment
+ * already past and spin.
+ */
+async function nextEventReminderDueAt() {
+  const { data, error } = await supabase
+    .from('events')
+    .select('event_date')
+    .eq('status', 'active').eq('is_paid', true)
+    .gt('event_date', new Date(Date.now() + EVENT_REMINDER_WINDOW_MS).toISOString())
+    .order('event_date', { ascending: true })
+    .limit(1);
+
+  if (error || !data || data.length === 0) return null;
+  const at = new Date(data[0].event_date).getTime();
+  return Number.isNaN(at) ? null : at - EVENT_REMINDER_WINDOW_MS;
 }
 
 /* ─── 3. Final headcount report — to the organizer ~24-30h before the event ─── */
@@ -354,10 +441,8 @@ async function jobPostEvent() {
       }
       await stamp('events', ev.id, 'recap_sent_at');
     }
-    const { data: parties } = await supabase
-      .from('rsvp_parties').select('id, label, guests(is_primary_contact, email)')
-      .eq('event_id', ev.id).eq('response', 'yes').limit(LIMIT);
-    for (const party of (parties || [])) {
+    const parties = await fetchConfirmedParties(ev.id, 'id, label, guests(is_primary_contact, email)');
+    for (const party of parties) {
       const email = primaryEmailOf(party);
       if (!email) continue;
       const r = { id: party.id, guest_name: party.label, email };
@@ -548,66 +633,45 @@ async function notifyGuestsOfEventChange(eventId, { includeSms = false, force = 
   }
 }
 
-/* ─── 6. Seating notices — text guests their table, once the dust has settled ─── */
+/* ─── 6. Seating notices — re-mail a moved guest their pass, once the dust settles ─── */
 
 /**
- * How long a party's seat must sit UNCHANGED before we text them about it.
+ * ── THE SEATING TEXT IS RETIRED. THIS JOB IS EMAIL-ONLY. ──
+ *
+ * It used to send both: a charged `seating_reminder` SMS keyed
+ * `seat:<party>:<table>`, and the pass by email. The text is gone — removed on
+ * request — and with it `textedADifferentTable`, which existed solely to decide
+ * whether that text should read "your table has changed".
+ *
+ * What is deliberately NOT gone:
+ *
+ *   • The queue and this sweep. The email needs the quiet period just as much
+ *     as the text did (see below), and it is the only thing that tells a MOVED
+ *     guest anything at all.
+ *   • The `seating_reminder` SMS TYPE in config/smsMessageTypes.js. It still
+ *     fires — from jobEventReminders, in the 24 hours before the event, under
+ *     the `evday:` ref. Deleting the type would silence that too.
+ *
+ * A guest is therefore told their table by email when they are seated or moved,
+ * and by text only once, the day before.
+ */
+
+/**
+ * How long a party's seat must sit UNCHANGED before we mail them about it.
  *
  * The whole reason this job exists. Seating endpoints do not send; they upsert
  * into seating_notify_queue, and every subsequent move overwrites the row. This
  * job sweeps rows that have been still for the quiet period and sends once, with
  * the final table.
  *
- * Without it, a drag-and-drop session on a 200-guest chart would issue one text
- * per drop — hundreds of charged messages for one afternoon of tidying, and a
- * guest moved four times receiving four texts, three of them naming a table they
- * are not sitting at.
- *
- * Ten minutes, plus up to one scheduler interval, means a guest hears within
- * roughly 25 minutes of the organizer finishing. The seating screen says so.
+ * Without it, a drag-and-drop session on a 200-guest chart would issue one
+ * message per drop — a guest moved four times receiving four passes, three of
+ * them naming a table they are not sitting at. That was the argument when the
+ * message was a charged text and it survives the text's removal intact: the
+ * cost is now the guest's attention rather than the organizer's balance, which
+ * is the cheaper of the two to spend but not free.
  */
 const SEATING_QUIET_MS = 10 * 60 * 1000;
-
-/**
- * Have we already TEXTED this party about a DIFFERENT table?
- *
- * Read from sms_log rather than from the seating queue, because the queue only
- * ever holds one row per party — the current state — and by the time this job
- * runs, the row that named the old table has been overwritten by the move that
- * queued this one. The send ledger is the only place the previous answer still
- * exists.
- *
- * The ref format is the load-bearing detail: `seat:<party>:<table>` was chosen
- * as an idempotency key, and it doubles as a record of which table each text
- * announced. Anything on file for this party naming a different table means
- * they are holding a message this one is about to contradict — which is
- * exactly when the copy has to say so.
- *
- * Answers the SMS side only. The email side asks the same question of the
- * invitations ledger (see sendQrTicketEmail), because the two channels can
- * genuinely disagree: a guest with no phone was emailed a table and never
- * texted one, and a text claiming their table "has changed" would be the first
- * they had ever heard of it.
- */
-async function textedADifferentTable(partyId, tableId) {
-  try {
-    const { data, error } = await supabase
-      .from('sms_log')
-      .select('ref')
-      .eq('kind', 'seating_reminder')
-      .eq('status', 'sent')
-      .like('ref', `seat:${partyId}:%`)
-      .limit(20);
-    if (error || !data) return false;
-    return data.some((r) => r.ref && r.ref !== `seat:${partyId}:${tableId}`);
-  } catch {
-    // Unreadable ledger: say it is not a change. The plain wording is correct
-    // for a first seating and merely terse for a move; the reverse — telling a
-    // guest their table changed when it never did — is a message that sends
-    // them looking for a problem that does not exist.
-    return false;
-  }
-}
 
 async function jobSeatingNotices() {
   const dueBefore = new Date(Date.now() - SEATING_QUIET_MS).toISOString();
@@ -651,23 +715,21 @@ async function jobSeatingNotices() {
 
     for (const row of rows) {
       try {
+        /* Narrowed when the text was retired. The label, language, contacts and
+           live table were all read to BUILD the SMS body; sendQrTicketEmail
+           looks up everything it needs itself, so all that remains to decide
+           here is whether this party is still coming. */
         const { data: party } = await supabase
           .from('rsvp_parties')
-          .select('id, label, response, preferred_lang, guests(is_primary_contact), seating_assignments(tables(id, table_name))')
+          .select('id, response')
           .eq('id', row.party_id).maybeSingle();
 
-        // Only confirmed attendees get a table text. Someone who declined after
+        // Only confirmed attendees get a table. Someone who declined after
         // being seated should not be told where they are sitting.
         if (party && party.response === 'yes') {
-          // Read the table from the LIVE assignment, not from the queued
-          // table_id. The queue row records that something changed; the database
-          // records what it changed to, and between the two the database is the
-          // one that cannot be stale.
-          const tableName = party.seating_assignments?.[0]?.tables?.table_name || null;
-          const tableId = party.seating_assignments?.[0]?.tables?.id || row.table_id || 'none';
-
           /**
-           * THE EMAIL LEG — added 2026-08-22.
+           * THE EMAIL — and, since the seating text was retired, the only thing
+           * this job sends. See the note on the job itself for why.
            *
            * A move used to be texted and never mailed. assignSeat emails the
            * pass the moment a guest is first seated, but reassignSeat and the
@@ -675,8 +737,7 @@ async function jobSeatingNotices() {
            * pass a moved guest already holds is still valid at the door. It is
            * — the scanner re-reads the live table — but the guest is holding
            * an email that says table 7 while they are seated at table 3, and
-           * for a guest with no phone number, or one who never consented to
-           * SMS, that email was the ONLY thing that ever named their table.
+           * that email is now the ONLY thing that ever names their table.
            *
            * Sent unconditionally here, because sendQrTicketEmail's
            * skipIfUnchanged does the deciding: it reads the last pass this
@@ -686,9 +747,6 @@ async function jobSeatingNotices() {
            * immediately, once by this sweep ten minutes later — and it is
            * keyed on what was DELIVERED rather than on what the queue row
            * happens to say.
-           *
-           * Deliberately before the text: the mail is free and carries the
-           * scannable pass, the text is charged and carries a link to it.
            */
           try {
             const mail = await invitationService.sendQrTicketEmail(eventId, party.id, {
@@ -697,41 +755,10 @@ async function jobSeatingNotices() {
             if (mail?.sent) sent += 1;
           } catch (mailErr) {
             // NOT_ATTENDING / PARTY_NOT_FOUND throw. Neither should stop the
-            // text, and neither should stop the rest of the sweep.
+            // rest of the sweep.
             logger.warn({ err: mailErr, partyId: party.id }, '[email-scheduler] seating change email failed');
           }
 
-          const movedByText = await textedADifferentTable(party.id, tableId);
-
-          const result = await sendTransactionalSms({
-            type: 'seating_reminder',
-            eventId,
-            partyId: party.id,
-            /**
-             * `seat:<party>:<table>` — the ref IS the idempotency rule, and it
-             * reads as "we told this party about this table once".
-             *
-             * A guest moved A → B → A inside the quiet window collapses to one
-             * queue row naming A, and this ref then matches the send already in
-             * sms_log, so it skips as DUPLICATE and costs nothing. Which is
-             * exactly right: nothing actually changed for that guest.
-             *
-             * A genuine A → B a week later is a new ref, so it sends once.
-             */
-            ref: `seat:${party.id}:${tableId}`,
-            event: ev,
-            lang: party.preferred_lang || 'en',
-            context: {
-              guestName: party.label,
-              eventTitle: ev.title,
-              tableName,
-              ticketUrl: ticketUrlFor(party, ev, tableName),
-              // Makes the text read "your table has changed to 3" rather than
-              // "your table is 3" — see textedADifferentTable.
-              changed: movedByText,
-            },
-          });
-          if (result.sent) sent += 1;
         }
       } catch (err) {
         logger.warn({ err, partyId: row.party_id }, '[email-scheduler] seating notice failed');
@@ -740,10 +767,10 @@ async function jobSeatingNotices() {
       /**
        * Stamped WHATEVER happened — sent, skipped, or thrown.
        *
-       * The outcome belongs in sms_log, which records it with a reason. This
-       * column only answers "have we dealt with this queue row yet". Leaving it
-       * null on a skip would retry a guest who has no phone number every fifteen
-       * minutes until the event, forever.
+       * The outcome belongs in the invitations ledger, which records what was
+       * actually delivered. This column only answers "have we dealt with this
+       * queue row yet". Leaving it null on a skip would retry a guest with no
+       * email address every fifteen minutes until the event, forever.
        */
       await supabase.from('seating_notify_queue')
         .update({ notified_at: nowISO() })
@@ -779,6 +806,129 @@ async function runOnce(trigger = 'interval') {
   return summary;
 }
 
+/* ─────────────────────────────────────────────────────────────────────────────
+ * THE DAY-BEFORE ALARM
+ *
+ * The full sweep stays exactly as it was — six jobs, every fifteen minutes. It
+ * is the right shape for work whose due moment is soft: an RSVP chase, a recap,
+ * a payment nudge. Nobody notices whether those land at 10:00 or 10:12.
+ *
+ * The day-before reminder is not that. It is a promise with a number in it, and
+ * it was being served by the same coarse sweep, so it arrived up to fifteen
+ * minutes late at an offset determined by the last process restart.
+ *
+ * This is a separate, much cheaper clock that runs ONLY `jobEventReminders`.
+ * Each hop asks for the single next moment an event crosses T-24h and sleeps
+ * until precisely then, so the reminder goes out within a second of the mark
+ * instead of somewhere in a fifteen-minute smear.
+ * ───────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * The longest one hop will ever sleep.
+ *
+ * The alarm is armed from a snapshot of the database, and the database keeps
+ * changing underneath it: an event created, a date edited, an event paid for.
+ * Any of those can introduce a mark EARLIER than the one currently armed, and
+ * nothing notifies this file when they happen. Waking at least once a minute
+ * re-reads the answer, which bounds how stale the armed mark can be.
+ *
+ * The residue: an event whose mark falls inside the current hop's remaining
+ * sleep is served up to a minute late. That can only happen to an event created
+ * or moved to start within ~24 hours from now — already at or past its own
+ * mark, where "as soon as possible" is the correct behaviour anyway.
+ */
+const ALARM_MAX_SLEEP_MS = 60 * 1000;
+
+/**
+ * Land just PAST the mark rather than exactly on it.
+ *
+ * `jobEventReminders` selects `event_date <= now + 24h`. Firing at the
+ * theoretical instant races that comparison — clock resolution, the round trip
+ * to Postgres, and `setTimeout`'s own habit of firing a hair early can all put
+ * `now` a millisecond on the wrong side, in which case the query matches
+ * nothing and the guest waits for the next hop. A second of deliberate lateness
+ * is invisible to a human and removes the race.
+ */
+const ALARM_GUARD_MS = 1000;
+
+/**
+ * How long to sleep given the next mark — the whole timing decision, kept pure
+ * so it can be asserted directly instead of inferred from a running timer.
+ *
+ * `dueAt` of null means no event is approaching the window at all, which is the
+ * ordinary state of a quiet database rather than an error: sleep the full hop
+ * and look again.
+ */
+function alarmSleepMs(dueAt, now = Date.now()) {
+  if (dueAt === null || dueAt === undefined) return ALARM_MAX_SLEEP_MS;
+  // A mark already in the past clamps to the guard rather than going negative:
+  // this job is due NOW, and setTimeout would fire immediately anyway.
+  return Math.min(ALARM_MAX_SLEEP_MS, Math.max(0, dueAt - now) + ALARM_GUARD_MS);
+}
+
+let alarmTimer = null;
+let alarmStopped = true;
+
+/** Run the day-before job alone, off the alarm rather than off the sweep. */
+async function fireReminderAlarm() {
+  // A full sweep in flight already includes this job, and letting both run
+  // would have two workers competing over the same guests. Their dedupe keys
+  // are UNIQUE indexes, so concurrent sends would not double-deliver — they
+  // would collide and retry, which is wasted work and confusing logs for no
+  // gain. Skipping is free, because the sweep is doing the job right now.
+  if (running) return;
+
+  /* THE COST OF SHARING `running` WITH THE SWEEP, ACCEPTED DELIBERATELY.
+     Holding the same flag means that if the fifteen-minute sweep fires while
+     this alarm is mid-send, the sweep skips ALL SIX jobs and waits another
+     fifteen minutes — so an RSVP chase or a recap can be delayed by one cycle
+     because a reminder happened to be going out.
+
+     Kept anyway: a second, finer-grained lock would let both run
+     jobEventReminders at once, and trading a rare fifteen-minute delay on soft
+     work for a routine race on charged messages is the wrong way round. The
+     collision window is the duration of one jobEventReminders call — seconds —
+     against a fifteen-minute period. */
+  running = true;
+  try {
+    const sent = await jobEventReminders();
+    if (sent) logger.info({ sent, trigger: 'alarm' }, '[email-scheduler] day-before reminders sent on the mark');
+  } catch (err) {
+    logger.warn({ err }, '[email-scheduler] day-before alarm run failed');
+  } finally {
+    running = false;
+  }
+}
+
+/**
+ * Sleep until the next mark, then fire and re-arm.
+ *
+ * Self-correcting by construction: every hop re-derives its own next hop from
+ * the database, so a failed query, a missed event or a system clock that jumps
+ * costs one hop of accuracy rather than breaking the chain. There is no
+ * long-lived timer to get out of date.
+ */
+async function armReminderAlarm() {
+  if (alarmTimer) { clearTimeout(alarmTimer); alarmTimer = null; }
+  if (alarmStopped) return;
+
+  let sleep = ALARM_MAX_SLEEP_MS;
+  try {
+    sleep = alarmSleepMs(await nextEventReminderDueAt());
+  } catch (err) {
+    logger.warn({ err }, '[email-scheduler] could not read the next reminder mark — retrying next hop');
+  }
+
+  // Re-checked because the await above yields, and stop() may have run during it.
+  if (alarmStopped) return;
+
+  alarmTimer = setTimeout(async () => {
+    await fireReminderAlarm();
+    armReminderAlarm().catch(() => {});
+  }, sleep);
+  if (alarmTimer.unref) alarmTimer.unref();
+}
+
 let timer = null;
 function start() {
   if (process.env.EMAIL_AUTOMATION_ENABLED !== 'true') {
@@ -808,11 +958,24 @@ function start() {
     return;
   }
   const intervalMin = Math.max(5, parseInt(process.env.EMAIL_SCHEDULER_INTERVAL_MIN, 10) || 15);
-  logger.info(`[email-scheduler] enabled — sweeping every ${intervalMin} min`);
+  logger.info(`[email-scheduler] enabled — full sweep every ${intervalMin} min; day-before reminders fire on the T-24h mark`);
   timer = setInterval(() => runOnce('interval').catch(() => {}), intervalMin * 60 * 1000);
   if (timer.unref) timer.unref();
   setTimeout(() => runOnce('startup').catch(() => {}), 30 * 1000).unref();
-}
-function stop() { if (timer) { clearInterval(timer); timer = null; } }
 
-module.exports = { start, stop, runOnce, notifyGuestsOfEventChange, NOTIFIABLE_RESPONSES, JOBS };
+  alarmStopped = false;
+  armReminderAlarm().catch(() => {});
+}
+function stop() {
+  if (timer) { clearInterval(timer); timer = null; }
+  alarmStopped = true;
+  if (alarmTimer) { clearTimeout(alarmTimer); alarmTimer = null; }
+}
+
+module.exports = {
+  start, stop, runOnce, notifyGuestsOfEventChange, NOTIFIABLE_RESPONSES, JOBS,
+  // Exported for the timing tests: the alarm's accuracy is the whole point of
+  // this module now, and it is not observable through start()/stop() alone.
+  nextEventReminderDueAt, fetchConfirmedParties, alarmSleepMs,
+  ALARM_MAX_SLEEP_MS, ALARM_GUARD_MS, EVENT_REMINDER_WINDOW_MS,
+};

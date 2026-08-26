@@ -1,6 +1,8 @@
 'use client';
 import { toast } from '../../utils/toast';
-import { instantToWallClock, formatInZone } from '../../utils/timezone';
+import {
+  instantToWallClock, formatInZone, wallClockToInstant, zoneAbbreviation,
+} from '../../utils/timezone';
 
 import React, { useCallback, useEffect, useState } from 'react';
 import PlacesAutocomplete from '../../components/PlacesAutocomplete';
@@ -37,6 +39,37 @@ const COLORS = {
   gold: '#B8944F', goldHover: '#a6833f', charcoal: '#191B1E', ivory: '#F8F4EC',
   champagne: '#D7BE80', stone: '#77736A', border: '#E8E2D6', white: '#FFFFFF', softBg: '#FAFAF8',
 };
+
+/**
+ * Every zone the runtime's own IANA database knows.
+ *
+ * Read from `Intl` rather than shipped as a list, for the same reason the
+ * backend validates by construction: the database gains and renames zones, and
+ * a hard-coded array starts rotting the day it is written. Computed once at
+ * module scope — it is several hundred strings and never changes within a
+ * session.
+ *
+ * `supportedValuesOf` is a recent addition, so its absence is a real case and
+ * not a defensive flourish; the empty array it leaves behind is what the field
+ * below checks to fall back to free text.
+ */
+const TIME_ZONES = (() => {
+  try {
+    if (typeof Intl.supportedValuesOf === 'function') return Intl.supportedValuesOf('timeZone');
+  } catch { /* an older runtime — the text fallback covers it */ }
+  return [];
+})();
+
+/**
+ * The <option> elements, built ONCE for the module.
+ *
+ * There are ~420 of them, and this screen re-renders on every keystroke in
+ * every field on it. Mapping the list inside the component would rebuild four
+ * hundred elements per character typed into the title box — invisible on a
+ * desktop, not invisible on a phone. The list is a frozen module constant and
+ * the options never depend on state, so there is nothing to recompute.
+ */
+const TIME_ZONE_OPTIONS = TIME_ZONES.map((z) => <option key={z} value={z}>{z}</option>);
 
 /* The opening a cinematic template mounts, keyed by `cinematic.opening`.
    See the note on CINEMATIC_OPENINGS in [slug]/EventPageClient.js — a ternary
@@ -250,7 +283,7 @@ export default function EventSettings({ eventId, event, onEventUpdated, onEventD
   const [form, setForm] = useState({
     title: '', slug: '', description: '', event_date: '', event_end_date: '', location_name: '', location_address: '',
     location_lat: null, location_lng: null, location_place_id: '',
-    rsvp_deadline: '', privacy_mode: 'public', access_password: '',
+    rsvp_deadline: '', privacy_mode: 'public', access_password: '', timezone: '',
     dress_code: '', cover_image_url: '',
     primary_color: '#B8944F', secondary_color: '#D7BE80', accent_color: '#B8944F', background_color: '#FFFDF7',
     background_music_url: '', gallery_urls: [],
@@ -550,6 +583,11 @@ export default function EventSettings({ eventId, event, onEventUpdated, onEventD
         location_lng: event.location_lng || null,
         location_place_id: event.location_place_id || '',
         rsvp_deadline: toLocalDatetimeString(event.rsvp_deadline, event.timezone),
+        // Blank when the column is null rather than substituting a guess: the
+        // save handler drops an empty value so an event that predates the
+        // timezone feature is not silently refiled under whatever this form
+        // happened to display.
+        timezone: event.timezone || '',
         privacy_mode: event.privacy_mode || 'public',
         // The server no longer sends the stored password hash at all (see
         // withResolvedTier) — this always starts blank. Pre-filling it with the
@@ -749,6 +787,40 @@ export default function EventSettings({ eventId, event, onEventUpdated, onEventD
     setSuccess(false);
   };
 
+  /**
+   * Has the organizer picked a different zone than the one on record?
+   *
+   * Compared against `event.timezone` — the saved value — rather than against
+   * anything derived from the form, so it reflects a pending change and clears
+   * itself once the save lands.
+   */
+  const timezoneChanged = !!form.timezone && !!event?.timezone && form.timezone !== event.timezone;
+
+  /**
+   * The start time written out in full, on the zone currently selected.
+   *
+   * The point is verification, not decoration. Everything else on this screen
+   * is digits the organizer typed, which look identical whether the zone is
+   * right or wrong; this line spells out the day and the hour with the zone's
+   * own abbreviation beside it, which is the form in which a person actually
+   * notices "that is not my clock".
+   *
+   * Built from the form rather than from `event`, so switching the selector
+   * updates it before saving.
+   */
+  const startsAtLabel = (() => {
+    if (!form.event_date || !form.timezone) return '';
+    const instant = wallClockToInstant(form.event_date, form.timezone);
+    if (!instant) return '';
+    const when = formatInZone(instant, form.timezone, {
+      weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
+      hour: 'numeric', minute: '2-digit',
+    });
+    if (!when) return '';
+    const abbr = zoneAbbreviation(instant, form.timezone);
+    return abbr ? `${when} ${abbr}` : when;
+  })();
+
   const handleSave = async () => {
     // Validate date ordering up front — previously an event could be saved
     // with an end date before its start date, or an RSVP deadline after the
@@ -791,6 +863,10 @@ export default function EventSettings({ eventId, event, onEventUpdated, onEventD
       // only checked privacy_mode, so a password-protected event resubmitted
       // whatever was pre-filled (the raw hash) on every unrelated save.
       if (body.privacy_mode !== 'password' || !body.access_password.trim()) delete body.access_password;
+      // An event predating the timezone feature has a null zone, which this
+      // form shows as blank. Sending "" would fail validation on every
+      // unrelated save; omitting it means "leave as-is", which is right.
+      if (!body.timezone) delete body.timezone;
       // Don't send an unchanged/empty slug — updateEvent treats an omitted
       // field as "leave as-is", which is what we want when the organizer
       // never touched this field.
@@ -1349,6 +1425,73 @@ export default function EventSettings({ eventId, event, onEventUpdated, onEventD
               onFocus={(e) => { e.target.style.borderColor = COLORS.gold; }}
               onBlur={(e) => { e.target.style.borderColor = COLORS.border; }}
             />
+          </div>
+        </div>
+
+        {/*
+          THE EVENT'S TIMEZONE — displayed because it was invisible, and the
+          invisibility was the bug.
+
+          The times above are digits on a clock; this is whose clock they are.
+          It is decided once when the event is created and was, until now,
+          unreachable afterwards and shown nowhere — so an event filed under the
+          wrong zone stayed wrong forever, and the only symptom an organizer
+          could see was reminders arriving hours off the mark.
+
+          Changing it keeps the hours above exactly as typed and moves the real
+          moment instead, which is why the sample line below prints the hour
+          rather than the offset: that is the thing the organizer can actually
+          recognise as right or wrong.
+        */}
+        <div className="es-row" style={rowStyle}>
+          <div style={fieldGroupStyle}>
+            <label style={labelStyle} htmlFor="es-timezone">Event Timezone</label>
+            {TIME_ZONES.length > 0 ? (
+              <select
+                id="es-timezone"
+                value={form.timezone}
+                onChange={handleChange('timezone')}
+                style={inputStyle}
+                onFocus={(e) => { e.target.style.borderColor = COLORS.gold; }}
+                onBlur={(e) => { e.target.style.borderColor = COLORS.border; }}
+              >
+                {/* Present only until one is chosen — an event with no stored
+                    zone must not look as though it has one. */}
+                {!form.timezone && <option value="">— not set —</option>}
+                {TIME_ZONE_OPTIONS}
+              </select>
+            ) : (
+              // Intl.supportedValuesOf is recent. Without it there is no list to
+              // offer, and a free-text field the server validates beats no
+              // control at all — INVALID_TIMEZONE comes back as a normal error.
+              <input
+                id="es-timezone"
+                type="text"
+                value={form.timezone}
+                onChange={handleChange('timezone')}
+                placeholder="e.g. Africa/Cairo"
+                style={inputStyle}
+                onFocus={(e) => { e.target.style.borderColor = COLORS.gold; }}
+                onBlur={(e) => { e.target.style.borderColor = COLORS.border; }}
+              />
+            )}
+            <p style={{ margin: '6px 0 0', fontSize: '12px', color: COLORS.stone, lineHeight: 1.5 }}>
+              The clock your start and end times are read on. Reminders, the
+              seating reveal and every time shown to guests all follow it.
+            </p>
+          </div>
+          <div style={fieldGroupStyle}>
+            <label style={labelStyle}>Your event starts</label>
+            <div style={{ ...inputStyle, display: 'flex', alignItems: 'center', background: COLORS.softBg, color: COLORS.stone }}>
+              {startsAtLabel || '—'}
+            </div>
+            {timezoneChanged && (
+              <p style={{ margin: '6px 0 0', fontSize: '12px', color: COLORS.gold, lineHeight: 1.5 }}>
+                Saving keeps the time you typed and moves the actual moment to{' '}
+                {form.timezone}. Guests keep seeing the same hour — only reminder
+                timing is corrected.
+              </p>
+            )}
           </div>
         </div>
 

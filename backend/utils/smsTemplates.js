@@ -199,36 +199,35 @@ const TEMPLATES = {
    * still needs the thing that gets them through the door.
    */
   seating_reminder: {
-    [EN]: ({ guestName, eventTitle, tableName, ticketUrl, dateLabel, changed = false }) => {
+    /**
+     * ── THERE IS NO "your table has changed" WORDING ANY MORE ──
+     *
+     * There was, and it earned its 11 characters: a guest who is MOVED cannot
+     * be told in the same words as last time, or the message reads as a
+     * duplicate and they keep believing the table it was sent to correct.
+     *
+     * It went when the seating text did. This type now fires from exactly one
+     * place — jobEventReminders, in the 24 hours before the event — and that is
+     * a guest's FIRST and only text about their table, so there is nothing for
+     * it to contradict. A move between now and then is carried by email, which
+     * has its own change wording. Re-adding a `changed` flag here without a
+     * caller that can set it would be dead copy the budget still pays for.
+     */
+    [EN]: ({ guestName, eventTitle, tableName, ticketUrl, dateLabel }) => {
       const who = clip(guestName, NAME_MAX);
       const what = clip(eventTitle, TITLE_MAX);
       const table = tableName ? clip(tableName, TABLE_MAX) : null;
       // "is on Saturday" — the "on" costs three characters and is what stops
       // the sentence reading like a timetable entry.
       const when = dateLabel ? ` is on ${dateLabel}` : '';
-      /**
-       * "has changed to" costs 11 characters over "is", and it is the only
-       * wording that does the job.
-       *
-       * A guest who is moved gets a text naming a table. If it reads exactly
-       * like the one they got last week, the reasonable reading is that the
-       * platform sent the same message twice — so they trust the first one,
-       * which names the table they are no longer sitting at. The whole point
-       * of texting a move is to contradict something the guest already
-       * believes, and that cannot be done in the same words.
-       *
-       * It is charged only on an actual move. A first seating, and the
-       * day-before reminder, both still take the shorter form.
-       */
-      const verb = changed && table ? 'has changed to' : 'is';
       // "Your table is 12" rather than "You are at table 12": fewer words, and
       // it answers the question the guest is actually asking.
-      if (table && when) return `Hi ${who}! ${what}${when}. Your table ${verb} ${table}. Show this at the door: ${ticketUrl}`;
-      if (table) return `Hi ${who}! Your table at ${what} ${verb} ${table}. Show this at the door: ${ticketUrl}`;
+      if (table && when) return `Hi ${who}! ${what}${when}. Your table is ${table}. Show this at the door: ${ticketUrl}`;
+      if (table) return `Hi ${who}! Your table at ${what} is ${table}. Show this at the door: ${ticketUrl}`;
       if (when) return `Hi ${who}! ${what}${when}. Show this at the door: ${ticketUrl}`;
       return `Hi ${who}! Show this at the door for ${what}: ${ticketUrl}`;
     },
-    [AR]: ({ guestName, eventTitle, tableName, ticketUrl, dateLabel, changed = false }) => {
+    [AR]: ({ guestName, eventTitle, tableName, ticketUrl, dateLabel }) => {
       const who = clip(guestName, NAME_MAX);
       const what = clip(eventTitle, TITLE_MAX);
       const table = tableName ? clip(tableName, TABLE_MAX) : null;
@@ -250,13 +249,10 @@ const TEMPLATES = {
       // one word instead of two, plainer, and it buys back the units the warmer
       // wording elsewhere spends.
       //
-      // A MOVE says so — "تغيّرت طاولتك" (your table has changed) — for the
-      // reason set out on the English leg: a text that reads identically to
-      // last week's is read as a duplicate, and the guest keeps believing the
-      // table it was sent to correct. It costs ~7 UCS-2 units, and only on an
-      // actual move; the budget test records the resulting ceiling.
-      if (changed && table && when) return `${who}، ${what}${when}. تغيّرت طاولتك إلى ${table}. تذكرتك: ${ticketUrl}`;
-      if (changed && table) return `${who}، تغيّرت طاولتك في ${what} إلى ${table}. تذكرتك: ${ticketUrl}`;
+      // The "تغيّرت طاولتك" (your table has changed) variants went with the
+      // seating text — see the note on the English leg. Their removal also buys
+      // back the ~7 UCS-2 units they cost, which mattered here: this leg sat
+      // about 15 units under its third segment boundary.
       if (table && when) return `${who}، ${what}${when}. طاولتك ${table}. تذكرتك: ${ticketUrl}`;
       if (table) return `${who}، طاولتك في ${what} هي ${table}. تذكرتك: ${ticketUrl}`;
       if (when) return `${who}، ${what}${when}. تذكرتك: ${ticketUrl}`;

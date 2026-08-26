@@ -70,17 +70,30 @@ const SMS_MESSAGE_TYPES = [
   {
     key: 'seating_reminder',
     label: 'Table & entry pass',
-    description: "Where they're sitting and the link to their check-in pass, once you've seated them — and again just before the event.",
+    description: "Where they're sitting and the link to their check-in pass, sent in the 24 hours before the event.",
     audience: 'guest',
     trigger: 'automatic',
     defaultEnabled: true,
     // An SMS cannot carry the QR image itself, only a link to the page holding
     // it. The email with the actual scannable pass must still go out.
     replacesEmail: false,
-    // The heaviest of the three: it fires when the guest is seated AND again in
-    // the 24 hours before the event, because a table number read weeks early is
-    // not the one anybody is looking at while standing outside the venue.
-    weight: 1.2,
+    /**
+     * ONE send per guest, not two.
+     *
+     * This was 1.2 — priced as the heaviest guest type because it fired twice:
+     * once when the organizer seated someone, and again in the 24 hours before
+     * the event. The seating text has been retired (see the note on
+     * jobSeatingNotices), so only the day-before send remains and the estimate
+     * has to come down with it or every allowance is quoted high.
+     *
+     * 1.0 puts it level with `invitation`, which is also exactly one message
+     * per guest. Only the RATIOS matter here, not the absolute number.
+     *
+     * NOTE: `sms_pricing_config.type_weights` overrides this per-deployment and
+     * utils/smsEstimator prefers the configured value — a database still
+     * carrying 1.2 keeps quoting the old figure until that row is updated too.
+     */
+    weight: 1.0,
   },
   {
     /**

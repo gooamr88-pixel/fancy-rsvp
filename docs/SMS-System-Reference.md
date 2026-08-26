@@ -356,12 +356,17 @@ Breaking them risks deregistration, which stops SMS for **every customer at once
 
 ## 10. Two behaviours worth knowing about
 
-**Seating texts are delayed ~15 minutes.** Seating endpoints do not send; they upsert into
-`seating_notify_queue`, keyed `(event_id, party_id)`, and every move overwrites the row.
-A scheduler job sweeps rows that have been still for 10 minutes and sends once, with the
-final table. Without this, one drag-and-drop session on a 200-guest chart would be hundreds
-of charged messages, and a guest moved four times would get four texts naming three wrong
-tables. The QR **email** still goes immediately.
+**Seating a guest sends NO text.** It used to: seating endpoints upserted into
+`seating_notify_queue`, and a scheduler job swept rows still for 10 minutes and texted the
+final table. The text was retired on request; the queue and the sweep remain and now send
+only the QR **email**, which is free. So `seating_reminder` fires exactly once per guest —
+from `jobEventReminders`, in the 24 hours before the event, under the `evday:` ref.
+
+Two consequences worth holding on to. The **delay still matters** for the same reason it
+always did: one drag-and-drop session on a 200-guest chart would otherwise mail a guest
+moved four times four passes, three naming a table they are not sitting at. And the
+**"your table has changed" wording is gone** from the templates — with a single send there
+is nothing for it to contradict, and the email carries its own change wording.
 
 **Cancellation bypasses `EMAIL_AUTOMATION_ENABLED`.** The change-notification path is gated
 by that env var, which is right for an automatic broadcast nobody asked for. It is

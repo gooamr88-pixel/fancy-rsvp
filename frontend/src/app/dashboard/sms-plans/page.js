@@ -57,9 +57,9 @@ const MESSAGE_TYPES = [
   {
     key: 'seating_reminder',
     title: 'Their table and entry pass',
-    when: 'When you seat them, and again the day before',
+    when: 'The day before the event',
     body: 'Sara, Nour & Karim’s Wedding is on Sat 12 Sep. Your table: Table 7. Entry pass: fancyrsvp.com/i/p3w9dnzq',
-    note: 'Sent twice, because a table number read six weeks early is not the one anyone is looking at outside the venue.',
+    note: 'Once, the day before — a table number read six weeks early is not the one anyone is looking at outside the venue. Seating someone emails them their pass; it costs no message.',
   },
   {
     key: 'event_update',

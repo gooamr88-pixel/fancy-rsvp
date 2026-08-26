@@ -2682,7 +2682,20 @@ function getUniqueZoneName(elements, baseLabel) {
    came out as grey lozenges competing with the event name; plain figures over a
    hairline rule read as a document rather than a dashboard screenshot. The
    wordmark keeps its own artwork: it is the brand signature, not decoration. */
-function PrintLetterhead({ eventTitle, organizerName, formattedDate, stats }) {
+/**
+ * `eventTimezone` IS A PROP, and leaving it out crashed the whole feature.
+ *
+ * It used to be read straight out of the body below without being declared
+ * here or passed in. `eventTimezone` is a useState local of the page component
+ * — a different function entirely — so inside this one the identifier resolved
+ * nowhere and every render threw ReferenceError. The print preview never
+ * opened for anybody: it showed the dashboard error boundary instead.
+ *
+ * Nothing caught it. Webpack does not scope-analyse, and eslint exits 0 here
+ * without checking anything (see the note in the repo's frontend tooling), so
+ * a build and a full test run both stayed green while the button was dead.
+ */
+function PrintLetterhead({ eventTitle, eventTimezone, organizerName, formattedDate, stats }) {
   const metaParts = [formattedDate, organizerName ? `Prepared for ${organizerName}` : null].filter(Boolean);
   return (
     <div style={{ fontFamily: 'var(--font-sans, sans-serif)', flexShrink: 0, color: INK }}>
@@ -3057,7 +3070,7 @@ function PrintPreviewModal({ eventTitle, eventDate, eventTimezone, organizerName
         ) : (
           <div className="print-seating-chart">
             <div className="print-page" style={{ display: 'flex', flexDirection: 'column', height: '95vh' }}>
-              <PrintLetterhead eventTitle={eventTitle} organizerName={organizerName} formattedDate={formattedDate} stats={stats} />
+              <PrintLetterhead eventTitle={eventTitle} eventTimezone={eventTimezone} organizerName={organizerName} formattedDate={formattedDate} stats={stats} />
 
               <div style={{ flex: 1, minHeight: 0, display: 'flex', flexWrap: 'wrap', gap: 20, margin: '14px 0' }}>
                 {/* ── Floor plan — the visual centerpiece, ~60% of the sheet width ── */}
