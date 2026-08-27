@@ -119,6 +119,9 @@ fun ScannerScreen(
     val deviceStatus by viewModel.deviceStatus.collectAsState()
     val batteryAcknowledged by viewModel.batteryAcknowledged.collectAsState()
 
+    /** The kiosk scanner is open and usable. False on every build without one. */
+    val scannerReady by viewModel.scannerReady.collectAsState()
+
     val cameraPermission = rememberCameraPermissionState()
     val cameraController = rememberCameraController()
 
@@ -225,8 +228,11 @@ fun ScannerScreen(
         }
     }
 
-    // One analyzer instance for the screen's life, so the 3-second debounce is
-    // continuous rather than resetting on every recomposition.
+    // One analyzer instance for the screen's life. It no longer holds the
+    // duplicate-scan window — that moved to ScanDebouncer, applied in the view
+    // model, so the kiosk scanner is covered by the same rule — but it still owns
+    // an ML Kit detector, and rebuilding that on every recomposition would be
+    // wasteful and would race its own close().
     val analyzer = remember {
         QrAnalyzer(callbackExecutor = analysisExecutor) { value -> viewModel.onDecoded(value) }
     }
@@ -241,10 +247,30 @@ fun ScannerScreen(
         }
     }
 
-    // Clearing the debounce when the result is dismissed lets a guest re-present
-    // the same card immediately after a mis-tap, instead of waiting it out with
-    // a queue behind them.
-    LaunchedEffect(outcome) { if (outcome == null) analyzer.reset() }
+    /*
+     * The kiosk's hardware scanner.
+     *
+     * Collected HERE rather than in the ViewModel so a decoded ticket is only
+     * acted on while this screen is actually in front of someone. The ViewModel
+     * outlives this composable — it is scoped to the navigation entry — so a
+     * collector there would go on resolving codes while an operator was two
+     * screens deep in the guest list, and they would return to a result screen
+     * for a guest they never saw.
+     *
+     * `viewModel::onDecoded` is the same function the camera calls. From this line
+     * onward the two transports are indistinguishable: same resolver, same
+     * encrypted lookup, same result screen, same qr_scan in the audit trail.
+     *
+     * A no-op on builds with no scanner configured — the flow simply never emits.
+     */
+    LaunchedEffect(Unit) {
+        // An explicit lambda rather than `collect(viewModel::onDecoded)`: a
+        // function reference matches BOTH the member collect(FlowCollector) — via
+        // SAM conversion, since FlowCollector is a fun interface — and the
+        // extension collect(suspend (T) -> Unit). The behaviour is identical
+        // either way, but the resolution is not obvious, and obvious wins.
+        viewModel.hardwareScans.collect { value -> viewModel.onDecoded(value) }
+    }
 
     /*
      * The chrome's real heights, measured rather than assumed.
@@ -326,6 +352,7 @@ fun ScannerScreen(
                         !cameraPermission.isGranted -> NoCameraReason.PermissionDenied
                         else -> NoCameraReason.CameraFailed
                     },
+                    hardwareScannerReady = scannerReady,
                     onRequestPermission = { cameraPermission.request() },
                     onOpenSettings = { cameraPermission.openSettings() },
                     onRetryCamera = { cameraController.retry() },
@@ -820,6 +847,18 @@ private enum class NoCameraReason {
 @Composable
 private fun NoCameraFallback(
     reason: NoCameraReason,
+    /**
+     * The kiosk's hardware scanner is attached and answering.
+     *
+     * When it is, none of the wording below is true from the operator's side.
+     * The kiosk has no back camera and, on most units, no usable camera at all —
+     * so this screen is its NORMAL state, not a fault, and greeting staff with
+     * "Camera not available" next to a scanner that is working perfectly teaches
+     * them the machine is broken. The recovery action still shows, because a
+     * camera that could work is still worth offering; it is just no longer the
+     * headline.
+     */
+    hardwareScannerReady: Boolean,
     onRequestPermission: () -> Unit,
     onOpenSettings: () -> Unit,
     onRetryCamera: () -> Unit,
@@ -836,8 +875,9 @@ private fun NoCameraFallback(
     ) {
         Text(
             stringResource(
-                when (reason) {
-                    NoCameraReason.CameraFailed -> R.string.scanner_no_camera_title
+                when {
+                    hardwareScannerReady -> R.string.scanner_hardware_ready_title
+                    reason == NoCameraReason.CameraFailed -> R.string.scanner_no_camera_title
                     else -> R.string.scanner_camera_permission_title
                 },
             ),
@@ -848,10 +888,11 @@ private fun NoCameraFallback(
         Spacer(Modifier.height(12.dp))
         Text(
             stringResource(
-                when (reason) {
-                    NoCameraReason.PermissionDenied -> R.string.scanner_camera_denied_body
-                    NoCameraReason.PermissionBlocked -> R.string.scanner_camera_blocked_body
-                    NoCameraReason.CameraFailed -> R.string.scanner_camera_failed_body
+                when {
+                    hardwareScannerReady -> R.string.scanner_hardware_ready_body
+                    reason == NoCameraReason.PermissionDenied -> R.string.scanner_camera_denied_body
+                    reason == NoCameraReason.PermissionBlocked -> R.string.scanner_camera_blocked_body
+                    else -> R.string.scanner_camera_failed_body
                 },
             ),
             style = MaterialTheme.typography.bodyLarge,

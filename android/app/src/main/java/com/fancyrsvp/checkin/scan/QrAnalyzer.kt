@@ -22,16 +22,19 @@ import java.util.concurrent.atomic.AtomicBoolean
  * the moment it matters. That choice lives in libs.versions.toml with the same
  * note.
  *
- * ── Debounce ──
+ * ── Debounce lives elsewhere now ──
  *
- * §8.3 requires the same code decoded repeatedly within 3 seconds not to
- * re-trigger. Continuous analysis sees the same card 20+ times a second while a
- * guest holds it up, and without this the result screen would thrash and a
- * double-admission race would be trivial to hit.
+ * §8.3's "same code within 3 seconds must not re-trigger" rule used to be a pair
+ * of fields on this class. It moved to [ScanDebouncer], applied in
+ * ScannerViewModel.onDecoded, when the kiosk's hardware scanner became a second
+ * way for a code to reach the app.
  *
- * The debounce is keyed on the DECODED VALUE, not on time alone, so two different
- * guests presenting cards back-to-back are both admitted immediately — only a
- * repeat of the same code waits.
+ * Nothing about the rule changed — see ScanDebouncer for why it had to move. What
+ * matters here is that this class now forwards EVERY successful decode, twenty
+ * times a second while a guest holds a card up, and the guard downstream is what
+ * keeps that from thrashing the result screen. That is safe because onDecoded
+ * returns immediately once a scan is resolving or a result is showing, and it is
+ * correct because one guard covering both transports cannot disagree with itself.
  */
 class QrAnalyzer(
     /**
@@ -69,9 +72,6 @@ class QrAnalyzer(
             .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
             .build(),
     )
-
-    private var lastValue: String? = null
-    private var lastAcceptedAt: Long = 0L
 
     /**
      * Guards against overlapping analyses.
@@ -117,7 +117,7 @@ class QrAnalyzer(
                     // for the same reason as everything else here: an uncaught
                     // throw on this thread is a process kill, not an exception.
                     runCatching {
-                        barcodes.firstNotNullOfOrNull { it.rawValue }?.let { value -> accept(value) }
+                        barcodes.firstNotNullOfOrNull { it.rawValue }?.let(onDecoded)
                     }
                 }
                 .addOnCompleteListener(callbackExecutor) {
@@ -141,35 +141,10 @@ class QrAnalyzer(
         }
     }
 
-    private fun accept(value: String) {
-        val now = System.currentTimeMillis()
-        if (value == lastValue && now - lastAcceptedAt < DEBOUNCE_MS) return
-
-        lastValue = value
-        lastAcceptedAt = now
-        onDecoded(value)
-    }
-
-    /**
-     * Clears the debounce.
-     *
-     * Called when the result screen is dismissed, so a guest whose first scan was
-     * mis-tapped can immediately present the same card again rather than waiting
-     * out the window with a queue behind them.
-     */
-    fun reset() {
-        lastValue = null
-        lastAcceptedAt = 0L
-    }
-
     fun close() {
         // Flag BEFORE closing, so any frame that arrives during the close is turned
         // away rather than handed to a half-torn-down detector.
         closed.set(true)
         runCatching { scanner.close() }
-    }
-
-    private companion object {
-        const val DEBOUNCE_MS = 3_000L
     }
 }

@@ -7,6 +7,8 @@ import com.fancyrsvp.checkin.data.repo.CheckInRepository
 import com.fancyrsvp.checkin.data.repo.DeviceRepository
 import com.fancyrsvp.checkin.device.DeviceStatusMonitor
 import com.fancyrsvp.checkin.di.ApplicationScope
+import com.fancyrsvp.checkin.scan.HardwareScanSource
+import com.fancyrsvp.checkin.scan.ScanDebouncer
 import com.fancyrsvp.checkin.sync.ConnectionState
 import com.fancyrsvp.checkin.sync.SyncCoordinator
 import com.fancyrsvp.checkin.util.safeLaunch
@@ -14,6 +16,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -40,6 +43,16 @@ class ScannerViewModel @Inject constructor(
     private val deviceStatusMonitor: DeviceStatusMonitor,
     @ApplicationScope private val appScope: CoroutineScope,
     private val db: CheckinDatabase,
+    /**
+     * The one duplicate-scan rule, shared by every transport (§8.3).
+     *
+     * It used to live inside QrAnalyzer, which protected the camera and nothing
+     * else. The kiosk's hardware scanner is a second way in, on a different
+     * thread, and the manufacturer has stated the engine "will scan twice very
+     * quickly" — so the guard had to move up here, where both sources meet.
+     */
+    private val scanDebouncer: ScanDebouncer,
+    private val hardwareScanner: HardwareScanSource,
 ) : ViewModel() {
 
     /** Who is operating the tablet right now (§18.1). Set at login. */
@@ -161,6 +174,34 @@ class ScannerViewModel @Inject constructor(
         _batteryAcknowledged.value = true
     }
 
+    // ── Kiosk hardware scanner ──
+
+    /**
+     * The kiosk scanner is open and usable.
+     *
+     * Always false on a build with no scanner configured, which is every staff
+     * tablet. It decides what the no-camera screen is allowed to say: on a kiosk
+     * with a working scanner, "camera not available" is a lie told beside
+     * hardware that is doing its job.
+     */
+    val scannerReady: StateFlow<Boolean> = hardwareScanner.ready
+
+    /**
+     * Decoded payloads from the kiosk scanner.
+     *
+     * Exposed for the SCREEN to collect rather than collected here, so scans are
+     * only acted on while the scanner screen is actually in front of someone. A
+     * ViewModel-side collector would keep resolving codes while an operator was
+     * two screens deep in the guest list, and they would come back to a result
+     * screen for a guest they never saw.
+     */
+    val hardwareScans: SharedFlow<String> = hardwareScanner.decoded
+
+    /** Opens the port. Idempotent, and a no-op when no scanner is configured. */
+    private fun startHardwareScanner() {
+        safeLaunch { hardwareScanner.start() }
+    }
+
     fun start(eventId: String, staffId: String?, staffName: String?, role: String) {
         _eventId.value = eventId
         _operator.value = Operator(staffId, staffName, role)
@@ -176,6 +217,8 @@ class ScannerViewModel @Inject constructor(
         // a drain must survive this screen being recreated on rotation, because a
         // queued check-in exists nowhere else.
         syncCoordinator.start(appScope, eventId)
+
+        startHardwareScanner()
     }
 
     /**
@@ -187,6 +230,22 @@ class ScannerViewModel @Inject constructor(
      */
     fun onDecoded(value: String) {
         val eventId = _eventId.value ?: return
+
+        /*
+         * The duplicate guard, and the only one — see ScanDebouncer.
+         *
+         * First, because it is the question about the CODE and the two checks
+         * below are questions about the SCREEN. A repeat inside the window is not
+         * a scan at all and should not reach logic that reasons about UI state.
+         *
+         * The window does not slide: a refusal leaves the original timestamp
+         * alone, so a card left lying in front of the kiosk is refused for three
+         * seconds from the first read and then admitted again, rather than being
+         * locked out for as long as it sits there. Cleared by dismiss(), which is
+         * what lets a guest re-present the same card straight after a mis-tap.
+         */
+        if (!scanDebouncer.accept(value)) return
+
         if (_resolving.value || _outcome.value != null) return
 
         _resolving.value = true
@@ -295,6 +354,11 @@ class ScannerViewModel @Inject constructor(
     fun dismiss() {
         _outcome.value = null
         pendingScanToken = null
+        // Lets the same card be presented again straight away. This used to be
+        // wired from the screen as `LaunchedEffect(outcome) { analyzer.reset() }`,
+        // which only ever reached the camera's copy of the rule; doing it here
+        // covers the kiosk scanner too, and puts it at the moment it belongs to.
+        scanDebouncer.reset()
     }
 
     private companion object {

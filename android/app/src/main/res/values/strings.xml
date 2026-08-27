@@ -220,6 +220,17 @@
     <string name="scanner_open_settings">Open settings</string>
     <string name="scanner_camera_retry">Try camera again</string>
 
+    <!-- The self-service kiosk, where the SAME screen is the normal state.
+         The kiosk has no back camera and usually no usable camera at all, so
+         reaching the fallback there is not a fault — it is Tuesday. Telling
+         staff "Camera not available" beside a scanner that is working perfectly
+         teaches them the machine is broken, and the next real fault gets
+         ignored. When the hardware scanner has answered, these two replace the
+         headline and the body; the camera recovery button stays below, because
+         a camera that could work is still worth offering. -->
+    <string name="scanner_hardware_ready_title">Ready to scan</string>
+    <string name="scanner_hardware_ready_body">Hold the guest\'s code up to the scanner. You can also check guests in by name.</string>
+
     <!--
       Scan result states (§8.4).
 

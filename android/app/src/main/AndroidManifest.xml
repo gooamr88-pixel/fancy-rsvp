@@ -71,12 +71,26 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
-            android:screenOrientation="userLandscape"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:screenOrientation="${screenOrientation}"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation"
             android:theme="@style/Theme.FancyCheckin">
             <!--
               Orientation is locked (§21.9). An unexpected rotation mid-scan
               disrupts the CameraX pipeline and confuses staff at the door.
+
+              It is a build placeholder rather than a literal because one APK now
+              runs on two shapes of hardware: staff hold tablets in landscape, and
+              the self-service kiosk is a wall-mounted PORTRAIT panel that cannot
+              be turned. It defaults to userLandscape, so nothing about a tablet
+              build changes — see SCREEN_ORIENTATION in build.gradle.kts.
+
+              keyboard|navigation were added to configChanges for the kiosk
+              scanner. Android treats attaching or detaching an input device as a
+              configuration change, and without these two qualifiers declared, the
+              scanner waking, sleeping or being unplugged RECREATES THE ACTIVITY —
+              tearing down and rebuilding the CameraX pipeline underneath an usher
+              mid-shift. The manufacturer's own HID sample declares exactly these,
+              which is how the problem was found.
             -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

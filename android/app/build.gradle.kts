@@ -25,6 +25,26 @@ android {
     namespace = "com.fancyrsvp.checkin"
     compileSdk = 35
 
+    /**
+     * The kiosk scanner SDK ships as a plain JAR plus a native library, not as a
+     * Maven artifact, so both live in `app/libs/` and are wired up by hand.
+     *
+     * `libts_serial_port.so` is what actually opens the serial device — the JAR
+     * is only a thin JNI wrapper over it. Four ABIs are shipped; the vendor also
+     * supplies mips/mips64/armeabi, which the current NDK no longer supports and
+     * which no device made this decade uses.
+     *
+     * If the .so for the running device's ABI is missing, `System.loadLibrary`
+     * throws at class-init time inside the vendor code. HardwareScanSource
+     * treats that as "no scanner attached" rather than letting it escape — see
+     * the note there.
+     */
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDirs("libs")
+        }
+    }
+
     defaultConfig {
         applicationId = "com.fancyrsvp.checkin"
         // API 26 covers effectively every tablet in the market (spec §4).
@@ -46,6 +66,45 @@ android {
         // reason. Add a locale back here at the same time as its values- folder,
         // never before.
         resourceConfigurations += listOf("en")
+
+        /**
+         * Screen orientation, because one APK now runs on two shapes of hardware.
+         *
+         * Staff tablets are held in landscape and that is what every screen was
+         * laid out for. The self-service kiosk is a wall-mounted PORTRAIT panel —
+         * forcing landscape on it rotates the whole interface ninety degrees on a
+         * screen that cannot be turned, which is not a cosmetic problem but an
+         * unusable one.
+         *
+         * It stays a manifest placeholder rather than a product flavour: a flavour
+         * doubles every build variant and the signing config with it, for what is
+         * one attribute. It reads from local.properties exactly like API_BASE_URL
+         * already does, so a kiosk build is a one-line change on the machine that
+         * makes it and nothing to remember anywhere else.
+         *
+         * The default is the existing value, so no tablet build changes.
+         */
+        manifestPlaceholders["screenOrientation"] = prop("SCREEN_ORIENTATION", "userLandscape")
+
+        /**
+         * The kiosk's hardware QR scanner.
+         *
+         * EMPTY BY DEFAULT, which disables it completely — a build says nothing
+         * about a scanner and gets exactly the behaviour it had before this
+         * existed. That default is deliberate twice over. Staff tablets have no
+         * scanner and must not probe for one; and the kiosk carries a thermal
+         * printer that may itself sit on a serial port, so opening ports on a
+         * device nobody has characterised risks talking over it.
+         *
+         *   SCANNER_PORT=auto          probe every serial node the board exposes.
+         *                              The log names the one that answered — this
+         *                              is how the first kiosk tells us the answer.
+         *   SCANNER_PORT=/dev/ttyS1    pin it, once that answer is known.
+         *
+         * The baud default is the engine's own factory default (guide p. 31).
+         */
+        buildConfigField("String", "SCANNER_PORT", "\"${prop("SCANNER_PORT", "")}\"")
+        buildConfigField("int", "SCANNER_BAUD", prop("SCANNER_BAUD", "9600"))
     }
 
     /**
@@ -192,6 +251,20 @@ dependencies {
     implementation(libs.camera.lifecycle)
     implementation(libs.camera.view)
     implementation(libs.mlkit.barcode.bundled)
+
+    /**
+     * Kiosk scanner SDK, supplied by the hardware manufacturer as a bare JAR.
+     *
+     * Not in libs.versions.toml because it is not resolvable from any repository —
+     * there is no group, no artifact, no version. It is a file, and the version
+     * catalogue has nowhere to put a file. `app/libs/` is the conventional home.
+     *
+     * The JAR also carries the vendor's own demo Activities under
+     * com.example.uartscandemo. Nothing references them and R8 strips them, but
+     * they reference an R class that does not exist here — hence the -dontwarn in
+     * proguard-rules.pro.
+     */
+    implementation(files("libs/uart_scan_pro.jar"))
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

@@ -63,6 +63,39 @@
 -keep class com.google.mlkit.** { *; }
 -dontwarn com.google.mlkit.**
 
+# ── Kiosk scanner SDK (com.tool.*, from libs/uart_scan_pro.jar) ──
+#
+# This is the third correctness-critical block, and it fails in exactly the way
+# the header warns about: the native library calls BACK into Java by name.
+#
+#   libts_serial_port.so  ->  com.tool.SerialPort.open / SerialPort_open
+#   the vendor's decode loop  ->  ScanActivity$TsDataCallBack.ts_get_data_fun
+#                             ->  ScanActivity$TsStateCallBack.ts_scan_state_fun
+#
+# JNI resolves those by their exact string names. R8 has no way to see the call
+# — it lives in compiled ARM code — so without a keep rule it renames them, the
+# lookup fails at runtime, and NO SCAN EVER ARRIVES. Debug builds are unminified
+# and work perfectly, so this would ship green and die at a door.
+-keep class com.tool.** { *; }
+-keepclassmembers class com.tool.** {
+    native <methods>;
+}
+
+# Our own implementations of the two callback interfaces. Keeping the interface
+# is not enough on its own — the overriding method has to keep the name too, or
+# it no longer overrides the kept signature.
+-keepclassmembers class * implements com.tool.ScanActivity$TsDataCallBack {
+    public int ts_get_data_fun(byte[], byte[], int);
+}
+-keepclassmembers class * implements com.tool.ScanActivity$TsStateCallBack {
+    public int ts_scan_state_fun(byte[], byte);
+}
+
+# The vendor shipped their demo Activities inside the same JAR. Nothing here
+# references them and R8 removes them, but they import an R class that only
+# existed in the demo project, so the reference cannot be resolved.
+-dontwarn com.example.uartscandemo.**
+
 # ── Log hygiene (§20.7) ──
 # Verbose and debug logging must be absent from release builds. Guest names must
 # never reach a log statement in any variant, but this removes the calls outright
