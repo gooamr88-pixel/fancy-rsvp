@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect, useCallback, useId } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ConfettiExplosion } from './GuestAnimations';
 import { lighten, darken } from '../../utils/color';
+import { isWhiteLabel } from '../../utils/guestBranding';
 import { viewOf } from '../../utils/frameDocument';
 import { useModalA11y } from '../../hooks/useModalA11y';
 import { CelebrateIcon, ClockIcon, EnvelopeIcon, CalendarIcon, CheckIcon, LinkIcon } from './RsvpIcons';
@@ -581,7 +582,12 @@ export function buildCalendarLinks(event) {
 
   const downloadIcs = () => {
     const ics = [
-      'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Fancy RSVP//EN',
+      // PRODID names the software that produced the file. It is not rendered by
+      // calendar apps, but the guest downloads this and can open it in a text
+      // editor — and on a white-label plan the whole promise is that nothing
+      // they receive names us. The RFC only requires the value be unique-ish.
+      'BEGIN:VCALENDAR', 'VERSION:2.0',
+      isWhiteLabel(event) ? `PRODID:-//${event.title || 'Event'}//EN` : 'PRODID:-//Fancy RSVP//EN',
       'BEGIN:VEVENT',
       `DTSTART:${startDate}`, `DTEND:${endDate}`,
       `SUMMARY:${event.title || ''}`,

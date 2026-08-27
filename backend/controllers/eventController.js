@@ -5,7 +5,9 @@ const { getPublicBaseUrl } = require('../utils/publicUrl');
 const { revalidateEventSlugs } = require('../utils/revalidateFrontend');
 const { isAcceptedResponse, isDeclinedResponse, isMaybeResponse } = require('../utils/responseHelpers');
 const { getPlatformConfig } = require('../utils/configCache');
-const { resolveTier } = require('../utils/tierResolver');
+const {
+  resolveTier, tierRemovesWatermark, tierIsWhiteLabel, withBaseline, isUndefinedColumnError,
+} = require('../utils/tierResolver');
 const { hashEventPassword, verifyEventPassword, isHashedEventPassword } = require('../utils/eventPassword');
 const {
   safeZone, wallClockToInstant, instantToWallClock, formatInZone, isValidTimeZone,
@@ -78,16 +80,24 @@ async function withResolvedTier(rawEvent) {
   const { access_password, ...eventWithoutPassword } = rawEvent;
   const event = { ...eventWithoutPassword, has_access_password: !!access_password };
 
-  if (!event.is_paid) {
-    // Unpaid events get only the free-tier features.
-    const { FREE_TIER_FEATURES } = require('../config/featureRegistry');
-    return { ...event, tier_features: [...FREE_TIER_FEATURES] };
+  // Unpaid events get only the free-tier features — but `manual_override` is a
+  // comp, and both server-side gates (featureGate, smsAddonGate) treat it as
+  // entitled. This branch tested `is_paid` alone, so a comped row that did not
+  // also carry the paid flag rendered a dashboard covered in padlocks over an
+  // API that answered every one of those calls. The UI must ask the same
+  // question the gate asks.
+  // withBaseline([]) rather than a second copy of "what a free event gets":
+  // featureGate answers the unpaid case from the same floor, and the padlocks
+  // this list draws must match the 403s that list produces.
+  if (!event.is_paid && !event.manual_override) {
+    return { ...event, tier_features: withBaseline([]) };
   }
 
   let tierName = event.tier_name || null;
   let tierKey = event.tier_key || null;
   let tierMaxGuests = event.tier_max_guests;
   let tierRemoveWatermark = !!event.tier_remove_watermark;
+  let tierWhiteLabel = !!event.tier_white_label;
   let tierFeatures = [];
 
   // Same bug class fixed elsewhere in this codebase (EventsTab's manual-payment
@@ -106,6 +116,7 @@ async function withResolvedTier(rawEvent) {
     tierKey = tierKey || completed.tier_key || null;
     tierMaxGuests = completed.tier_max_guests ?? null;
     tierRemoveWatermark = !!completed.tier_remove_watermark;
+    tierWhiteLabel = !!completed.tier_white_label;
   }
   if (!tierKey && completed) tierKey = completed.tier_key || null;
 
@@ -135,7 +146,10 @@ async function withResolvedTier(rawEvent) {
         tierName = match.name;
         tierKey = String(match.key || '').trim() || tierKey;
         tierMaxGuests = Number.isFinite(match.max_guests) ? match.max_guests : null;
-        tierRemoveWatermark = !!match.remove_watermark;
+        // Either admin switch drops the mark — see tierRemovesWatermark, which
+        // also treats white label as implying it.
+        tierRemoveWatermark = tierRemovesWatermark(match);
+        tierWhiteLabel = tierIsWhiteLabel(match);
         tierFeatures = Array.isArray(match.features) ? match.features : [];
       } else if (snapshot) {
         // The plan is gone. The purchase is not.
@@ -144,20 +158,36 @@ async function withResolvedTier(rawEvent) {
     } catch { /* config unavailable — leave the plan unresolved this time */ }
   }
 
-  if (!tierName && !tierKey) return { ...event, tier_features: snapshot || [] };
+  if (!tierName && !tierKey) return { ...event, tier_features: withBaseline(snapshot || []) };
 
   // Self-heal: persist so future reads don't re-derive. Never block/fault the
   // read. tier_features is written too, so an event bought before keys existed
   // gains the snapshot that protects it from a later deletion.
+  //
+  // The RAW plan features are what gets stored: the snapshot is a record of what
+  // this plan granted, and folding the always-on baseline into it would make a
+  // deleted tier look like it had sold capabilities it never listed. The
+  // baseline is added on the way OUT instead, by the same withBaseline() the
+  // server-side gates use — so the padlocks the dashboard draws and the 403s
+  // the API returns are computed from one list, not two.
   supabase.from('events').update({
     tier_name: tierName,
     tier_key: tierKey,
     tier_max_guests: tierMaxGuests,
     tier_remove_watermark: tierRemoveWatermark,
+    tier_white_label: tierWhiteLabel,
     ...(tierFeatures.length > 0 ? { tier_features: tierFeatures } : {}),
   }).eq('id', event.id).then(() => {}, () => {});
 
-  return { ...event, tier_name: tierName, tier_key: tierKey, tier_max_guests: tierMaxGuests, tier_remove_watermark: tierRemoveWatermark, tier_features: tierFeatures };
+  return {
+    ...event,
+    tier_name: tierName,
+    tier_key: tierKey,
+    tier_max_guests: tierMaxGuests,
+    tier_remove_watermark: tierRemoveWatermark,
+    tier_white_label: tierWhiteLabel,
+    tier_features: withBaseline(tierFeatures),
+  };
 }
 
 
@@ -481,6 +511,51 @@ const getEvent = async (req, res, next) => {
 };
 
 /**
+ * The columns the public guest page reads.
+ *
+ * A function of one flag rather than two hand-maintained string literals: two
+ * copies of a 30-column list differing by one line is how the fallback ends up
+ * quietly missing a column the renderer needs, months later, on the one code
+ * path nobody exercises until a deploy goes out of order.
+ */
+const buildPublicEventColumns = (withWhiteLabel) => `
+  id,
+  slug,
+  template_type,
+  event_type,
+  title,
+  description,
+  event_date,
+  event_end_date,
+  rsvp_deadline,
+  timezone,
+  location_name,
+  location_address,
+  location_lat,
+  location_lng,
+  dress_code,
+  privacy_mode,
+  access_password,
+  cover_image_url,
+  gallery_urls,
+  custom_colors,
+  custom_fonts,
+  background_music_url,
+  template_data,
+  is_paid,
+  status,
+  allow_guest_edits,
+  track_guest_side,
+  no_kids_allowed,
+  collect_dietary_restrictions,
+  reveal_enabled,
+  reveal_replay,
+  tier_remove_watermark,${withWhiteLabel ? '\n  tier_white_label,' : ''}
+  updated_at,
+  custom_form_fields(*)
+`;
+
+/**
  * Public endpoint to fetch event page data by Slug.
  * GET /api/v1/public/events/:slug
  */
@@ -488,46 +563,32 @@ const getPublicEventBySlug = async (req, res, next) => {
   const { slug } = req.params;
 
   try {
-    const { data: event, error } = await supabase
+    /**
+     * `tier_white_label` is selected here, and this is THE most dangerous select
+     * in the product to add a column to.
+     *
+     * PostgREST fails the WHOLE query on one unknown column, and this is the
+     * public guest page — every invitation on the platform, for every guest,
+     * reads through here. Ship this before 20260830000003_white_label.sql and
+     * the entire product goes dark, not one branding line. So the read retries
+     * without the new column instead of trusting the deploy order, exactly as
+     * selectEventWithTier does for the organizer side. The retry costs one
+     * extra round trip on a misordered deploy and nothing at all on a correct
+     * one, because the first attempt succeeds.
+     */
+    const selectEvent = async (withWhiteLabel) => supabase
       .from('events')
-      .select(`
-        id,
-        slug,
-        template_type,
-        event_type,
-        title,
-        description,
-        event_date,
-        event_end_date,
-        rsvp_deadline,
-        timezone,
-        location_name,
-        location_address,
-        location_lat,
-        location_lng,
-        dress_code,
-        privacy_mode,
-        access_password,
-        cover_image_url,
-        gallery_urls,
-        custom_colors,
-        custom_fonts,
-        background_music_url,
-        template_data,
-        is_paid,
-        status,
-        allow_guest_edits,
-        track_guest_side,
-        no_kids_allowed,
-        collect_dietary_restrictions,
-        reveal_enabled,
-        reveal_replay,
-        tier_remove_watermark,
-        updated_at,
-        custom_form_fields(*)
-      `)
+      .select(buildPublicEventColumns(withWhiteLabel))
       .eq('slug', slug)
       .single();
+
+    let { data: event, error } = await selectEvent(true);
+    if (isUndefinedColumnError(error)) {
+      ({ data: event, error } = await selectEvent(false));
+      // The column is the entitlement here — absent means "not white-labelled",
+      // which is the safe reading: the mark stays on until the migration lands.
+      if (event) event.tier_white_label = false;
+    }
 
     if (error || !event) {
       return res.status(404).json({ success: false, error: 'EVENT_NOT_FOUND', message: 'Event not found.' });

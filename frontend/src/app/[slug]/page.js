@@ -1,6 +1,7 @@
 import { Suspense, cache } from 'react';
 import EventPageClient from './EventPageClient';
 import { safeJsonLdHtml } from '../utils/jsonLdSafe.mjs';
+import { isWhiteLabel, guestTitle } from '../utils/guestBranding';
 import { preloadRevealAssets } from '../components/guest/revealAssets';
 import { getCinematicTemplate, preloadCinematicAssets } from '../components/templates/cinematic/cinematicThemes';
 
@@ -52,8 +53,21 @@ export async function generateMetadata({ params }) {
     };
   }
 
-  const title = `${event.title} | Fancy RSVP`;
-  const description = event.description || `RSVP to ${event.title} on Fancy RSVP.`;
+  /**
+   * WHITE LABEL reaches the metadata, and this is the mark that matters most.
+   *
+   * When the host shares their invitation link, WhatsApp and iMessage render a
+   * preview card built from exactly these fields — so "| Fancy RSVP" in the
+   * title is the FIRST thing every guest sees, before the page they paid to
+   * have unbranded even loads. The browser tab is the second. Stripping the
+   * watermark and the emails while leaving these two would white-label
+   * everything except the parts people actually look at.
+   */
+  const whiteLabel = isWhiteLabel(event);
+
+  const title = guestTitle(event);
+  const description = event.description
+    || (whiteLabel ? `RSVP to ${event.title}.` : `RSVP to ${event.title} on Fancy RSVP.`);
   const canonicalUrl = `https://fancyrsvp.com/${slug}`;
   // Cache-bust with updated_at so Facebook/WhatsApp re-scrape the current cover image
   // instead of serving a stale preview from their own link cache after it changes.
@@ -62,7 +76,12 @@ export async function generateMetadata({ params }) {
     : null;
   const images = ogImageUrl
     ? [{ url: ogImageUrl, width: 1200, height: 630, alt: event.title }]
-    : [{ url: 'https://fancyrsvp.com/og-image.png', width: 1200, height: 630, alt: 'Fancy RSVP' }];
+    // The house fallback card is OUR artwork with our name on it. A white-label
+    // event without a cover image gets no card rather than ours — an empty
+    // preview is a missing image; ours is someone else's brand on their wedding.
+    : whiteLabel
+      ? []
+      : [{ url: 'https://fancyrsvp.com/og-image.png', width: 1200, height: 630, alt: 'Fancy RSVP' }];
 
   return {
     title,
@@ -71,7 +90,8 @@ export async function generateMetadata({ params }) {
       title,
       description,
       url: canonicalUrl,
-      siteName: 'Fancy RSVP',
+      // The host's own name is the site as far as this guest is concerned.
+      siteName: whiteLabel ? event.title : 'Fancy RSVP',
       type: 'website',
       images,
     },
@@ -111,11 +131,13 @@ export default async function EventPage({ params, searchParams }) {
           name: event.location_name || '',
           address: event.location_address || '',
         },
-        organizer: {
-          '@type': 'Organization',
-          name: 'Fancy RSVP',
-          url: 'https://fancyrsvp.com',
-        },
+        // Structured data is read by search engines and by the preview builders
+        // in messaging apps, so the organizer named here is public-facing too.
+        // On a white-label event the host IS the organizer; naming ourselves
+        // would put our company into their event's search result.
+        organizer: isWhiteLabel(event)
+          ? { '@type': 'Organization', name: event.title }
+          : { '@type': 'Organization', name: 'Fancy RSVP', url: 'https://fancyrsvp.com' },
         image: event.cover_image_url || undefined,
         eventStatus: 'https://schema.org/EventScheduled',
         eventAttendanceMode: 'https://schema.org/OfflineEventAttendanceMode',

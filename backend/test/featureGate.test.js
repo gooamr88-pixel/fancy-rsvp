@@ -184,3 +184,66 @@ describe('requireAnyFeature', () => {
     assert.ok(next, 'should pass when at least one feature is free-tier');
   });
 });
+
+/**
+ * A PAID plan may never grant less than an unpaid event.
+ *
+ * `entitledFeatures` used to return the tier's stored array verbatim, so a tier
+ * whose `features` happened to omit `rsvp_basic` gave a paying customer strictly
+ * fewer capabilities than someone who had paid nothing. It was invisible only
+ * because none of the free-default keys was gated — the day one is mounted, the
+ * bill arrives as a 403 on the most basic screen in the product, for the
+ * customers who paid the most.
+ */
+describe('the always-on baseline', () => {
+  const BASELINE_TIER = { id: 'evt-6', is_paid: true, manual_override: false, status: 'active', tier_name: 'Bare' };
+
+  beforeEach(() => {
+    events.set('evt-6', BASELINE_TIER);
+    configResult = {
+      ...configResult,
+      // A plan an admin built by ticking one paid capability and nothing else.
+      pricing_tiers: [...configResult.pricing_tiers.filter(t2 => t2.name !== 'Bare'),
+        { name: 'Bare', price_cents: 4900, features: ['seating_map'] }],
+    };
+  });
+
+  it('grants free-default features to a paid tier that never listed them', async () => {
+    const req = mockReq({ params: { eventId: 'evt-6' }, user: { id: 'u1' } });
+    const { next, res } = await invoke(requireFeature('rsvp_basic'), req);
+
+    assert.ok(next, `rsvp_basic must be granted; got ${res.statusCode} ${res.body?.error}`);
+    assert.ok(req.tierFeatures.includes('analytics_basic'), 'the whole baseline rides along, not just the requested key');
+  });
+
+  it('still refuses a paid feature the tier does not carry', async () => {
+    const req = mockReq({ params: { eventId: 'evt-6' }, user: { id: 'u1' } });
+    const { res } = await invoke(requireFeature('qr_checkin'), req);
+
+    assert.equal(res.statusCode, 403, 'the baseline is a floor, not a wildcard');
+    assert.equal(res.body.error, 'FEATURE_NOT_AVAILABLE');
+  });
+
+  it('keeps what the tier does carry', async () => {
+    const req = mockReq({ params: { eventId: 'evt-6' }, user: { id: 'u1' } });
+    const { next } = await invoke(requireFeature('seating_map'), req);
+
+    assert.ok(next, 'unioning the baseline must not drop the tier\'s own features');
+  });
+
+  it('holds for a paid event carrying no plan at all', async () => {
+    // A comp granted before tier snapshots existed, or a half-fulfilled
+    // purchase. `entitledFeatures` is not even reached for these — the gate
+    // skips it when there is no tier_key and no tier_name — so the floor has to
+    // be seeded, not assumed.
+    events.set('evt-7', { id: 'evt-7', is_paid: true, manual_override: false, status: 'active', tier_name: null, tier_key: null });
+
+    const req = mockReq({ params: { eventId: 'evt-7' }, user: { id: 'u1' } });
+    const { next } = await invoke(requireFeature('rsvp_basic'), req);
+    assert.ok(next, 'an always-on capability cannot depend on a plan resolving');
+
+    const req2 = mockReq({ params: { eventId: 'evt-7' }, user: { id: 'u1' } });
+    const { res } = await invoke(requireFeature('seating_map'), req2);
+    assert.equal(res.statusCode, 403, 'and it still grants nothing that was paid for');
+  });
+});

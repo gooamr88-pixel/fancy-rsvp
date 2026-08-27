@@ -30,6 +30,7 @@
 const express = require('express');
 const { requireAuth, verifyEventOwner } = require('../middleware/auth');
 const { requireAnyFeature } = require('../middleware/featureGate');
+const { requireCheckinApp } = require('../middleware/checkinAppGate');
 const { requireDevice, requireDeviceOrAuth } = require('../middleware/deviceAuth');
 const checkinSync = require('../controllers/checkinSyncController');
 const checkinDevice = require('../controllers/checkinDeviceController');
@@ -84,7 +85,35 @@ const organizerOnly = [requireAuth, verifyEventOwner];
 // editor, rather than presenting an empty dropdown.
 router.get('/events/:eventId/gates', organizerOnly, checkinDevice.listGates);
 
-router.post('/events/:eventId/devices/pairing-codes', organizerOnly, checkinDevice.createPairingCode);
+/**
+ * THE `checkin_app` ENTITLEMENT MOMENT.
+ *
+ * Until now the only thing `requireFeature('checkin_app')` guarded was the APK
+ * download — and the APK is not a secret: the public /checkin-app page links the
+ * same static file and says in as many words that installing it needs no
+ * account. So the paid door-app feature was enforced by an obstacle anyone could
+ * walk around, and an event on a plan without it could pair a tablet and run the
+ * door with the app all night.
+ *
+ * A device cannot exist without a pairing code, and a code cannot be minted
+ * without an organizer session on THIS event. That makes this the one place the
+ * entitlement is genuinely decidable, so this is where it is asked. Everything
+ * downstream — pair, refresh, drain, delta — stays ungated on purpose (decision
+ * D-21: a tablet already at a venue must never be locked out mid-event by a
+ * tier lookup).
+ *
+ * `requireCheckinApp` rather than a bare `requireFeature('checkin_app')`: an
+ * event that has already paired a tablet keeps pairing spares, even if its plan
+ * does not carry the app. See middleware/checkinAppGate.js — the key is seeded
+ * on no tier by any migration, so a plain gate would have refused every
+ * organizer on the platform the moment it deployed.
+ */
+router.post(
+  '/events/:eventId/devices/pairing-codes',
+  organizerOnly,
+  requireCheckinApp,
+  checkinDevice.createPairingCode,
+);
 router.get('/events/:eventId/devices', organizerOnly, checkinDevice.listDevices);
 router.delete('/events/:eventId/devices/:deviceId', organizerOnly, checkinDevice.revokeDevice);
 router.post('/events/:eventId/devices/:deviceId/wipe', organizerOnly, checkinDevice.requestWipe);

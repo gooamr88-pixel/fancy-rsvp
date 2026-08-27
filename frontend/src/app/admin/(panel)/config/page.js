@@ -41,11 +41,108 @@ function Toggle({ checked, onChange, disabled }) {
   );
 }
 
+/**
+ * THE THREE THINGS A FEATURE SWITCH CAN BE, said on the switch itself.
+ *
+ * Every key in the registry becomes a toggle here, and an admin reads a toggle
+ * as an access control — prices a plan around it, and sells it. Three of these
+ * states are NOT access controls, and a plain switch for them is how a plan gets
+ * sold on a capability the product hands out anyway, or one nobody has written.
+ *
+ *   ESSENTIAL  every plan carries it and it cannot be switched off. The switch
+ *              is on and locked because the answer is genuinely fixed.
+ *   SOON       on the roadmap. Design a plan around it, but it is withheld from
+ *              every price list until it exists.
+ *   NOT BUILT  no capability behind it and no date. The bluntest label, on
+ *              purpose — it is the one an admin most needs to not sell.
+ *
+ * Rendered as a small caps pill rather than an icon: at 9px an icon is a smudge,
+ * and this has to be legible in a dense list of 25 rows.
+ *
+ * ── Why the borders are rgba literals and not `T.primary + '55'` ──
+ *
+ * Every colour in this theme is a CSS custom property — `T.primary` is the
+ * STRING `var(--admin-primary, #B8944F)`, not a hex value. Appending an alpha
+ * suffix to it yields `var(--admin-primary, #B8944F)55`, which is not a colour
+ * at any level of CSS: the browser drops the whole declaration and the border
+ * silently disappears. It looks like it works because a missing hairline is not
+ * something you notice. (The category header a few lines below does exactly
+ * this with `T.primary + '40'` and has been borderless ever since.)
+ */
+function FeatureStateBadge({ feature }) {
+  const badge = feature.alwaysOn === true
+    ? {
+      label: 'Essential',
+      title: 'Every plan includes this, paid or not. It cannot be switched off — nothing gates it, and it is granted to every tier automatically.',
+      fg: T.primary,
+      bg: T.primarySoft,
+      border: 'rgba(184, 148, 79, 0.38)',
+    }
+    : feature.comingSoon === true
+      ? {
+        label: 'Soon',
+        title: 'On the roadmap. You can plan pricing around it, but it grants nothing yet and is deliberately hidden from the public pricing page and the payment step.',
+        fg: T.text700,
+        bg: 'transparent',
+        border: T.border,
+      }
+      : feature.builtIn === false
+        ? {
+          label: 'Not built',
+          title: "This capability doesn't exist yet — toggling it here has no effect on access, and it is hidden from every customer-facing price list.",
+          fg: T.warning,
+          bg: T.warningSoft,
+          border: 'rgba(245, 158, 11, 0.32)',
+        }
+        : null;
+
+  if (!badge) return null;
+
+  return (
+    <span
+      title={badge.title}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        flexShrink: 0,
+        fontSize: 9,
+        fontWeight: 800,
+        letterSpacing: '0.09em',
+        textTransform: 'uppercase',
+        padding: '2px 7px',
+        borderRadius: 999,
+        lineHeight: 1.5,
+        color: badge.fg,
+        background: badge.bg,
+        border: `1px solid ${badge.border}`,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {badge.label}
+    </span>
+  );
+}
+
 // ── Feature Selector for a single tier ──
 function FeatureSelector({ tierFeatures, registry, onChange }) {
   const [expandedCats, setExpandedCats] = useState({});
   const featureSet = useMemo(() => new Set(tierFeatures || []), [tierFeatures]);
-  const totalCount = featureSet.size;
+
+  /**
+   * What this plan actually grants — the stored keys PLUS the always-on ones.
+   *
+   * The header count used to be `featureSet.size`, which reads the raw array and
+   * so disagreed with the switches directly beneath it the moment an always-on
+   * capability rendered as ON. A count that contradicts what is on screen is
+   * worse than no count: it is the one number an admin uses to sanity-check a
+   * plan before saving it.
+   */
+  const grantedCount = useMemo(() => {
+    const all = registry?.allFeatures || [];
+    if (all.length === 0) return featureSet.size;
+    return all.filter((f) => featureSet.has(f.key) || f.alwaysOn === true).length;
+  }, [registry, featureSet]);
+  const totalCount = grantedCount;
 
   const toggleFeature = useCallback((key) => {
     const updated = featureSet.has(key)
@@ -80,12 +177,16 @@ function FeatureSelector({ tierFeatures, registry, onChange }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
         {registry.categories.map(cat => {
           const catFeatures = registry.features[cat] || [];
-          const catSelected = catFeatures.filter(f => featureSet.has(f.key)).length;
+          // Same rule as the switches below — see grantedCount.
+          const catSelected = catFeatures.filter(f => featureSet.has(f.key) || f.alwaysOn === true).length;
           const isExpanded = expandedCats[cat] !== false; // default open
 
           return (
             <div key={cat} style={{
-              border: `1px solid ${catSelected > 0 ? T.primary + '40' : T.border}`,
+              // rgba literal, not `T.primary + '40'`: T.primary is a var()
+              // string, so the concatenation produced an invalid colour and this
+              // border has never rendered. See FeatureStateBadge's note.
+              border: `1px solid ${catSelected > 0 ? 'rgba(184, 148, 79, 0.25)' : T.border}`,
               borderRadius: T.radiusSm,
               background: catSelected > 0 ? T.primarySoft : T.surface,
               transition: 'all 0.2s ease',
@@ -124,34 +225,50 @@ function FeatureSelector({ tierFeatures, registry, onChange }) {
                     style={{ overflow: 'hidden' }}
                   >
                     <div style={{ padding: '4px 14px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      {catFeatures.map(feat => (
+                      {catFeatures.map(feat => {
+                        // An always-on capability is shown ON and locked, because
+                        // it IS on: entitledFeatures() unions it into every tier,
+                        // so whether the key sits in this array changes nothing.
+                        // Rendering it as an ordinary switch invited an admin to
+                        // "remove" something from a plan and watch nothing happen.
+                        const on = featureSet.has(feat.key) || feat.alwaysOn === true;
+                        const locked = feat.builtIn === false || feat.alwaysOn === true;
+                        return (
                         <div key={feat.key} style={{
                           display: 'flex', alignItems: 'center', gap: 12, padding: '8px 10px',
                           borderRadius: 8,
-                          background: featureSet.has(feat.key) ? 'rgba(184, 148, 79, 0.05)' : 'rgba(0,0,0,0.01)',
-                          border: `1px solid ${featureSet.has(feat.key) ? 'rgba(184, 148, 79, 0.15)' : 'transparent'}`,
+                          background: on ? 'rgba(184, 148, 79, 0.05)' : 'rgba(0,0,0,0.01)',
+                          border: `1px solid ${on ? 'rgba(184, 148, 79, 0.15)' : 'transparent'}`,
                           transition: 'all 0.15s',
                           opacity: feat.builtIn === false ? 0.6 : 1,
                         }}>
                           <Toggle
-                            checked={featureSet.has(feat.key)}
+                            checked={on}
                             onChange={() => toggleFeature(feat.key)}
-                            disabled={feat.builtIn === false}
+                            disabled={locked}
                           />
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 12.5, fontWeight: 600, color: T.text900, display: 'flex', alignItems: 'center', gap: 6 }}>
+                            {/* flexWrap, because this row can now carry a label
+                                plus a badge. A nowrap flex row's min-content
+                                width is the SUM of its children, so on a narrow
+                                admin window "Basic RSVP forms" + a pill would
+                                push out of its own box rather than reflow. */}
+                            <div style={{ fontSize: 12.5, fontWeight: 600, color: T.text900, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                               {feat.label}
-                              {feat.freeDefault && (
+                              {/* "Free" is suppressed next to "Always on": every
+                                  alwaysOn key is also freeDefault, and stacking
+                                  two pills that say the same thing reads as two
+                                  different facts. The stronger claim wins. */}
+                              {feat.freeDefault && feat.alwaysOn !== true && (
                                 <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4, background: T.successSoft, color: T.success, textTransform: 'uppercase' }}>Free</span>
                               )}
-                              {feat.builtIn === false && (
-                                <span title="This capability isn't built yet — toggling it here has no effect on access." style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4, background: T.warningSoft, color: T.warning, textTransform: 'uppercase' }}>Not built yet</span>
-                              )}
+                              <FeatureStateBadge feature={feat} />
                             </div>
                             <div style={{ fontSize: 11, color: T.text500, marginTop: 1, lineHeight: 1.3 }}>{feat.description}</div>
                           </div>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </motion.div>
                 )}
@@ -1249,7 +1366,15 @@ export default function ConfigPage() {
                         <input type="checkbox" checked={currentTier.is_custom === true} onChange={e => handleTierChange(selectedTierIdx, 'is_custom', e.target.checked)} />
                         <Icon name="creditCard" size={13} strokeWidth={1.6} /> Contact Sales / Custom Price
                       </label>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.text700, cursor: 'pointer', fontWeight: 600 }}>
+                      {/* One outcome, two switches — this and the "Remove Fancy
+                          watermark" entry in the feature list below. Either grants
+                          it (tierRemovesWatermark), and the title says so, because
+                          an admin who ticks only the other one and sees the mark
+                          ship anyway has no way to work out why. */}
+                      <label
+                        title="Same setting as 'Remove Fancy watermark' in the plan features below — either one drops the mark from guest pages."
+                        style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.text700, cursor: 'pointer', fontWeight: 600 }}
+                      >
                         <input type="checkbox" checked={currentTier.remove_watermark === true} onChange={e => handleTierChange(selectedTierIdx, 'remove_watermark', e.target.checked)} />
                         <Icon name="ban" size={13} strokeWidth={1.6} /> Remove Watermark
                       </label>

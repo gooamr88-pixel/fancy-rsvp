@@ -4,6 +4,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { translations } from '../../utils/translations';
+import { guestTitle } from '../../utils/guestBranding';
 import { normalizeToE164 } from '../../utils/phone';
 import { publicApiFetch } from '../../utils/publicApi';
 import { useGuestAnalytics, useRsvpFunnelTracking, useAbandonmentTracking } from '../../utils/useGuestAnalytics';
@@ -275,7 +276,8 @@ export default function RsvpWizard({ event, guest, context, submit: doSubmit, re
   /* ═══ Document title ═══ */
   useEffect(() => {
     if (event) {
-      document.title = `RSVP - ${event.title} | Fancy RSVP`;
+      // Same rule as the invitation page: the tab is a guest-facing surface.
+      document.title = guestTitle(event, 'RSVP - ');
       const metaDesc = document.querySelector('meta[name="description"]');
       if (metaDesc) { metaDesc.setAttribute('content', event.description || `RSVP to ${event.title}`); }
       else {

@@ -552,8 +552,17 @@ export default function SeatingMapPage() {
           // FeatureGate, but this standalone page and the tab's own content did
           // not). manual_override bypasses the tier check entirely, same as the
           // dashboard tab.
+          // EITHER key opens the editor, because either key opens the table
+          // routes it writes through (requireAnyFeature('seating_map',
+          // 'table_management')). Asking for seating_map alone would lock the
+          // page against a plan sold on table management, whose saves the
+          // server would have accepted.
           const features = Array.isArray(data.event.tier_features) ? data.event.tier_features : [];
-          setHasSeatingFeature(!!data.event.manual_override || features.includes('seating_map'));
+          setHasSeatingFeature(
+            !!data.event.manual_override
+            || features.includes('seating_map')
+            || features.includes('table_management'),
+          );
         } else {
           setEventIsPaid(false);
           setHasSeatingFeature(false);

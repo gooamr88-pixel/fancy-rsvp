@@ -1,6 +1,22 @@
 -- ════════════════════════════════════════════════════════════════════════
 -- GUEST ANALYTICS — COMPOSITE INDEXES FOR THE ORGANIZER DASHBOARD
 --
+-- ⚠ RENAMED 2026-08-26: was `20260727000000_guest_analytics_composite_indexes.sql`
+--   and shared that version with `20260727000000_backfill_pricing_tier_features.sql`.
+--   `schema_migrations` is keyed on the version, so only one of the two could
+--   ever be recorded — the other was then indistinguishable from an applied
+--   migration and silently never run.
+--
+--   THIS is the file that was renamed, not the backfill, because it is the safe
+--   half of the pair either way: every statement here is IF NOT EXISTS /
+--   IF EXISTS, so re-running costs milliseconds and changes nothing, whereas the
+--   backfill mutates pricing configuration. Evidence also points at the backfill
+--   being the one that took the version — 20260729000000's header describes the
+--   production symptom left behind by it having run and skipped non-empty tiers.
+--
+--   Found by `backend/test/migrationVersions.test.js`, which now fails the build
+--   on any duplicate version.
+--
 -- guest_analytics was created (backend/migrations/002_guest_analytics.sql)
 -- with four SINGLE-column indexes: event_id, event_type, created_at,
 -- session_id. Every query the analytics dashboard makes filters on event_id

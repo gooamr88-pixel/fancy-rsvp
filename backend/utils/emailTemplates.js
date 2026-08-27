@@ -506,9 +506,63 @@ const logoBlock = () => {
  *  • The footer carries the legal entity + postal address. That is a CAN-SPAM
  *    requirement and a real inbox-placement signal, not decoration.
  */
+/**
+ * The masthead for a WHITE-LABELLED event email.
+ *
+ * The host's own name, set in the same gold serif the wordmark used, so the
+ * email still opens with a masthead instead of a gap where a logo was. No image
+ * at all: we have no asset for the host, and a missing <img> in Outlook is a
+ * broken-image icon at the very top of the message.
+ */
+const hostWordmark = (name) => `<p style="margin:0; font-family:${SERIF}; font-size:22px; font-style:italic; letter-spacing:1px; color:${BRAND.gold};">${escapeHtml(name)}</p>`;
+
+/**
+ * The branding half of every GUEST-facing email, spread into its shell call.
+ *
+ * One helper rather than two properties written out eleven times: `whiteLabel`
+ * without `brandName` is an email with a hole where the masthead was, and
+ * `brandName` without `whiteLabel` is a Fancy logo above someone else's name.
+ * Spreading a single object makes the pair impossible to half-apply.
+ *
+ * `tier_white_label` is snapshotted on the EVENT (migration 20260830000003), so
+ * this works months after purchase, in a background job, with no session and no
+ * pricing config lookup — and keeps working if the plan is later renamed or
+ * deleted. A missing column reads as `false`: the mark stays until the
+ * entitlement is certain.
+ *
+ * `backend/test/whiteLabelEmails.test.js` renders every builder listed in this
+ * module's guest exports and fails if one of them leaks a Fancy mark — which is
+ * what catches the twelfth guest template that someone adds without this line.
+ */
+const guestBrand = (event) => ({
+  whiteLabel: !!event?.tier_white_label,
+  brandName: event?.title || '',
+});
+
+/**
+ * The shared shell every email is wrapped in.
+ *
+ * ── whiteLabel ──
+ *
+ * Strips every Fancy MARK a guest can see: the logo lockup, the gold wordmark in
+ * the footer, and the tagline. `brandName` (the event's title) takes the
+ * masthead's place.
+ *
+ * It deliberately does NOT strip the legal footer — the company name and postal
+ * address. That is a CAN-SPAM disclosure about the SENDER, and the sender is
+ * still us: this mail leaves our infrastructure, our domain and our IP
+ * reputation. Removing it to look whiter would make the message unlawful and
+ * damage deliverability for every customer sharing that reputation. It is set in
+ * the smallest muted type in the document; it is disclosure, not marketing.
+ *
+ * Only GUEST-facing event mail passes this. Account mail — verification, password
+ * reset, receipts — is genuinely from us to our own customer, and an unbranded
+ * security email is how a password reset gets read as phishing.
+ */
 const emailShell = ({
   preheader = '', eyebrow = '', accent = BRAND.gold, heading = '',
   contentHtml = '', footerNote = '', lang = 'en',
+  whiteLabel = false, brandName = '',
 }) => {
   const rtl = isRtl(lang);
   const dir = rtl ? 'rtl' : 'ltr';
@@ -527,7 +581,7 @@ const emailShell = ({
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <meta name="color-scheme" content="light">
   <meta name="supported-color-schemes" content="light">
-  <title>Fancy RSVP</title>
+  <title>${whiteLabel && brandName ? escapeHtml(brandName) : 'Fancy RSVP'}</title>
   <!--[if mso]>
   <noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript>
   <style>* { font-family: Arial, Helvetica, sans-serif !important; }</style>
@@ -567,7 +621,7 @@ const emailShell = ({
           <!-- Logo -->
           <tr>
             <td align="center" style="padding:2px 0 26px;">
-              ${logoBlock()}
+              ${whiteLabel ? (brandName ? hostWordmark(brandName) : '') : logoBlock()}
             </td>
           </tr>
           <!-- Card -->
@@ -597,9 +651,13 @@ const emailShell = ({
           <!-- Footer -->
           <tr>
             <td align="center" style="padding:28px 24px 6px; text-align:center;">
-              <p style="margin:0 0 8px; font-family:${SERIF}; font-size:16px; font-style:italic; color:${BRAND.gold};">Fancy RSVP</p>
+              ${whiteLabel ? '' : `<p style="margin:0 0 8px; font-family:${SERIF}; font-size:16px; font-style:italic; color:${BRAND.gold};">Fancy RSVP</p>`}
               <p class="fr-muted" style="margin:0 0 10px; font-family:${SANS}; font-size:11px; line-height:1.7; color:${BRAND.muted};">
-                ${footerNote || pick(lang, CHROME.tagline)}<br>
+                ${/* Our tagline and our "sent via Fancy RSVP" note both go. The
+                     "do not reply" line STAYS: it is operational instruction to
+                     the reader, and a guest replying into an unmonitored mailbox
+                     is a support failure whoever's name is on the message. */''}
+                ${whiteLabel ? '' : `${footerNote || pick(lang, CHROME.tagline)}<br>`}
                 ${pick(lang, CHROME.automated)}
               </p>
               <p class="fr-muted" style="margin:0; font-family:${SANS}; font-size:10px; line-height:1.7; color:${BRAND.muted};" dir="ltr">
@@ -691,6 +749,7 @@ const getInvitationTemplate = (rsvp, event, links, lang = 'en') => {
   if (where) rows.push([pick(lang, { en: 'Where', ar: 'المكان' }), escapeHtml(where)]);
 
   return emailShell({
+    ...guestBrand(event),
     lang,
     preheader: pick(lang, {
       en: `You're invited to ${event.title}`,
@@ -734,6 +793,7 @@ const getRSVPConfirmationTemplate = (rsvp, event, lang = 'en', links = null) => 
   if (formattedDate) rows.push([pick(lang, { en: 'Date', ar: 'التاريخ' }), escapeHtml(formattedDate)]);
 
   return emailShell({
+    ...guestBrand(event),
     lang,
     preheader: isMaybe
       ? pick(lang, { en: `We've noted your response for ${event.title}`, ar: `سجّلنا ردّك على ${event.title}` })
@@ -806,6 +866,7 @@ const getDeclineConfirmationTemplate = (rsvp, event, lang = 'en') => {
     : `We're sorry you won't be able to join us${formattedDate ? ` on <strong>${escapeHtml(formattedDate)}</strong>` : ''}. We completely understand, and we truly appreciate you taking the time to let us know.`;
 
   return emailShell({
+    ...guestBrand(event),
     lang,
     preheader: pick(lang, {
       en: `Thank you for letting us know — ${event.title}`,
@@ -845,6 +906,7 @@ const getCompanionRSVPConfirmationTemplate = (companionName, mainGuestName, even
   const named = `<strong class="fr-ink" style="color:${BRAND.charcoal};">${escapeHtml(mainGuestName)}</strong>`;
 
   return emailShell({
+    ...guestBrand(event),
     lang,
     preheader: pick(lang, {
       en: `You're registered for ${event.title}`,
@@ -878,6 +940,7 @@ const getCompanionRSVPConfirmationTemplate = (companionName, mainGuestName, even
  * about the event beyond its title, and an explicit "if this wasn't you" line.
  */
 const getRsvpClaimTemplate = (guestName, event, claimUrl, lang = 'en') => emailShell({
+  ...guestBrand(event),
   lang,
   preheader: pick(lang, {
     en: `Your link to update your RSVP for ${event.title}`,
@@ -985,6 +1048,7 @@ const getQRTicketTemplate = (rsvp, event, { tableName = null, zoneName = null, l
     }));
 
   return emailShell({
+    ...guestBrand(event),
     lang,
     /* announceChange, NOT changed — the eyebrow and the preheader are the two
        lines a guest reads before opening anything, and keying them off the raw
@@ -1373,6 +1437,7 @@ const getRsvpReminderTemplate = (rsvp, event, links, lang = 'en') => {
     : `We'd love to know if you can join us${formattedDate ? ` on <strong>${escapeHtml(formattedDate)}</strong>` : ''}. We haven't received your response yet${deadline ? ` — RSVPs close on <strong>${escapeHtml(deadline)}</strong>` : ''}.`;
 
   return emailShell({
+    ...guestBrand(event),
     lang,
     preheader: pick(lang, {
       en: `Reminder: please RSVP for ${event.title}`,
@@ -1429,6 +1494,7 @@ const getEventReminderTemplate = (rsvp, event, opts = {}, lang = 'en') => {
   if (formattedTable) rows.push([pick(lang, { en: 'Your table', ar: 'طاولتك' }), escapeHtml(formattedTable), BRAND.gold]);
 
   return emailShell({
+    ...guestBrand(event),
     lang,
     /**
      * NOT "tomorrow", and that is deliberate.
@@ -1489,6 +1555,7 @@ const getEventReminderTemplate = (rsvp, event, opts = {}, lang = 'en') => {
 const getPostEventThankYouTemplate = (rsvp, event, lang = 'en') => {
   const named = `<strong class="fr-ink" style="color:${BRAND.charcoal};">${escapeHtml(event.title)}</strong>`;
   return emailShell({
+    ...guestBrand(event),
     lang,
     preheader: pick(lang, {
       en: `Thank you for celebrating ${event.title}`,
@@ -1517,6 +1584,7 @@ const getPostEventThankYouTemplate = (rsvp, event, lang = 'en') => {
 const getEventUpdatedTemplate = (rsvp, event, changes, eventUrl, lang = 'en') => {
   const rows = (changes || []).map((c) => [c.label, escapeHtml(c.value)]);
   return emailShell({
+    ...guestBrand(event),
     lang,
     preheader: pick(lang, { en: `Update to ${event.title}`, ar: `تحديث بخصوص ${event.title}` }),
     eyebrow: pick(lang, { en: 'Event details updated', ar: 'تم تحديث تفاصيل المناسبة' }),
@@ -1560,6 +1628,7 @@ const getEventCancelledTemplate = (rsvp, event, eventUrl, lang = 'en', reason = 
   const when = event.event_date ? formatEventDate(event.event_date, event.timezone) : null;
   const rows = when ? [[pick(lang, { en: 'Was scheduled for', ar: 'كان مقررًا في' }), escapeHtml(when)]] : [];
   return emailShell({
+    ...guestBrand(event),
     lang,
     preheader: pick(lang, {
       en: `${event.title} has been cancelled`,

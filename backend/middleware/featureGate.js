@@ -9,9 +9,13 @@
  * Resolution order:
  *   1. Super admins bypass all gates (consistent with RBAC pattern).
  *   2. Event must exist (404 otherwise).
- *   3. Unpaid events get only FREE_TIER_FEATURES; everything else → 403.
+ *   3. Unpaid events get only BASELINE_FEATURES; everything else → 403.
  *   4. Paid events → look up tier definition from cached config → check if the
- *      requested feature key is in the tier's `features` array.
+ *      requested feature key is in the tier's `features` array, which always
+ *      carries BASELINE_FEATURES on top of what the plan stores.
+ *
+ * BASELINE_FEATURES (utils/tierResolver.js) is freeDefault UNION alwaysOn — the
+ * floor under every event, so a paid plan can never grant less than a free one.
  *
  * Relies on:
  *   - `events.tier_key` — the plan's STABLE identity (set at fulfillment).
@@ -26,8 +30,8 @@
 const { supabase } = require('../config/supabase');
 const logger = require('../utils/logger');
 const { getPlatformConfig } = require('../utils/configCache');
-const { FREE_TIER_FEATURES, getFeatureByKey, isValidFeatureKey } = require('../config/featureRegistry');
-const { entitledFeatures, selectEventWithTier } = require('../utils/tierResolver');
+const { getFeatureByKey } = require('../config/featureRegistry');
+const { entitledFeatures, selectEventWithTier, BASELINE_FEATURES } = require('../utils/tierResolver');
 
 /**
  * Primary feature-gate middleware factory.
@@ -59,11 +63,19 @@ const requireFeature = (featureKey) => async (req, res, next) => {
       });
     }
 
-    // 2. Unpaid / free events — only FREE_TIER_FEATURES are allowed.
+    // 2. Unpaid / free events — only the baseline is allowed.
+    //
+    // BASELINE_FEATURES, not FREE_TIER_FEATURES: the baseline is freeDefault
+    // UNION alwaysOn, and `alwaysOn` means "every plan carries this, paid or
+    // not". The two sets are identical today, so this changes nothing now — it
+    // stops the day someone marks a key alwaysOn without also marking it
+    // freeDefault, at which point an unpaid event would be refused a capability
+    // the admin UI shows as impossible to switch off. One floor, one definition,
+    // read by every branch of every gate.
     if (!event.is_paid && !event.manual_override) {
-      if (FREE_TIER_FEATURES.has(featureKey)) {
+      if (BASELINE_FEATURES.includes(featureKey)) {
         req.event = event;
-        req.tierFeatures = [...FREE_TIER_FEATURES];
+        req.tierFeatures = [...BASELINE_FEATURES];
         return next();
       }
       const feat = getFeatureByKey(featureKey);
@@ -78,7 +90,14 @@ const requireFeature = (featureKey) => async (req, res, next) => {
     }
 
     // 3. Paid / manually-overridden events — check the tier's feature list.
-    let tierFeatures = [];
+    //
+    // Seeded with the always-on baseline rather than empty. `entitledFeatures`
+    // applies that floor itself, but it is only CALLED when the event carries a
+    // tier — so a paid event with no plan on it at all (a comp granted before
+    // the tier snapshot existed, a half-fulfilled purchase) fell through with an
+    // empty list and was refused even the capabilities the admin UI shows as
+    // impossible to switch off.
+    let tierFeatures = [...BASELINE_FEATURES];
 
     if (event.tier_key || event.tier_name) {
       try {
@@ -159,10 +178,12 @@ const requireAnyFeature = (...featureKeys) => async (req, res, next) => {
       return res.status(404).json({ success: false, error: 'EVENT_NOT_FOUND', message: 'Event not found.' });
     }
 
-    // Unpaid — check if ANY requested feature is free-tier.
+    // Unpaid — check if ANY requested feature is in the baseline. Same floor as
+    // requireFeature above; see the note there for why it is not FREE_TIER_FEATURES.
     if (!event.is_paid && !event.manual_override) {
-      if (featureKeys.some((k) => FREE_TIER_FEATURES.has(k))) {
+      if (featureKeys.some((k) => BASELINE_FEATURES.includes(k))) {
         req.event = event;
+        req.tierFeatures = [...BASELINE_FEATURES];
         return next();
       }
       return res.status(403).json({
@@ -177,7 +198,8 @@ const requireAnyFeature = (...featureKeys) => async (req, res, next) => {
     // (key, then legacy name, then the purchase-time snapshot); two different
     // answers to "does this plan include X" is how a surface ends up visible
     // and un-callable.
-    let tierFeatures = [];
+    // Baseline-seeded for the same reason as requireFeature above.
+    let tierFeatures = [...BASELINE_FEATURES];
     if (event.tier_key || event.tier_name) {
       try {
         const config = await getPlatformConfig();
@@ -206,5 +228,54 @@ const requireAnyFeature = (...featureKeys) => async (req, res, next) => {
   }
 };
 
+/**
+ * The same question, asked WITHOUT rejecting the request.
+ *
+ * Some capabilities are not a whole endpoint. Advanced analytics is a set of
+ * blocks inside a response whose basic half every plan gets — 403'ing the route
+ * would take the basic dashboard away to withhold the charts. So the controller
+ * asks this, includes what the plan carries, and flags what it withheld so the
+ * client can render a plan lock over exactly those panels instead of drawing
+ * empty ones.
+ *
+ * It is the SAME resolution as `requireFeature` — one implementation, so a
+ * partial gate cannot drift from a full one and leave a surface visible that
+ * the API refuses, or vice versa.
+ *
+ * Fails CLOSED. An unverifiable entitlement withholds the extra blocks; the
+ * caller still returns the basic payload, so the cost of an outage here is a
+ * locked panel, never a broken page.
+ *
+ * @param {string} eventId
+ * @param {string} featureKey
+ * @param {{ isSuperAdmin?: boolean }} [actor]  pass `req.user` to keep the admin bypass
+ * @returns {Promise<boolean>}
+ */
+const eventHasFeature = async (eventId, featureKey, actor = null) => {
+  if (actor?.isSuperAdmin) return true;
+
+  try {
+    const { data: event, error } = await selectEventWithTier(
+      supabase, eventId, 'id, is_paid, manual_override, status');
+    if (error || !event) return false;
+
+    if (!event.is_paid && !event.manual_override) {
+      return BASELINE_FEATURES.includes(featureKey);
+    }
+    if (!event.tier_key && !event.tier_name) {
+      // Same floor requireFeature applies to a paid event carrying no plan.
+      return BASELINE_FEATURES.includes(featureKey);
+    }
+
+    const config = await getPlatformConfig();
+    return entitledFeatures(config.pricing_tiers, event).features.includes(featureKey);
+  } catch (err) {
+    logger.warn({ err, eventId, feature: featureKey }, 'eventHasFeature: lookup failed — withholding');
+    return false;
+  }
+};
+
 // Backward-compat alias — existing route files import `requirePaidEvent`.
-module.exports = { requireFeature, requirePaidEvent: requireFeature, requireAnyFeature };
+module.exports = {
+  requireFeature, requirePaidEvent: requireFeature, requireAnyFeature, eventHasFeature,
+};

@@ -41,6 +41,66 @@
  * reports which branch matched so callers can heal the row.
  */
 
+const { FREE_TIER_FEATURES, ALWAYS_ON_FEATURES } = require('../config/featureRegistry');
+
+/**
+ * The floor under every plan: what a tier grants no matter what its `features`
+ * array says.
+ *
+ * `freeDefault` keys are what an UNPAID event gets, so a paid tier that omits
+ * one would hand a paying customer strictly less than someone who paid nothing.
+ * `alwaysOn` keys are the ones the admin UI renders checked-and-locked. Both
+ * promises are kept in this one place, so no gate has to remember either.
+ */
+const BASELINE_FEATURES = [...new Set([...FREE_TIER_FEATURES, ...ALWAYS_ON_FEATURES])];
+
+/** A tier's stored features plus the baseline, order-stable and de-duplicated. */
+function withBaseline(features) {
+  const list = Array.isArray(features) ? features : [];
+  return [...new Set([...list, ...BASELINE_FEATURES])];
+}
+
+/**
+ * Does this plan drop the "Powered by Fancy RSVP" mark?
+ *
+ * TWO admin switches say so — the `remove_watermark` checkbox on the tier, and
+ * the `remove_watermark` entry in the plan's feature checklist — and until now
+ * only the first was ever read, so ticking the one that sits amongst everything
+ * else the plan includes shipped the watermark anyway. Either grants it.
+ *
+ * Every write of `events.tier_remove_watermark` goes through here: the purchase
+ * snapshot, the Stripe checkout metadata, and the self-heal in withResolvedTier.
+ * The guest page reads only that column, so this function is the whole gate.
+ */
+function tierRemovesWatermark(tier) {
+  if (!tier) return false;
+  if (tier.remove_watermark === true) return true;
+  if (!Array.isArray(tier.features)) return false;
+  // White label is a SUPERSET of removing the mark. Reading only
+  // `remove_watermark` here would let a white-label plan ship a guest page with
+  // "Powered by Fancy RSVP" still on it because an admin ticked the bigger
+  // feature and not the smaller one — the single most visible way this product
+  // could contradict what a customer paid for.
+  return tier.features.includes('remove_watermark') || tier.features.includes('white_label');
+}
+
+/**
+ * Is this plan white-labelled — no Fancy mark anywhere a GUEST can see?
+ *
+ * Strictly more than `tierRemovesWatermark`: that one governs a single line on
+ * the invitation page and the pass, this one also strips the logo, the wordmark
+ * and the tagline from every event email and puts the host's name there instead.
+ *
+ * Only the feature key grants it. There is deliberately no second switch — the
+ * watermark's two-switch history is in this file for a reason, and adding a
+ * `white_label` boolean beside the tier's `remove_watermark` one would recreate
+ * exactly that bug at a higher price point.
+ */
+function tierIsWhiteLabel(tier) {
+  if (!tier) return false;
+  return Array.isArray(tier.features) && tier.features.includes('white_label');
+}
+
 /**
  * A stable, URL-safe key derived from a name — used ONLY when minting a key for
  * a tier that has never had one. Never call this to look a tier up: that would
@@ -110,7 +170,12 @@ function tierSnapshot(tier) {
     tier_key: String(tier.key || '').trim() || slugifyTierName(tier.name),
     tier_name: String(tier.name || '').trim(),
     tier_max_guests: Number.isFinite(tier.max_guests) ? tier.max_guests : null,
-    tier_remove_watermark: !!tier.remove_watermark,
+    // Either switch grants it — see tierRemovesWatermark.
+    tier_remove_watermark: tierRemovesWatermark(tier),
+    // Snapshotted for the same reason as the watermark: the guest page and the
+    // event emails read the EVENT, months after the purchase, and what somebody
+    // paid for must not depend on the plan still existing.
+    tier_white_label: tierIsWhiteLabel(tier),
     // What the licence cost, frozen at purchase. This is the upgrade credit
     // when the plan itself can no longer be resolved — deriving it instead
     // from payment history would over-credit, because a checkout can bundle
@@ -130,24 +195,33 @@ function tierSnapshot(tier) {
  * editable plans. SNAPSHOT only when the plan is gone, so that a rename or a
  * deletion can never revoke what someone paid for.
  *
+ * BASELINE_FEATURES are unioned onto every answer, including the empty one: a
+ * plan cannot grant less than an unpaid event, and the keys the admin UI shows
+ * as always-included have to actually be included. `source` still reports how
+ * the TIER resolved — the baseline is not a resolution outcome, so a caller
+ * logging 'snapshot' is still telling the truth about the plan.
+ *
  * @returns {{ features: string[], source: 'tier'|'snapshot'|'none', tier: object|null, matchedBy: string|null }}
  */
 function entitledFeatures(tiers, event) {
   const { tier, matchedBy } = resolveTier(tiers, { key: event?.tier_key, name: event?.tier_name });
   if (tier && Array.isArray(tier.features)) {
-    return { features: tier.features, source: 'tier', tier, matchedBy };
+    return { features: withBaseline(tier.features), source: 'tier', tier, matchedBy };
   }
   const snapshot = Array.isArray(event?.tier_features) ? event.tier_features : null;
   if (snapshot && snapshot.length > 0) {
-    return { features: snapshot, source: 'snapshot', tier: null, matchedBy };
+    return { features: withBaseline(snapshot), source: 'snapshot', tier: null, matchedBy };
   }
-  return { features: [], source: 'none', tier: null, matchedBy };
+  return { features: withBaseline([]), source: 'none', tier: null, matchedBy };
 }
 
 /** The columns every entitlement read needs. One list, so no caller under-selects. */
-const TIER_COLUMNS = 'tier_key, tier_name, tier_max_guests, tier_remove_watermark, tier_features, tier_price_cents';
+const TIER_COLUMNS = 'tier_key, tier_name, tier_max_guests, tier_remove_watermark, tier_white_label, tier_features, tier_price_cents';
 
-/** What existed before 20260818000000_tier_identity.sql. */
+/** Everything except `tier_white_label` — i.e. before 20260830000003_white_label.sql. */
+const IDENTITY_TIER_COLUMNS = 'tier_key, tier_name, tier_max_guests, tier_remove_watermark, tier_features, tier_price_cents';
+
+/** What existed before 20260818000002_tier_identity.sql. */
 const LEGACY_TIER_COLUMNS = 'tier_name, tier_max_guests, tier_remove_watermark';
 
 /** PostgREST's "you selected a column that does not exist". */
@@ -178,9 +252,24 @@ function isUndefinedColumnError(error) {
  * @param {string} baseColumns  the caller's own columns, without any tier_*
  */
 async function selectEventWithTier(supabase, eventId, baseColumns) {
-  const full = await supabase
-    .from('events').select(`${baseColumns}, ${TIER_COLUMNS}`).eq('id', eventId).single();
-  if (!isUndefinedColumnError(full.error)) return full;
+  // A LADDER, not a single fallback, and the middle rung is the point.
+  //
+  // Every column added to TIER_COLUMNS makes the full select fail on a database
+  // that has not caught up — and a straight full→legacy fallback means the
+  // newest migration missing costs the OLDEST behaviour: name-only plan
+  // resolution and no entitlement snapshot, so a renamed tier silently revokes
+  // paid features. That is a big regression to pay for one boolean.
+  //
+  // So each rung drops exactly one migration's worth of columns. A deployment
+  // missing only `tier_white_label` keeps identity and snapshots; only a
+  // deployment missing the identity migration itself falls all the way back.
+  for (const columns of [TIER_COLUMNS, IDENTITY_TIER_COLUMNS]) {
+    const attempt = await supabase
+      .from('events').select(`${baseColumns}, ${columns}`).eq('id', eventId).single();
+    if (!isUndefinedColumnError(attempt.error)) {
+      return columns === TIER_COLUMNS ? attempt : { ...attempt, tierColumnsPartial: true };
+    }
+  }
 
   const legacy = await supabase
     .from('events').select(`${baseColumns}, ${LEGACY_TIER_COLUMNS}`).eq('id', eventId).single();
@@ -192,9 +281,14 @@ module.exports = {
   ensureTierKeys,
   resolveTier,
   tierSnapshot,
+  tierRemovesWatermark,
+  tierIsWhiteLabel,
   entitledFeatures,
+  withBaseline,
+  BASELINE_FEATURES,
   selectEventWithTier,
   isUndefinedColumnError,
   TIER_COLUMNS,
+  IDENTITY_TIER_COLUMNS,
   LEGACY_TIER_COLUMNS,
 };

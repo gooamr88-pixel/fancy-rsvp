@@ -78,6 +78,9 @@ const fulfillCheckoutSession = async (session) => {
     const parsedCap = rawCap !== undefined && rawCap !== '' ? parseInt(rawCap, 10) : NaN;
     const tierMaxGuests = Number.isFinite(parsedCap) ? parsedCap : null;
     const tierRemoveWatermark = session.metadata.tier_remove_watermark === '1';
+    // White label implies the mark is gone; tierRemovesWatermark already folded
+    // that in when the metadata was written, so these two never disagree.
+    const tierWhiteLabel = session.metadata.tier_white_label === '1';
     const isUpgrade = session.metadata.is_upgrade === '1';
     const rawPrice = session.metadata.tier_price_cents;
     const parsedPrice = rawPrice !== undefined && rawPrice !== '' ? parseInt(rawPrice, 10) : NaN;
@@ -207,6 +210,7 @@ const fulfillCheckoutSession = async (session) => {
           tier_key: tierKey,
           tier_max_guests: tierMaxGuests,
           tier_remove_watermark: tierRemoveWatermark,
+        tier_white_label: tierWhiteLabel,
           ...(tierFeatures ? { tier_features: tierFeatures } : {}),
           ...(tierPriceCents !== null ? { tier_price_cents: tierPriceCents } : {}),
         })
@@ -252,6 +256,7 @@ const fulfillCheckoutSession = async (session) => {
       tier_name: tierName,
       tier_max_guests: tierMaxGuests,
       tier_remove_watermark: tierRemoveWatermark,
+        tier_white_label: tierWhiteLabel,
       ...(tierFeatures ? { tier_features: tierFeatures } : {}),
       ...(tierPriceCents !== null ? { tier_price_cents: tierPriceCents } : {}),
       referral_credit_applied_cents: referralCreditAppliedCents,

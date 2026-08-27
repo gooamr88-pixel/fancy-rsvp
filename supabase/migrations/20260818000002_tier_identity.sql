@@ -1,6 +1,33 @@
 -- ════════════════════════════════════════════════════════════════════════
 -- PRICING TIERS GET AN IDENTITY (and events get an entitlement snapshot)
 -- ────────────────────────────────────────────────────────────────────────
+-- ⚠ RENAMED 2026-08-26: this file was `20260818000000_tier_identity.sql` and
+--   shared that version prefix with `20260818000000_sms_addon.sql`.
+--
+--   `supabase_migrations.schema_migrations` is keyed on the version — the digits
+--   before the first underscore — so two files claiming one version cannot both
+--   be recorded. Whichever ran first took the version; the second was then
+--   indistinguishable from a migration that had already been applied, and was
+--   silently never run again. The symptom of THIS file losing that race is
+--   exactly the report that started the audit: `events.tier_key` and
+--   `events.tier_features` do not exist, `selectEventWithTier()` quietly falls
+--   back to resolving plans by display name, entitlement snapshots are never
+--   written, and subscription tiers appear not to work.
+--
+--   Renaming to an unclaimed version is what makes it run. It is safe to run
+--   again if it did already apply: every statement below is idempotent —
+--   ADD COLUMN IF NOT EXISTS, key minting that skips tiers that already have a
+--   key, backfills guarded on `tier_key IS NULL`, CREATE INDEX IF NOT EXISTS,
+--   and CREATE OR REPLACE FUNCTION.
+--
+--   `_sms_addon.sql` deliberately KEEPS the original version: its columns are in
+--   production use, so the recorded row belongs to it, and renaming it too would
+--   leave `20260818000000` recorded with no matching file — which the CLI reports
+--   as remote/local drift needing `supabase migration repair`.
+--
+--   `backend/test/migrationVersions.test.js` fails the build if two migrations
+--   ever share a version again.
+-- ────────────────────────────────────────────────────────────────────────
 -- Until now a pricing tier had no identity: tiers are elements of the
 -- `super_admin_config.pricing_tiers` JSON array, and an event's only link to
 -- the one it bought was `events.tier_name TEXT`. The DISPLAY NAME was the

@@ -2,13 +2,25 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { apiFetch } from '../../utils/apiClient';
 import { instantToWallClock } from '../../utils/timezone';
 import { useIsClient } from '../../utils/useIsClient';
+import { usePublicPricing } from '../../utils/usePublicPricing';
+import PlanLock from '../components/PlanLock';
 import {
   VIZ, Card, Hero, Stat, Meter, BarList, StackedBar, LinePanel, Empty, StatusNote,
   compact, duration,
 } from './viz';
+
+/**
+ * The registry label for `analytics_advanced`, verbatim.
+ *
+ * The public pricing endpoint renders a tier's contents by LABEL, not by key —
+ * keys never reach the browser — so this is how a plan is recognised as
+ * carrying the deep charts.
+ */
+const ADVANCED_ANALYTICS_LABEL = 'Real-time analytics & reports';
 
 /* ═══════════════════════════════════════════════════════════════════════════
    ORGANIZER ANALYTICS
@@ -274,7 +286,20 @@ function LoadingState() {
 
 /* ═══ The composed view ═══ */
 function Dashboard({ data }) {
-  const { overview = {}, funnel = [], reveal = {}, engagementActions = {}, declineReasons = {}, sources = {}, timeline = [], rangeApplied = false } = data;
+  const {
+    overview = {}, funnel = [], reveal = {}, engagementActions = {}, declineReasons = {},
+    sources = {}, timeline = [], rangeApplied = false,
+    /**
+     * Does this plan carry the deep charts?
+     *
+     * Defaults TRUE on purpose. The flag arrives from the server, and a response
+     * that predates it — a cached page, a backend mid-deploy — must not draw a
+     * padlock over analytics a customer is paying for. Same rule DashboardNav
+     * applies to the SMS badge: never badge a working feature as locked because
+     * of version skew. The API is the enforcement; this is presentation.
+     */
+    advanced = true,
+  } = data;
 
   /* Who is coming is a CURRENT fact, not a windowed one — the backend
      deliberately does not filter RSVP state by the date range (see the
@@ -348,131 +373,171 @@ function Dashboard({ data }) {
         </div>
       </section>
 
-      {/* ─── 3: the envelope ─── */}
-      <Card
-        title="The envelope"
-        hint="Every guest meets the sealed invitation before the page itself. This is how many got past it — and how long they hesitated before tapping the wax."
-        table={{
-          columns: ['Stage', 'Guests'],
-          rows: [
-            ['Envelope shown', compact(reveal.shown || 0)],
-            ['Seal tapped', compact(reveal.opened || 0)],
-            ['Skipped', compact(reveal.skipped || 0)],
-            ['Artwork failed to load', compact(reveal.failed || 0)],
-            ['Median time to tap', duration(reveal.medianMsToOpen)],
-          ],
-        }}
-      >
-        {reveal.shown ? (
-          <>
-            <div className="fx-grid" style={{ '--fx-col': '210px', '--fx-gap': '20px', alignItems: 'start' }}>
-              <Meter
-                label="Opened the seal"
-                value={reveal.openRate || 0}
-                caption={`${compact(reveal.opened || 0)} of ${compact(reveal.shown)} guests who saw it`}
-              />
-              <Stat label="Median time to tap" value={duration(reveal.medianMsToOpen)} sub="from the moment it appeared" />
-              <Stat label="Skipped it" value={compact(reveal.skipped || 0)} sub={reveal.shown ? `${Math.round(((reveal.skipped || 0) / reveal.shown) * 100)}% of viewers` : null} />
-            </div>
-            {reveal.failed > 0 && (
-              <StatusNote tone="critical">
-                <strong>{compact(reveal.failed)}</strong> {reveal.failed === 1 ? 'guest' : 'guests'} never saw the envelope — its artwork
-                failed to load and they were shown the plain invitation card instead. This is a fault, not a preference: any number here
-                above zero is worth investigating.
-              </StatusNote>
+      {/* ─── 3 onwards: the paid half ───
+          The headline above is `analytics_basic`, which every plan carries.
+          Everything below is `analytics_advanced`, and the server omits those
+          blocks entirely when the plan does not include them — so this cannot
+          render them as empty charts and call it a degraded view. It shows what
+          is missing and which plans carry it instead. */}
+      {!advanced ? (
+        <AdvancedLocked />
+      ) : (
+        <>
+          {/* ─── 3: the envelope ─── */}
+          <Card
+            title="The envelope"
+            hint="Every guest meets the sealed invitation before the page itself. This is how many got past it — and how long they hesitated before tapping the wax."
+            table={{
+              columns: ['Stage', 'Guests'],
+              rows: [
+                ['Envelope shown', compact(reveal.shown || 0)],
+                ['Seal tapped', compact(reveal.opened || 0)],
+                ['Skipped', compact(reveal.skipped || 0)],
+                ['Artwork failed to load', compact(reveal.failed || 0)],
+                ['Median time to tap', duration(reveal.medianMsToOpen)],
+              ],
+            }}
+          >
+            {reveal.shown ? (
+              <>
+                <div className="fx-grid" style={{ '--fx-col': '210px', '--fx-gap': '20px', alignItems: 'start' }}>
+                  <Meter
+                    label="Opened the seal"
+                    value={reveal.openRate || 0}
+                    caption={`${compact(reveal.opened || 0)} of ${compact(reveal.shown)} guests who saw it`}
+                  />
+                  <Stat label="Median time to tap" value={duration(reveal.medianMsToOpen)} sub="from the moment it appeared" />
+                  <Stat label="Skipped it" value={compact(reveal.skipped || 0)} sub={reveal.shown ? `${Math.round(((reveal.skipped || 0) / reveal.shown) * 100)}% of viewers` : null} />
+                </div>
+                {reveal.failed > 0 && (
+                  <StatusNote tone="critical">
+                    <strong>{compact(reveal.failed)}</strong> {reveal.failed === 1 ? 'guest' : 'guests'} never saw the envelope — its artwork
+                    failed to load and they were shown the plain invitation card instead. This is a fault, not a preference: any number here
+                    above zero is worth investigating.
+                  </StatusNote>
+                )}
+              </>
+            ) : (
+              <Empty text="No guest has reached the envelope in this range yet." />
             )}
-          </>
-        ) : (
-          <Empty text="No guest has reached the envelope in this range yet." />
-        )}
-      </Card>
+          </Card>
 
-      {/* ─── 4: where they fall out ─── */}
-      <Card
-        title="RSVP funnel"
-        hint="Each step is the number of guests who reached it. The drop beside a step is how many were lost getting there from the one above."
-        table={{
-          columns: ['Step', 'Guests', 'Drop-off'],
-          rows: funnel.map((s) => [s.step, compact(s.count), s.dropOff != null ? `${s.dropOff}%` : '—']),
-        }}
-      >
-        {funnel.some((s) => s.count > 0) ? (
-          <BarList
-            ramp={VIZ.ordinal}
-            items={funnel.map((s) => ({
-              label: s.step,
-              value: s.count,
-              note: s.dropOff ? `−${s.dropOff}%` : null,
-            }))}
-          />
-        ) : <Empty text="No form activity in this range yet." />}
-      </Card>
+          {/* ─── 4: where they fall out ─── */}
+          <Card
+            title="RSVP funnel"
+            hint="Each step is the number of guests who reached it. The drop beside a step is how many were lost getting there from the one above."
+            table={{
+              columns: ['Step', 'Guests', 'Drop-off'],
+              rows: funnel.map((s) => [s.step, compact(s.count), s.dropOff != null ? `${s.dropOff}%` : '—']),
+            }}
+          >
+            {funnel.some((s) => s.count > 0) ? (
+              <BarList
+                ramp={VIZ.ordinal}
+                items={funnel.map((s) => ({
+                  label: s.step,
+                  value: s.count,
+                  note: s.dropOff ? `−${s.dropOff}%` : null,
+                }))}
+              />
+            ) : <Empty text="No form activity in this range yet." />}
+          </Card>
 
-      {/* ─── 5: what they answered ─── */}
-      <Card
-        title="Response mix"
-        hint={stateNote ? 'Where every guest stands right now — this one is not affected by the date range above.' : null}
-        table={{
-          columns: ['Response', 'Parties'],
-          rows: responseMix.map((s) => [s.label, compact(s.value)]),
-        }}
-      >
-        <StackedBar segments={responseMix} />
-      </Card>
+          {/* ─── 5: what they answered ─── */}
+          <Card
+            title="Response mix"
+            hint={stateNote ? 'Where every guest stands right now — this one is not affected by the date range above.' : null}
+            table={{
+              columns: ['Response', 'Parties'],
+              rows: responseMix.map((s) => [s.label, compact(s.value)]),
+            }}
+          >
+            <StackedBar segments={responseMix} />
+          </Card>
 
-      {/* ─── 6: when ─── */}
-      <Card
-        title="Activity over time"
-        hint="Three separate panels, each on its own scale — views outnumber responses by an order of magnitude, and stacking them on one axis would flatten the line that matters most."
-        table={{
-          columns: ['Day', 'Views', 'Responses', 'Interactions'],
-          rows: days.map((d) => [d.label, compact(d.views), compact(d.rsvps), compact(d.engagements)]),
-        }}
-      >
-        {days.length ? (
-          <div style={{ display: 'grid', gap: 18 }}>
-            <LinePanel title="Invitation views" points={days.map((d) => ({ label: d.label, value: d.views }))} />
-            <LinePanel title="Responses" points={days.map((d) => ({ label: d.label, value: d.rsvps }))} />
-            <LinePanel title="Other interactions" points={days.map((d) => ({ label: d.label, value: d.engagements }))} />
-            <div style={{
-              display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', paddingTop: 2,
-              fontSize: 'var(--fx-micro)', color: VIZ.inkMuted, fontVariantNumeric: 'tabular-nums',
-            }}>
-              <span>{days[0].label}</span>
-              {days.length > 2 && <span>{days[Math.floor(days.length / 2)].label}</span>}
-              <span>{days[days.length - 1].label}</span>
-            </div>
+          {/* ─── 6: when ─── */}
+          <Card
+            title="Activity over time"
+            hint="Three separate panels, each on its own scale — views outnumber responses by an order of magnitude, and stacking them on one axis would flatten the line that matters most."
+            table={{
+              columns: ['Day', 'Views', 'Responses', 'Interactions'],
+              rows: days.map((d) => [d.label, compact(d.views), compact(d.rsvps), compact(d.engagements)]),
+            }}
+          >
+            {days.length ? (
+              <div style={{ display: 'grid', gap: 18 }}>
+                <LinePanel title="Invitation views" points={days.map((d) => ({ label: d.label, value: d.views }))} />
+                <LinePanel title="Responses" points={days.map((d) => ({ label: d.label, value: d.rsvps }))} />
+                <LinePanel title="Other interactions" points={days.map((d) => ({ label: d.label, value: d.engagements }))} />
+                <div style={{
+                  display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', paddingTop: 2,
+                  fontSize: 'var(--fx-micro)', color: VIZ.inkMuted, fontVariantNumeric: 'tabular-nums',
+                }}>
+                  <span>{days[0].label}</span>
+                  {days.length > 2 && <span>{days[Math.floor(days.length / 2)].label}</span>}
+                  <span>{days[days.length - 1].label}</span>
+                </div>
+              </div>
+            ) : <Empty text="No activity in this range yet." />}
+          </Card>
+
+          {/* ─── 7: the rest ─── */}
+          {/* minmax(320px, …) plus Card's own 44px of horizontal padding needed
+              364px against the 316px available at 360px — the three cards
+              clipped on the right. */}
+          <div className="fx-grid" style={{ '--fx-col': '320px', '--fx-gap': '16px' }}>
+            <Card
+              title="What guests did"
+              table={{ columns: ['Action', 'Times'], rows: engagementItems.map((i) => [i.label, compact(i.value)]) }}
+            >
+              <BarList items={engagementItems} emptyText="No extra interactions recorded yet." />
+            </Card>
+
+            <Card
+              title="Why guests declined"
+              table={{ columns: ['Reason', 'Parties'], rows: declineItems.map((i) => [i.label, compact(i.value)]) }}
+            >
+              <BarList items={declineItems} emptyText="No declines with a reason given." />
+            </Card>
+
+            <Card
+              title="How they replied"
+              table={{ columns: ['Channel', 'Responses'], rows: sourceItems.map((i) => [i.label, compact(i.value)]) }}
+            >
+              <BarList items={sourceItems} emptyText="No responses yet." />
+            </Card>
           </div>
-        ) : <Empty text="No activity in this range yet." />}
-      </Card>
-
-      {/* ─── 7: the rest ─── */}
-      {/* minmax(320px, …) plus Card's own 44px of horizontal padding needed
-          364px against the 316px available at 360px — the three cards
-          clipped on the right. */}
-      <div className="fx-grid" style={{ '--fx-col': '320px', '--fx-gap': '16px' }}>
-        <Card
-          title="What guests did"
-          table={{ columns: ['Action', 'Times'], rows: engagementItems.map((i) => [i.label, compact(i.value)]) }}
-        >
-          <BarList items={engagementItems} emptyText="No extra interactions recorded yet." />
-        </Card>
-
-        <Card
-          title="Why guests declined"
-          table={{ columns: ['Reason', 'Parties'], rows: declineItems.map((i) => [i.label, compact(i.value)]) }}
-        >
-          <BarList items={declineItems} emptyText="No declines with a reason given." />
-        </Card>
-
-        <Card
-          title="How they replied"
-          table={{ columns: ['Channel', 'Responses'], rows: sourceItems.map((i) => [i.label, compact(i.value)]) }}
-        >
-          <BarList items={sourceItems} emptyText="No responses yet." />
-        </Card>
-      </div>
+        </>
+      )}
     </div>
+  );
+}
+
+/**
+ * What an organizer sees where the deep charts would be.
+ *
+ * Not a greyed-out copy of the panels: the server does not send those numbers
+ * at all, so there is nothing to grey out, and a dimmed chart of zeroes reads as
+ * a product fault rather than a plan boundary. PlanLock names the capability and
+ * which plans carry it — read from the live pricing config, never hardcoded,
+ * because an admin can move the feature between tiers in one click and a
+ * sentence written here would go on claiming the old arrangement.
+ */
+function AdvancedLocked() {
+  const router = useRouter();
+  const { tiers } = usePublicPricing();
+  const includedIn = (tiers || [])
+    .filter((t) => (t.features || []).includes(ADVANCED_ANALYTICS_LABEL))
+    .map((t) => t.name);
+
+  return (
+    <PlanLock
+      title="The deeper numbers are part of a higher plan"
+      description="Where guests fell out of the RSVP form, how they found their invitation, how long they hesitated at the envelope, and the day-by-day timeline of it all."
+      plans={includedIn}
+      upgradeLabel="See plans"
+      onUpgrade={() => router.push('/pricing')}
+    />
   );
 }
 

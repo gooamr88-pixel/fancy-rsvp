@@ -12,7 +12,13 @@ const COLORS = {
  *
  * Props:
  *  - tierFeatures: string[] — feature keys the current tier grants (from event.tier_features)
- *  - feature: string — the feature key to check (e.g., 'seating_map', 'add_guest_manual')
+ *  - feature: string | string[] — the feature key to check (e.g., 'seating_map',
+ *    'add_guest_manual'). An ARRAY passes when the tier grants ANY of them, mirroring
+ *    the server's `requireAnyFeature(...)`. Both forms exist because both gates exist:
+ *    the table routes accept `seating_map` OR `table_management`, and a lock here that
+ *    asked for only the first would draw a padlock over an endpoint that answers. UI and
+ *    gate have to ask the identical question or the product lies in one direction or
+ *    the other — a dead button, or a 403 at the click.
  *  - isPaid: boolean — whether the event is paid (used for upgrade modal messaging)
  *  - children: ReactNode — the content to show if the feature is available
  *  - onUpgrade: () => void — callback when user clicks upgrade
@@ -25,7 +31,8 @@ export default function FeatureGate({ tierFeatures, feature, isPaid, children, o
 
   // Check if the specific feature is included in the tier's granted features.
   const features = Array.isArray(tierFeatures) ? tierFeatures : [];
-  const hasFeature = features.includes(feature);
+  const wanted = Array.isArray(feature) ? feature : [feature];
+  const hasFeature = wanted.some((k) => features.includes(k));
 
   if (hasFeature) {
     return children;
@@ -77,7 +84,10 @@ export default function FeatureGate({ tierFeatures, feature, isPaid, children, o
       <UpgradeModal
         isOpen={showModal}
         onClose={() => setShowModal(false)}
-        feature={feature}
+        // The FIRST key names the modal. UpgradeModal maps a key to a title, and
+        // handing it an array would miss every entry and fall back to the generic
+        // "Premium Feature" — so an any-of gate must nominate its primary key.
+        feature={wanted[0]}
         isPaid={isPaid}
         onUpgrade={() => {
           setShowModal(false);

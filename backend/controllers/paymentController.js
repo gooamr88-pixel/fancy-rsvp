@@ -31,9 +31,11 @@ const { computeSmsChargeCents, describeSmsCharge, volumeDiscountsFromConfig } = 
 const { sanitizeAllowanceRequest, estimateAllowance } = require('../utils/smsEstimator');
 const { normalizeSmsPricing, describeSmsPricingAdjustments, DEFAULT_SMS_PRICING, LIMITS: SMS_PRICING_LIMITS } = require('../config/smsPricing');
 const { SMS_MESSAGE_TYPES } = require('../config/smsMessageTypes');
-const { PLATFORM_FEATURES, FEATURE_NOTES } = require('../config/featureRegistry');
+const { PLATFORM_FEATURES, FEATURE_NOTES, UNSELLABLE_FEATURES } = require('../config/featureRegistry');
 const { SMS_FEATURE_KEY } = require('../middleware/smsAddonGate');
-const { resolveTier, tierSnapshot, ensureTierKeys } = require('../utils/tierResolver');
+const {
+  resolveTier, tierSnapshot, ensureTierKeys, tierRemovesWatermark, tierIsWhiteLabel,
+} = require('../utils/tierResolver');
 
 /**
  * How many of this org's OTHER paid events are already on `tier`?
@@ -693,7 +695,12 @@ const createCheckoutSession = async (req, res, next) => {
         // The licence price as of THIS session, frozen for the upgrade credit.
         tier_price_cents: String(Number(tier.price_cents) || 0),
         tier_max_guests: tier.max_guests != null ? String(tier.max_guests) : '',
-        tier_remove_watermark: tier.remove_watermark ? '1' : '0',
+        // Either admin switch grants it — the tier checkbox OR the
+        // `remove_watermark` entry in the plan's feature checklist. Reading
+        // `tier.remove_watermark` alone here shipped the watermark to customers
+        // whose plan listed "Remove Fancy watermark" among its features.
+        tier_remove_watermark: tierRemovesWatermark(tier) ? '1' : '0',
+        tier_white_label: tierIsWhiteLabel(tier) ? '1' : '0',
         type: 'event_fee',
         is_upgrade: isUpgrade ? '1' : '0',
         // previousTier is null when the plan they are on has been DELETED —
@@ -1108,7 +1115,7 @@ const manualCashApproval = async (req, res, next) => {
     // 1. Check if there is an existing pending cash_manual payment record
     const { data: pendingPayment, error: findError } = await supabase
       .from('event_payments')
-      .select('id, amount_cents, stripe_checkout_session_id, reference_number, tier_key, tier_name, tier_max_guests, tier_remove_watermark, tier_features, tier_price_cents, referral_credit_applied_cents, referral_hold_id, sms_addon_segments')
+      .select('id, amount_cents, stripe_checkout_session_id, reference_number, tier_key, tier_name, tier_max_guests, tier_remove_watermark, tier_white_label, tier_features, tier_price_cents, referral_credit_applied_cents, referral_hold_id, sms_addon_segments')
       .eq('event_id', eventId)
       .eq('payment_method', 'cash_manual')
       .eq('status', 'pending')
@@ -1167,6 +1174,7 @@ const manualCashApproval = async (req, res, next) => {
           tier_name: pendingPayment[0].tier_name || null,
           tier_max_guests: pendingPayment[0].tier_max_guests ?? null,
           tier_remove_watermark: !!pendingPayment[0].tier_remove_watermark,
+          tier_white_label: !!pendingPayment[0].tier_white_label,
           tier_features: pendingPayment[0].tier_features ?? null,
           tier_price_cents: pendingPayment[0].tier_price_cents ?? null,
           updated_at: new Date().toISOString()
@@ -1300,6 +1308,73 @@ const manualCashApproval = async (req, res, next) => {
  * Super Admin updates platform pricing configuration.
  * PATCH /api/v1/admin/pricing
  */
+/**
+ * PUSH THE BRANDING ENTITLEMENTS ONTO EXISTING EVENTS.
+ *
+ * Almost every feature is resolved LIVE at request time — `entitledFeatures()`
+ * reads the current plan — so ticking a capability on a tier reaches every event
+ * already on that plan instantly, with nothing to migrate and nobody to notify.
+ *
+ * Two are different, and they are the two a GUEST sees: the watermark and white
+ * label. Those live as columns on the event row (`tier_remove_watermark`,
+ * `tier_white_label`) because the surfaces that read them — the public
+ * invitation page and the email jobs that run months later — have no session,
+ * no admin config lookup, and must keep working after a plan is deleted.
+ *
+ * A column does not update itself. `withResolvedTier` heals it, but only when
+ * the ORGANIZER next opens their dashboard — so without this, an admin could
+ * grant white label to a plan and the guest pages of every event on it would
+ * keep the Fancy mark until each organizer happened to log in. For an event
+ * whose invitations already went out, "happened to log in" may be never.
+ *
+ * So the moment the plan changes is the moment the events change. Scoped by
+ * `tier_key`: an event whose plan was DELETED is not matched by any tier here
+ * and keeps the branding it paid for, which is the whole point of the snapshot.
+ *
+ * Never throws. A failed sync must not fail the admin's save — the config is
+ * already committed at this point, and `withResolvedTier` remains the backstop.
+ */
+async function syncBrandingSnapshots(tiers) {
+  if (!Array.isArray(tiers)) return;
+
+  for (const tier of tiers) {
+    const key = String(tier?.key || '').trim();
+    if (!key) continue;
+
+    /**
+     * One statement per column, each filtered to the rows that actually DIFFER.
+     *
+     * The obvious version — a single update of both columns filtered on
+     * `tier_key` alone — rewrites every event on the plan whether or not
+     * anything changed. Postgres has no in-place update: each row becomes a new
+     * version, every index entry is rewritten, and the dead tuples wait for
+     * vacuum. Editing one plan's description would churn the entire events table
+     * for two booleans that already held the right value.
+     *
+     * `.neq()` makes the common case touch zero rows. Both columns are
+     * NOT NULL DEFAULT false (migration 20260712000000 and 20260830000003), so
+     * there is no three-valued-logic trap here: no row can be skipped for being
+     * NULL when it needed the update.
+     */
+    const pushes = [
+      ['tier_remove_watermark', tierRemovesWatermark(tier)],
+      ['tier_white_label', tierIsWhiteLabel(tier)],
+    ];
+
+    for (const [column, value] of pushes) {
+      try {
+        await supabase
+          .from('events')
+          .update({ [column]: value })
+          .eq('tier_key', key)
+          .neq(column, value);
+      } catch (err) {
+        logger.warn({ err, tierKey: key, column }, 'syncBrandingSnapshots: could not push branding to events on this tier');
+      }
+    }
+  }
+}
+
 const updatePricingConfig = async (req, res, next) => {
   const { pricingTiers, smsRateCentsPerCredit, smsMarkupPercentage, platformCommissionPct, manualPaymentMethods, landingStats, smsPricingConfig } = req.body;
 
@@ -1437,6 +1512,15 @@ const updatePricingConfig = async (req, res, next) => {
 
     const saved = data?.[0] || data;
 
+    // …and push the two entitlements that are NOT resolved live — but only when
+    // the plans were actually part of this save. `saved` is the whole config row,
+    // so it carries pricing_tiers even when the admin edited SMS rates or the
+    // landing stats; syncing off that would walk every tier on the platform on
+    // every unrelated settings change.
+    if (pricingTiers !== undefined) {
+      await syncBrandingSnapshots(saved?.pricing_tiers);
+    }
+
     return res.status(200).json({
       success: true,
       message: 'Platform configuration updated successfully.',
@@ -1523,10 +1607,12 @@ const getPricingConfig = async (req, res, next) => {
       featureNotes: FEATURE_NOTES,
       // Keys that must NOT appear as a tier bullet — features superseded by
       // another mechanism, which grant nothing and would tell a customer they
-      // already have something the card below is asking them to pay for.
+      // already have something the card below is asking them to pay for, AND
+      // features nobody has built yet, which would put a promise the product
+      // cannot keep onto a price tag. See UNSELLABLE_FEATURES.
       // `sms_campaigns` is deliberately NOT in this list any more: it grants
       // real access again, so it belongs on the card, with its note.
-      hiddenTierFeatures: PLATFORM_FEATURES.filter((f) => f.supersededBy).map((f) => f.key),
+      hiddenTierFeatures: UNSELLABLE_FEATURES,
       // Tells the dashboard which paid integrations are live right now, so the
       // payment step can render manual-first and hide card / SMS-purchase CTAs.
       features: { stripeEnabled: stripeEnabled(), smsEnabled: smsEnabled() },
@@ -1612,7 +1698,11 @@ const getOrganizerPricing = async (req, res, next) => {
       smsMessageTypes: SMS_MESSAGE_TYPES,
       featureLabels: Object.fromEntries(PLATFORM_FEATURES.map((f) => [f.key, f.label])),
       featureNotes: FEATURE_NOTES,
-      hiddenTierFeatures: PLATFORM_FEATURES.filter((f) => f.supersededBy).map((f) => f.key),
+      // Superseded keys AND unbuilt ones. This is the PAYMENT STEP's tier
+      // cards — the last screen before money moves — so a bullet for a
+      // capability that does not exist is the most expensive place to print
+      // one. See UNSELLABLE_FEATURES.
+      hiddenTierFeatures: UNSELLABLE_FEATURES,
       features: { stripeEnabled: stripeEnabled(), smsEnabled: smsEnabled() },
     });
   } catch (err) {
@@ -2110,14 +2200,18 @@ const getPendingPayments = async (req, res, next) => {
 const getPublicPricing = async (req, res, next) => {
   try {
     const config = await getPlatformConfig();
-    const { getFeatureByKey, isValidFeatureKey } = require('../config/featureRegistry');
+    const { getFeatureByKey, isSellableFeature } = require('../config/featureRegistry');
     // Keys are minted on the way out for a config saved before they existed, so
     // a client always has an identity to send back to checkout. The stored row
     // is left alone here; the first admin save persists them.
     const tiers = ensureTierKeys(Array.isArray(config?.pricing_tiers) ? config.pricing_tiers : []);
 
     const publicTiers = tiers.map((t) => {
-      const ownKeys = Array.isArray(t.features) ? t.features.filter(isValidFeatureKey) : [];
+      // `isSellableFeature`, not `isValidFeatureKey`: a key being in the registry
+      // does not make it something we can sell. See UNSELLABLE_FEATURES — this
+      // page was printing bullets for white-labelling, SSO and a developer API
+      // that nobody has written.
+      const ownKeys = Array.isArray(t.features) ? t.features.filter(isSellableFeature) : [];
       // Convert feature keys to human-readable labels for the public page.
       const featureLabels = ownKeys
         .map(key => { const feat = getFeatureByKey(key); return feat ? feat.label : null; })
@@ -2174,7 +2268,12 @@ const getPublicPricing = async (req, res, next) => {
          `builtIn` is deliberately NOT exposed. It is an internal marker for a
          bullet whose gate is not mounted yet, and it is nobody's business
          outside this repo. */
-      featureCatalog: PLATFORM_FEATURES.map((f) => ({
+      /* Filtered by the same rule as the tier bullets above, so the two halves
+         of this payload cannot disagree about what exists. Nothing renders the
+         catalogue today, which is exactly why it matters: a future comparison
+         table would otherwise build a ROW for a capability nobody has written
+         and score every plan ✗ against it. */
+      featureCatalog: PLATFORM_FEATURES.filter((f) => isSellableFeature(f.key)).map((f) => ({
         key: f.key,
         label: f.label,
         category: f.category,

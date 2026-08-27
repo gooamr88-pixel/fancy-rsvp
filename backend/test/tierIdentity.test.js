@@ -52,7 +52,7 @@ injectModule('../../utils/logger', {
 });
 
 const { requireFeature } = require('../middleware/featureGate');
-const { resolveTier, entitledFeatures, ensureTierKeys, tierSnapshot } = require('../utils/tierResolver');
+const { resolveTier, entitledFeatures, ensureTierKeys, tierSnapshot, BASELINE_FEATURES } = require('../utils/tierResolver');
 
 /** An event sold on Enterprise, carrying the identity and snapshot a purchase writes. */
 const buyer = (over = {}) => ({
@@ -275,25 +275,43 @@ describe('tierSnapshot', () => {
   });
 });
 
+/**
+ * These assert WHICH LIST WON — live plan, snapshot, or neither. They used to
+ * deep-equal the whole result, which quietly made them assertions about the
+ * always-on baseline too, and they failed the day that floor was added even
+ * though resolution itself was untouched. So they check the resolved list is
+ * carried through and that the baseline rides along, and leave the floor's own
+ * behaviour to tierEntitlementApplies.test.js, which is about exactly that.
+ */
 describe('entitledFeatures', () => {
+  /** Every key the resolved plan granted is present, plus the always-on floor. */
+  const assertCarries = (features, resolved) => {
+    for (const key of resolved) assert.ok(features.includes(key), `${key} must survive resolution`);
+    for (const key of BASELINE_FEATURES) assert.ok(features.includes(key), `${key} is granted to every plan`);
+  };
+
   it('prefers the live plan over the snapshot', () => {
     const event = { tier_key: 'enterprise', tier_features: ['rsvp_basic'] };
     const r = entitledFeatures(configResult.pricing_tiers, event);
     assert.equal(r.source, 'tier');
-    assert.deepEqual(r.features, ENTERPRISE_FEATURES);
+    assertCarries(r.features, ENTERPRISE_FEATURES);
+    // The snapshot's single key must not be what came back.
+    assert.ok(r.features.includes('white_label'), 'the LIVE plan is what was returned, not the snapshot');
   });
 
   it('falls back to the snapshot only when the plan is gone', () => {
     deleteEnterprise();
     const r = entitledFeatures(configResult.pricing_tiers, { tier_key: 'enterprise', tier_features: ENTERPRISE_FEATURES });
     assert.equal(r.source, 'snapshot');
-    assert.deepEqual(r.features, ENTERPRISE_FEATURES);
+    assertCarries(r.features, ENTERPRISE_FEATURES);
   });
 
   it('reports none when there is neither', () => {
     deleteEnterprise();
     const r = entitledFeatures(configResult.pricing_tiers, { tier_key: 'enterprise', tier_features: [] });
     assert.equal(r.source, 'none');
-    assert.deepEqual(r.features, []);
+    // Nothing was resolved, so nothing paid-for is granted — but the floor holds.
+    assert.deepEqual(r.features, BASELINE_FEATURES);
+    assert.ok(!r.features.includes('white_label'), 'an unresolvable plan grants no paid capability');
   });
 });

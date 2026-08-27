@@ -6,6 +6,7 @@ import { apiFetch } from '../../utils/apiClient';
 import { usePublicPricing } from '../../utils/usePublicPricing';
 import {
   CHECKIN_APK_URL, CHECKIN_APK_SIZE_LABEL, CHECKIN_MIN_ANDROID, CHECKIN_SCREENS,
+  CHECKIN_APP_FEATURE_LABEL as FEATURE_LABEL,
 } from '../../utils/checkinApp';
 
 const C = {
@@ -13,11 +14,10 @@ const C = {
   border: '#E8E2D6', white: '#FFFFFF', softBg: '#FAFAF8', success: '#2E7D5B',
 };
 
-// The registry label, verbatim. The public pricing endpoint renders tier
-// features by label (paymentController -> getFeatureByKey(...).label), so this
-// is how a tier is recognised as including the app — matching on the key would
-// find nothing, because keys never reach the client.
-const FEATURE_LABEL = 'Fancy Check-in app (offline door scanner)';
+// FEATURE_LABEL is the registry label, imported above — DeviceManagement needs
+// the same string to name the plans that carry the app, and two hand-typed
+// copies of it is one typo away from telling a paying customer they are not
+// entitled.
 
 const formatSize = (bytes) => (bytes > 0 ? `${(bytes / 1024 / 1024).toFixed(0)} MB` : null);
 

@@ -1,6 +1,7 @@
 const { supabase } = require('../config/supabase');
 const logger = require('../utils/logger');
 const { safeZone, wallClockToInstant, instantToWallClock } = require('../utils/timezone');
+const { eventHasFeature } = require('../middleware/featureGate');
 const crypto = require('crypto');
 
 /* ═══════════════════════════════════════════════════════════════
@@ -387,6 +388,13 @@ const getEventAnalytics = async (req, res, next) => {
 
     const timeline = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date));
 
+    // Does this plan carry the deep charts? Resolved here rather than as route
+    // middleware because the answer shapes the payload instead of refusing it —
+    // see the note beside the withheld blocks below. Every advanced block is
+    // derived in memory from rows already fetched for the overview, so asking
+    // late costs nothing and keeps the entitlement next to what it governs.
+    const advanced = await eventHasFeature(eventId, 'analytics_advanced', req.user);
+
     // ─── RESPONSE ───
     return res.json({
       success: true,
@@ -417,12 +425,31 @@ const getEventAnalytics = async (req, res, next) => {
             ? null
             : (uniqueSessions > 0 ? Math.round((totalRsvps / uniqueSessions) * 100) : 0),
         },
-        funnel,
-        declineReasons,
-        sources,
-        engagementActions,
-        reveal,
-        timeline,
+        /**
+         * ── THE PAID HALF ──
+         *
+         * `analytics_basic` is on every plan and is the overview above: how many
+         * people came, how many replied, how many are coming. `analytics_advanced`
+         * is everything below — the funnel, where responses came from, what guests
+         * did, the envelope reveal, the day-by-day timeline.
+         *
+         * Withheld rather than 403'd, because the two halves live in one response
+         * and refusing the route to withhold the charts would take the basic
+         * dashboard away with them. The client is TOLD (`advanced: false`) instead
+         * of being handed empty objects: this page destructures with `= {}`
+         * defaults, so silently omitting these would render a wall of zeroes and
+         * blank charts — a product that looks broken rather than one that looks
+         * upgradeable.
+         */
+        advanced,
+        ...(advanced ? {
+          funnel,
+          declineReasons,
+          sources,
+          engagementActions,
+          reveal,
+          timeline,
+        } : {}),
       },
     });
   } catch (err) {

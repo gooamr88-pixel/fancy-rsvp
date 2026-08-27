@@ -2,9 +2,13 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { apiFetch } from '../../utils/apiClient';
 import { toast } from '../../utils/toast';
 import ConfirmDialog from '../../components/ConfirmDialog';
+import PlanLock from './PlanLock';
+import { usePublicPricing } from '../../utils/usePublicPricing';
+import { CHECKIN_APP_FEATURE_LABEL } from '../../utils/checkinApp';
 import { buildCheckinReadiness, BLOCK, WARN } from './checkinReadiness';
 
 const C = {
@@ -47,6 +51,7 @@ const relative = (iso) => {
  * only collapses to a green line when there is genuinely nothing to fix.
  */
 export default function DeviceManagement({ eventId }) {
+  const router = useRouter();
   const [devices, setDevices] = useState([]);
   const [gates, setGates] = useState([]);
   const [staff, setStaff] = useState([]);
@@ -56,6 +61,44 @@ export default function DeviceManagement({ eventId }) {
   const [selectedGate, setSelectedGate] = useState('');
   const [issued, setIssued] = useState(null); // { code, deviceLabel, expiresAt }
   const [revoking, setRevoking] = useState(null); // the device awaiting confirmation
+
+  /**
+   * Is the door app on this event's plan?
+   *
+   * Minting a pairing code is now `requireFeature('checkin_app')` — it is the
+   * one moment the entitlement is decidable, since a tablet cannot pair without
+   * a code. Without this the screen would look completely available and then
+   * answer a 403 toast at the press of the only button that matters, which is
+   * the exact walk-into-a-403 that PlanLock exists to prevent.
+   *
+   * Resolved from the server, not from `tier_features` in the browser, for the
+   * reason DashboardNav states: a second implementation of "does this plan
+   * include X" disagrees with the gate the first time an admin edits a tier.
+   * `/checkin-app/release` carries the same `checkin_app` gate as pairing does,
+   * so its 403 IS the answer. A failure that is not a gate denial leaves the
+   * screen unlocked — a panel that cannot resolve an entitlement must not
+   * invent a padlock over a feature the customer has paid for.
+   */
+  const [planLocked, setPlanLocked] = useState(false);
+  const { tiers } = usePublicPricing();
+  useEffect(() => {
+    if (!eventId) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        await apiFetch(`/events/${eventId}/checkin-app/release`);
+        if (!cancelled) setPlanLocked(false);
+      } catch (err) {
+        if (cancelled) return;
+        setPlanLocked(err?.code === 'FEATURE_NOT_AVAILABLE' || err?.code === 'FEATURE_REQUIRES_PAYMENT');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [eventId]);
+
+  const includedIn = (tiers || [])
+    .filter((t) => (t.features || []).includes(CHECKIN_APP_FEATURE_LABEL))
+    .map((t) => t.name);
 
   const load = useCallback(async () => {
     try {
@@ -162,8 +205,21 @@ export default function DeviceManagement({ eventId }) {
 
       <ReadinessPanel items={readiness} />
 
-      {/* ── Provision ── */}
-      {!canProvision ? (
+      {/* ── Provision ──
+          Only this block is locked, never the device list below it. A tablet
+          paired before the plan changed keeps working — the drain and delta
+          endpoints are ungated by design (D-21) — so the organizer must still
+          be able to see it, move it and revoke it. Taking that away would
+          strand a live door, which is a worse outcome than an ungated one. */}
+      {planLocked ? (
+        <PlanLock
+          title="The door app is part of a higher plan"
+          description="Fancy Check-in holds your whole guest list on the tablet, so it keeps scanning and admitting guests with no internet at the venue — then syncs the moment it is back."
+          plans={includedIn}
+          upgradeLabel="See plans"
+          onUpgrade={() => router.push('/pricing')}
+        />
+      ) : !canProvision ? (
         <div style={{
           background: C.softBg, border: `1px solid ${C.border}`,
           borderRadius: '14px', padding: '24px',

@@ -5,8 +5,15 @@
    PUBLIC (this file): a signed APK served straight off the web root at
    `/download/fancy-checkin.apk`. Anyone may take it. That is safe because
    installing the app grants nothing — it is inert until it is paired to an
-   event, and pairing goes through `requireFeature('checkin_app')` on the
-   backend. The entitlement lives at the door, not at the download.
+   event, and a tablet cannot pair without a code, which only an organizer on
+   an entitled plan can mint: `requireFeature('checkin_app')` sits on
+   POST /checkin/events/:eventId/devices/pairing-codes.
+
+   That sentence was written here before it was true. For a while the ONLY
+   `checkin_app` gate on the platform was the download endpoint below — which
+   this very file routes around, by design and on a public marketing page — so
+   the paid door app was, in practice, included with every plan that had
+   check-in at all. The entitlement lives at the door now, as claimed.
 
    GATED (`controllers/checkinAppController.js`): an event-scoped 302 to a
    120-second signed Supabase Storage URL, which writes an audit row and is
@@ -21,6 +28,19 @@
 
 /** Served by nginx from the web root — not the API, and not Storage. */
 export const CHECKIN_APK_URL = 'https://fancyrsvp.com/download/fancy-checkin.apk';
+
+/**
+ * The registry label for `checkin_app`, verbatim.
+ *
+ * The public pricing endpoint renders a tier's features by LABEL
+ * (paymentController -> getFeatureByKey(key).label), so this is how a plan is
+ * recognised as carrying the door app on the client — matching on the key
+ * would find nothing, because keys never reach the browser. Exported rather
+ * than repeated: two screens now say which plans include it, and a second copy
+ * of a string that has to match the backend registry character-for-character
+ * is a silent "Not included in this event's plan" waiting to happen.
+ */
+export const CHECKIN_APP_FEATURE_LABEL = 'Fancy Check-in app (offline door scanner)';
 
 /**
  * Rounded, and deliberately approximate.

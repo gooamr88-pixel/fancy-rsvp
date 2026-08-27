@@ -25,6 +25,24 @@ import { REFUND_SUMMARY, REFUND_HOW } from '../src/app/utils/refundPolicy';
 const ROOT = process.cwd();
 const readRepo = (rel) => fs.readFileSync(path.join(ROOT, '..', rel), 'utf8');
 
+/**
+ * The source of one top-level `const <name> = ` declaration, bounded by the NEXT
+ * top-level declaration.
+ *
+ * The two assertions below used to slice a flat 4000/5000 characters after the
+ * function's opening line, which made them assertions about how much prose sits
+ * above the line being checked. Adding a comment inside `getPublicPricing` — not
+ * touching a single behaviour — pushed `note: FEATURE_NOTES[f.key]` past the
+ * window and failed a test whose subject was still true. A test that a comment
+ * can break teaches people to stop reading its failures.
+ */
+const topLevelBlock = (src, declaration) => {
+  const start = src.indexOf(declaration);
+  if (start === -1) return '';
+  const next = src.indexOf('\nconst ', start + declaration.length);
+  return src.slice(start, next === -1 ? undefined : next);
+};
+
 /* COMMENTS ARE NOT CODE, AND HERE THAT IS LOAD-BEARING.
 
    Several of these cases assert that a claim does NOT appear in a file — and
@@ -117,8 +135,8 @@ describe('the event allowance is disclosed', () => {
      page promising no surprises was the only surface that could not say it. */
   it('is served by the public pricing endpoint', () => {
     const controller = readRepo('backend/controllers/paymentController.js');
-    const publicBlock = controller.slice(controller.indexOf('const getPublicPricing'));
-    expect(publicBlock.slice(0, 4000)).toMatch(/max_events: Number\(t\.max_events\)/);
+    const publicBlock = topLevelBlock(controller, 'const getPublicPricing');
+    expect(publicBlock).toMatch(/max_events: Number\(t\.max_events\)/);
   });
 
   it('reaches the plan row, which is where it is stated now', () => {
@@ -205,9 +223,9 @@ describe('the page does not promise things that do not exist', () => {
        comparison to reinvent its own wording, which is the failure the
        registry comment exists to prevent. */
     const controller = readRepo('backend/controllers/paymentController.js');
-    const publicBlock = controller.slice(controller.indexOf('const getPublicPricing'));
-    expect(publicBlock.slice(0, 5000)).toMatch(/note: FEATURE_NOTES\[f\.key\]/);
-    expect(publicBlock.slice(0, 5000)).toMatch(/category: f\.category/);
+    const publicBlock = topLevelBlock(controller, 'const getPublicPricing');
+    expect(publicBlock).toMatch(/note: FEATURE_NOTES\[f\.key\]/);
+    expect(publicBlock).toMatch(/category: f\.category/);
   });
 
   it('does not name a plan when describing the door app', () => {

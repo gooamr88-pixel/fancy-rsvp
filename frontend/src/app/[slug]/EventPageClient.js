@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
+import { guestTitle } from '../utils/guestBranding';
 import { motion, AnimatePresence, useInView } from 'framer-motion';
 import { translations } from '../utils/translations';
 import { useGuestAnalytics } from '../utils/useGuestAnalytics';
@@ -785,7 +786,11 @@ export default function EventPageClient({
   /* ─── Document meta & fonts ─── */
   useEffect(() => {
     if (event) {
-      document.title = `${event.title} | Fancy RSVP`;
+      // This OVERWRITES the server-rendered <title> on hydration, so a
+      // white-label event that arrived correctly branded would get "| Fancy
+      // RSVP" put back into the tab a moment after it loaded. Both halves have
+      // to agree or the fix is only visible with JavaScript disabled.
+      document.title = guestTitle(event);
       const metaDesc = document.querySelector('meta[name="description"]');
       if (metaDesc) { metaDesc.setAttribute('content', event.description || `RSVP to ${event.title}`); }
       else { const meta = document.createElement('meta'); meta.name = 'description'; meta.content = event.description || `RSVP to ${event.title}`; document.head.appendChild(meta); }

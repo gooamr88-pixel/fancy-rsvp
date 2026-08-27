@@ -1,6 +1,6 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
-const { requireFeature } = require('../middleware/featureGate');
+const { requireCheckinApp } = require('../middleware/checkinAppGate');
 const checkinAppController = require('../controllers/checkinAppController');
 
 const router = express.Router({ mergeParams: true });
@@ -20,7 +20,13 @@ const downloadLimiter = rateLimit({
 // itself is a separate switch inside the controller, because "your plan does
 // not include this" and "this is not open yet" are different answers and the
 // dashboard renders them differently.
-router.get('/release', requireFeature('checkin_app'), checkinAppController.getRelease);
-router.get('/download', downloadLimiter, requireFeature('checkin_app'), checkinAppController.downloadApk);
+//
+// `requireCheckinApp`, the same middleware that guards pairing, rather than a
+// bare requireFeature: ONE answer to "may this event use the door app", or the
+// dashboard shows a padlock over a tablet that is already scanning guests. The
+// grandfather clause lives there — an event that has paired a device keeps
+// downloading the build for its spares.
+router.get('/release', requireCheckinApp, checkinAppController.getRelease);
+router.get('/download', downloadLimiter, requireCheckinApp, checkinAppController.downloadApk);
 
 module.exports = router;

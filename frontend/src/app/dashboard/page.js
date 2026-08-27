@@ -51,6 +51,18 @@ const COLORS = {
   softBg: '#FAFAF8',
 };
 
+/**
+ * The two keys that open the seating editor, in the order the upgrade prompt
+ * should name them.
+ *
+ * `requireAnyFeature('seating_map', 'table_management')` guards every table
+ * write on the server, so the padlock has to accept either as well. Module
+ * scope rather than an inline array literal: a fresh array on every render is a
+ * new prop identity, and the day this gate is memoised that becomes a silent
+ * re-render rather than an obvious bug.
+ */
+const SEATING_KEYS = ['seating_map', 'table_management'];
+
 /* ═══════════════════════════════════════════════
    Guest list — fetch EVERY page
    ═══════════════════════════════════════════════ */
@@ -1037,7 +1049,8 @@ function DashboardPageInner() {
                   Check-In
                 </Link>
 
-                <FeatureGate tierFeatures={activeEvent?.tier_features} isPaid={!!activeEvent?.is_paid} feature="seating_map" onUpgrade={() => { setActiveTab('events'); }}>
+                {/* Either key — the table routes accept either (requireAnyFeature). */}
+            <FeatureGate tierFeatures={activeEvent?.tier_features} isPaid={!!activeEvent?.is_paid} feature={SEATING_KEYS} onUpgrade={() => { setActiveTab('events'); }}>
                 <Link
                   href="/dashboard/seating-map"
                   id="btn-open-seating-map"
@@ -1291,7 +1304,7 @@ function DashboardPageInner() {
             /* ═══ SEATING TAB ═══ */
             <FeatureGate
               tierFeatures={activeEvent?.tier_features}
-              feature="seating_map"
+              feature={SEATING_KEYS}
               isPaid={!!activeEvent?.is_paid || !!activeEvent?.manual_override}
               onUpgrade={() => setActiveTab('events')}
               wrapperStyle={{ display: 'flex', width: '100%' }}

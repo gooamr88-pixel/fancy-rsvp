@@ -119,13 +119,17 @@ router.get('/sms-wallets', requirePermission('credits.view'), listSmsWallets);
 router.get('/feature-registry', requirePermission('subscriptions.view'), (req, res) => {
   const grouped = {};
   for (const [cat, features] of getFeaturesByCategory()) {
-    grouped[cat] = features.map(f => ({ key: f.key, label: f.label, description: f.description, freeDefault: f.freeDefault, builtIn: f.builtIn !== false }));
+    // `alwaysOn` rides along so the tier editor can render those switches
+    // checked-and-locked. Without it the admin sees a live-looking toggle for a
+    // capability every plan carries — one that cannot be turned off, because
+    // entitledFeatures() unions it into every tier.
+    grouped[cat] = features.map(f => ({ key: f.key, label: f.label, description: f.description, freeDefault: f.freeDefault, builtIn: f.builtIn !== false, alwaysOn: !!f.alwaysOn, comingSoon: !!f.comingSoon }));
   }
   return res.json({
     success: true,
     categories: FEATURE_CATEGORIES,
     features: grouped,
-    allFeatures: PLATFORM_FEATURES.map(f => ({ key: f.key, label: f.label, description: f.description, category: f.category, freeDefault: f.freeDefault, builtIn: f.builtIn !== false })),
+    allFeatures: PLATFORM_FEATURES.map(f => ({ key: f.key, label: f.label, description: f.description, category: f.category, freeDefault: f.freeDefault, builtIn: f.builtIn !== false, alwaysOn: !!f.alwaysOn, comingSoon: !!f.comingSoon })),
   });
 });
 
