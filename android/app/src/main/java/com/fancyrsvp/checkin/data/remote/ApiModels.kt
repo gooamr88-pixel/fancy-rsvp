@@ -177,11 +177,50 @@ data class StaffDto(
     val pinHash: String,
 )
 
+/**
+ * One element of the venue layout — a seatable table OR a zone.
+ *
+ * ── The coordinate convention, which is the whole trap ──
+ *
+ * [positionX] / [positionY] are PERCENTAGES (0–100) of a fixed logical world of
+ * 2600 x 1700 units, and they address the element's **top-left corner**. They
+ * are not a centre. Reading them as one does not shift the layout, it scrambles
+ * it: every element moves by half of ITS OWN size, and sizes differ per shape,
+ * so a 96-unit round table and a 360-unit stage land on top of each other.
+ * `ui/seating/SeatingGeometry.kt` is the only place that converts, and every
+ * consumer goes through it.
+ *
+ * [width] / [height] are honoured for ZONES only; a table always takes its size
+ * from the shape catalogue. Null means "not set" — which for a zone means "use
+ * the catalogue's size", a distinction a 0 would destroy, so the server sends
+ * null rather than defaulting.
+ *
+ * Every field after [capacity] is nullable with a default because a tablet in
+ * the field parses a bundle from whatever backend it can reach: an older server
+ * simply sends the three original keys, and the device draws no plan rather
+ * than failing to arm.
+ */
 @Serializable
 data class VenueTableDto(
     val id: String,
     val name: String,
     val capacity: Int? = null,
+    /** table | zone. Authoritative when present; the shape's category covers old rows. */
+    val elementType: String? = null,
+    /**
+     * The catalogue key — `round`, `stage`, `dance_floor`… It is deliberately
+     * NOT an enum on the wire. The catalogue is edited on the web side, and a
+     * value this build has never heard of must degrade to a round table rather
+     * than fail the whole manifest to parse (§21.4).
+     */
+    val shape: String? = null,
+    val positionX: Double? = null,
+    val positionY: Double? = null,
+    val width: Double? = null,
+    val height: Double? = null,
+    val rotation: Double? = null,
+    /** The organizer's own colour for a zone, `#RRGGBB`, or null for the catalogue's. */
+    val color: String? = null,
 )
 
 @Serializable

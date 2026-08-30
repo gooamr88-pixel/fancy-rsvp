@@ -351,8 +351,36 @@ class BundleRepository @Inject constructor(
                 )
             }
 
+            /*
+             * The venue layout, geometry and all.
+             *
+             * Stored verbatim — no defaulting, no normalising, no dropping of
+             * shapes this build does not recognise. The shape catalogue is
+             * edited on the web side and `ui/seating/SeatingGeometry.kt` falls
+             * back to a round table for anything it cannot name, so a layout
+             * drawn with a shape added after this APK shipped still renders as a
+             * room rather than disappearing from it.
+             *
+             * Nulls are preserved for the same reason they are nullable on the
+             * entity: for a zone's size, null means "use the catalogue's", and
+             * for a whole row it means "prepared by a server that did not send
+             * geometry" — which draws no plan, exactly as before.
+             */
             val tables = manifest.tables.map {
-                VenueTableEntity(id = it.id, eventId = eventId, name = it.name, capacity = it.capacity)
+                VenueTableEntity(
+                    id = it.id,
+                    eventId = eventId,
+                    name = it.name,
+                    capacity = it.capacity,
+                    elementType = it.elementType,
+                    shape = it.shape,
+                    positionX = it.positionX,
+                    positionY = it.positionY,
+                    width = it.width,
+                    height = it.height,
+                    rotation = it.rotation,
+                    color = it.color,
+                )
             }
             val staff = manifest.staff.map {
                 StaffEntity(

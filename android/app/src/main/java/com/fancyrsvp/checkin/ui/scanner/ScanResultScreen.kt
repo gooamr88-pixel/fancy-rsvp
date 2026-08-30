@@ -52,12 +52,17 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.fancyrsvp.checkin.R
+import com.fancyrsvp.checkin.data.local.VenueTableEntity
 import com.fancyrsvp.checkin.data.repo.CheckInRepository
 import com.fancyrsvp.checkin.ui.components.PrimaryAction
 import com.fancyrsvp.checkin.ui.components.QuietAction
 import com.fancyrsvp.checkin.ui.components.SecondaryAction
 import com.fancyrsvp.checkin.ui.components.SectionLabel
 import com.fancyrsvp.checkin.ui.components.pressableSurface
+import com.fancyrsvp.checkin.ui.seating.PLAN_CARD_MIN_HEIGHT
+import com.fancyrsvp.checkin.ui.seating.PLAN_CARD_MIN_WIDTH
+import com.fancyrsvp.checkin.ui.seating.SeatingPlanCard
+import com.fancyrsvp.checkin.ui.seating.SeatingPlanOverlay
 import com.fancyrsvp.checkin.ui.theme.BandAlready
 import com.fancyrsvp.checkin.ui.theme.LocalDimens
 import com.fancyrsvp.checkin.ui.theme.Motion
@@ -95,12 +100,29 @@ import java.util.Date
  *
  * The screen leaves by itself, and on a tap anywhere. Staff must never hunt for
  * a way out while people wait.
+ *
+ * ── The floor plan, and why it did not displace the number ──
+ *
+ * The destination pane carries the room as well as the number now. The number
+ * keeps the top of the pane and its full size, because rule 2 is about what an
+ * usher SAYS; the plan takes only what the number leaves, because what the plan
+ * answers is the next question — "where is that" — which is asked a beat later,
+ * by the guest, usually while walking.
+ *
+ * Below a card worth drawing (see PLAN_CARD_MIN_WIDTH) the pane offers the
+ * expanded plan instead of shrinking the room into a smudge.
  */
 @Composable
 fun ScanResultScreen(
     outcome: CheckInRepository.ScanOutcome,
     isSupervisor: Boolean,
     noKidsAllowed: Boolean,
+    /**
+     * The venue layout, or empty when this event has no plan — an organizer who
+     * never drew one, or a tablet prepared before the geometry shipped. Empty
+     * renders exactly the screen this was before the plan existed.
+     */
+    venue: List<VenueTableEntity>,
     onAdmit: (party: CheckInRepository.PartyView, guestIds: List<String>) -> Unit,
     onOverride: (party: CheckInRepository.PartyView, guestIds: List<String>) -> Unit,
     onSearch: () -> Unit,
@@ -110,8 +132,32 @@ fun ScanResultScreen(
     val party = outcome.partyOrNull()
     val dimens = LocalDimens.current
     var picking by remember(outcome) { mutableStateOf(false) }
+    var showingPlan by remember(outcome) { mutableStateOf(false) }
 
-    LaunchedEffect(outcome) {
+    /*
+     * The plan is only offered where it can point at something.
+     *
+     * A room drawn with nothing lit is context with no subject: on the two
+     * welcome states and the already-arrived it says "your table is THERE", and
+     * with no assignment it says nothing at all while taking half the pane. The
+     * not-found and foreign states keep the drawn code mark, which is about the
+     * SCAN rather than about a place.
+     */
+    val planElements = if (party?.tableId != null) venue else emptyList()
+
+    /*
+     * The screen leaves by itself — but NOT out from under an open floor plan.
+     *
+     * The already-arrived state times out after six seconds, and an usher who
+     * opened the room to point a guest through it would have had the whole
+     * screen vanish mid-sentence, dropping them back on a live camera with the
+     * guest still standing there. `showingPlan` is a key rather than a guard, so
+     * closing the plan starts a fresh window instead of resuming a spent one:
+     * the six seconds exist to give the operator time to read, and they have
+     * just been reading something else.
+     */
+    LaunchedEffect(outcome, showingPlan) {
+        if (showingPlan) return@LaunchedEffect
         visual.autoDismissMillis?.let {
             kotlinx.coroutines.delay(it)
             onDismiss()
@@ -246,6 +292,33 @@ fun ScanResultScreen(
                     Reveal(order = 3) {
                         ResultDestination(visual = visual, party = party)
                     }
+
+                    /*
+                     * The room, under the number.
+                     *
+                     * Last on the entrance ladder, and that ordering is the
+                     * design: label, name, table, actions, THEN the plan. An
+                     * usher reading this for two seconds should have finished
+                     * with it before the plan has finished arriving, so the plan
+                     * never competes for the glance the number owns.
+                     *
+                     * The whole card is the target — an usher about to walk a
+                     * guest across a room is not going to hunt a 30dp corner
+                     * mark, and that mark is there to say the card opens, not to
+                     * be the only way to open it.
+                     */
+                    if (planElements.isNotEmpty()) {
+                        Spacer(Modifier.height(18.dp))
+                        Reveal(order = 5) {
+                            PlanSlot(
+                                elements = planElements,
+                                myTableId = party?.tableId,
+                                visual = visual,
+                                compact = dimens.compact,
+                                onOpen = { showingPlan = true },
+                            )
+                        }
+                    }
                 }
             }
 
@@ -302,6 +375,77 @@ fun ScanResultScreen(
                     onAdmit(party, ids)
                 },
                 onCancel = { picking = false },
+            )
+        }
+
+        // Drawn last so it covers the result screen entirely, including the
+        // dismiss-anywhere surface underneath it.
+        if (showingPlan && planElements.isNotEmpty()) {
+            SeatingPlanOverlay(
+                elements = planElements,
+                myTableId = party?.tableId,
+                tableName = party?.tableName,
+                guestName = party?.label,
+                onClose = { showingPlan = false },
+            )
+        }
+    }
+}
+
+/**
+ * The plan, sized from whatever the table numeral left behind.
+ *
+ * ── Why this measures rather than assumes ──
+ *
+ * The space below the numeral is not a constant and is not guessable: the
+ * numeral is sized from the table's own NAME (140sp for "12", 44sp for "The
+ * Rose Garden" — see tableDisplaySize), the pane is a share of a window that
+ * rotates, and the compact ramp halves everything. Any fixed height for the card
+ * would either strand it in whitespace on one device or push it off the bottom
+ * of another.
+ *
+ * A `Column` measures its unweighted children in order against what is left, so
+ * the constraints handed to this box ARE the leftovers. That is the number the
+ * card is cut to.
+ *
+ * Below [PLAN_CARD_MIN_WIDTH] x [PLAN_CARD_MIN_HEIGHT] no card is drawn. A 90dp
+ * sheet of paper is not a floor plan — it is a smudge that reads as a rendering
+ * fault — so the pane offers the expanded plan instead, which is the same
+ * information with room to be seen.
+ */
+@Composable
+private fun PlanSlot(
+    elements: List<VenueTableEntity>,
+    myTableId: String?,
+    visual: ResultVisual,
+    compact: Boolean,
+    onOpen: () -> Unit,
+) {
+    BoxWithConstraints {
+        if (maxWidth >= PLAN_CARD_MIN_WIDTH && maxHeight >= PLAN_CARD_MIN_HEIGHT) {
+            SeatingPlanCard(
+                elements = elements,
+                myTableId = myTableId,
+                maxWidth = maxWidth,
+                maxHeight = maxHeight,
+                compact = compact,
+                onExpand = onOpen,
+                // The whole sheet opens the room. The card consumes its own taps
+                // — an ENABLED clickable with the indication suppressed, since a
+                // disabled one would opt out of input rather than consume it and
+                // every press would fall through to dismiss-anywhere.
+                modifier = Modifier.clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onOpen,
+                ),
+            )
+        } else {
+            SecondaryAction(
+                text = stringResource(R.string.plan_open),
+                onClick = onOpen,
+                contentColor = visual.onGround,
+                borderColor = visual.onGround.copy(alpha = 0.55f),
             )
         }
     }
@@ -1126,7 +1270,12 @@ private fun MemberRow(
  *
  * 70ms reads as one sequence; below about 50 the parts arrive together and the
  * stagger is wasted, above about 100 the operator is waiting for the screen to
- * finish assembling itself. Four rungs at 70 puts the last one on screen 210ms
- * after the first, well inside the two seconds this screen gets looked at for.
+ * finish assembling itself.
+ *
+ * Six rungs now — label, name, facts, table, actions, plan — which puts the last
+ * one on screen 350ms after the first. Still inside the two seconds this screen
+ * gets looked at for, and the plan is deliberately the rung that arrives last:
+ * an usher reading the table number should be done with it before the room has
+ * finished appearing, so the room never competes for that glance.
  */
 private const val REVEAL_STEP_MS = 70L

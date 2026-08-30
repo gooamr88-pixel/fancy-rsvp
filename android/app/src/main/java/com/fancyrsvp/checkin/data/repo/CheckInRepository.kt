@@ -72,6 +72,17 @@ class CheckInRepository @Inject constructor(
          * value out to a guest would send them to the wrong seat.
          */
         val tableName: String?,
+        /**
+         * The same table's id, so the seating plan knows which element to light.
+         *
+         * Carried alongside the name rather than derived from it: table names
+         * are free text and are NOT unique within an event — two rooms at the
+         * same venue can each have a "Table 1" — so matching the plan by name
+         * would light both, or the wrong one. Null when the party has no seat,
+         * which is what makes the plan render as context rather than as an
+         * answer.
+         */
+        val tableId: String?,
         val response: String,
         val notes: String?,
         val members: List<GuestView>,
@@ -300,6 +311,7 @@ class CheckInRepository @Inject constructor(
             partyId = party.id,
             label = party.label,
             tableName = party.tableName,
+            tableId = party.tableId,
             response = party.response,
             notes = party.notes,
             members = members,

@@ -63,6 +63,25 @@ function httpUrlOrNull(value) {
 }
 
 /**
+ * A finite number, or null — for the seating geometry on the bundle manifest.
+ *
+ * Postgres `DECIMAL` arrives from PostgREST as a JSON **string**: a table at
+ * `position_x` 12.5 comes back as `"12.5"`. Passed through untouched, the
+ * device's JSON parser rejects it against a `Double` field and the whole
+ * manifest fails to parse — one silently unarmable event, with nothing in the
+ * response to explain it.
+ *
+ * Null is preserved rather than folded to 0, because for a zone's width null
+ * means "no explicit size, use the shape catalogue's" while 0 means "a zone of
+ * no width". Defaulting here would draw every unsized zone as a point.
+ */
+function numOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
  * Extracts the bare JWT from a scanned value.
  *
  * The QR image encodes `<origin>/ticket/<urlencoded-token>` so an ordinary
@@ -693,7 +712,44 @@ async function getBundleManifest(eventId) {
   const [{ data: cursor }, { data: staff }, { data: tables }, { data: existingCheckIns }, bundleVersion] = await Promise.all([
     supabase.from('event_checkin_cursors').select('last_seq').eq('event_id', eventId).maybeSingle(),
     supabase.from('event_staff').select('id, display_name, role, pin_hash').eq('event_id', eventId).eq('is_active', true),
-    supabase.from('tables').select('id, table_name, max_capacity').eq('event_id', eventId).eq('element_type', 'table'),
+    /*
+     * THE VENUE LAYOUT, NOT JUST THE TABLE LIST.
+     *
+     * This used to be `id, table_name, max_capacity` filtered to
+     * `element_type = 'table'` — the names of the seatable tables and nothing
+     * else. The device stored them in `venue_tables` and read them back
+     * nowhere: a table's NAME already rides on every guest row, so the list was
+     * dead weight from the day it was written.
+     *
+     * The tablet draws the room now (the plan under the table numeral on the
+     * scan result), and a room is not a list of tables. Two things change:
+     *
+     *  • THE FILTER GOES. The stage, the dance floor, the entrance and the bar
+     *    are what make a plan legible as a venue rather than as scattered
+     *    circles — and the entrance in particular is the one an usher points
+     *    at. They are `element_type = 'zone'` rows in this same table.
+     *  • THE GEOMETRY COMES WITH IT. `position_x/y` are percentages of the
+     *    2600x1700 world and address the element's TOP-LEFT corner; zones carry
+     *    their own width/height while tables take theirs from the shape
+     *    catalogue. Read the coordinate convention off
+     *    frontend/src/app/utils/seatingGeometry.js before touching any of it —
+     *    reading position as a CENTRE does not shift the layout, it scrambles it.
+     *
+     * `shape` is free to be a value this backend has never heard of: the
+     * catalogue is edited in one place and the device falls back to a round
+     * table for anything it cannot name, exactly as the web maps do.
+     *
+     * Ordered so a bundle is byte-stable across re-prepares — the device has no
+     * opinion about order, but a diffable manifest is worth the index scan.
+     *
+     * NOT part of the integrity contract: `contentHash` covers the guest set
+     * only (see canonicalizeGuests). Widening this cannot invalidate a bundle.
+     */
+    supabase
+      .from('tables')
+      .select('id, table_name, max_capacity, element_type, shape, position_x, position_y, width, height, rotation, color')
+      .eq('event_id', eventId)
+      .order('id', { ascending: true }),
     // Arrivals ALREADY recorded (spec §7: the bundle returns "any check-ins
     // already recorded"). Without these a freshly-armed device does not know
     // who came in through the web kiosk before it existed, and would admit an
@@ -734,7 +790,30 @@ async function getBundleManifest(eventId) {
     staff: (staff || []).map((s) => ({
       staffId: s.id, displayName: s.display_name, role: s.role, pinHash: s.pin_hash,
     })),
-    tables: (tables || []).map((t) => ({ id: t.id, name: t.table_name, capacity: t.max_capacity })),
+    /*
+     * `name` is kept as the key rather than `tableName` — the device has parsed
+     * it under that name since the first bundle, and a tablet in the field
+     * ignores fields it does not know but cannot invent one it stops receiving.
+     *
+     * Numbers are coerced HERE, once. Postgres DECIMAL comes back from
+     * PostgREST as a JSON string, and a device that concatenates "12.5" + 0
+     * instead of adding draws the room somewhere off the canvas. `numOrNull`
+     * keeps null meaning "not set" — which for a zone's width means "use the
+     * catalogue's", a distinction 0 would destroy.
+     */
+    tables: (tables || []).map((t) => ({
+      id: t.id,
+      name: t.table_name,
+      capacity: t.max_capacity,
+      elementType: t.element_type || 'table',
+      shape: t.shape || null,
+      positionX: numOrNull(t.position_x),
+      positionY: numOrNull(t.position_y),
+      width: numOrNull(t.width),
+      height: numOrNull(t.height),
+      rotation: numOrNull(t.rotation),
+      color: t.color || null,
+    })),
     // Seeded into the device's local check_ins so its Layer 1 duplicate guard
     // (§5.3) is correct from the first scan, not only from the first delta.
     existingCheckIns: (existingCheckIns || []).map((c) => ({

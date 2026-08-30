@@ -209,6 +209,131 @@ class MigrationTest {
         }
     }
 
+    /**
+     * v3 → v4 adds the venue layout's geometry to `venue_tables`.
+     *
+     * Run from v1 for the same reason as the timezone test: a tablet out of a
+     * drawer crosses all three migrations in one open, and chaining is where
+     * migrations break.
+     *
+     * The row written here is a v3-shaped one — id, name, capacity and nothing
+     * else — because that is what every tablet in the field is holding. What it
+     * must produce is a row that still names its table and reads NULL for every
+     * coordinate, which the plan treats as "this event has no layout" and
+     * renders as the table numeral alone: precisely the behaviour the tablet had
+     * before it upgraded. Anything else would draw a venue at the canvas origin.
+     */
+    @Test
+    fun migrate1To4_addsLayoutGeometryAndKeepsTheTable() {
+        helper.createDatabase(TEST_DB, 1).use { db ->
+            db.execSQL(
+                """
+                INSERT INTO venue_tables (id, eventId, name, capacity)
+                VALUES ('t-1', 'evt-1', 'Table 12', 10)
+                """.trimIndent(),
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 4, true, *CheckinDatabase.MIGRATIONS)
+
+        db.query("SELECT * FROM venue_tables WHERE id = 't-1'").use { cursor ->
+            assertTrue("the table row must survive all three migrations", cursor.moveToFirst())
+
+            assertEquals("Table 12", cursor.getString(cursor.getColumnIndexOrThrow("name")))
+            assertEquals("evt-1", cursor.getString(cursor.getColumnIndexOrThrow("eventId")))
+            assertEquals(10, cursor.getInt(cursor.getColumnIndexOrThrow("capacity")))
+
+            for (column in listOf(
+                "elementType", "shape", "positionX", "positionY",
+                "width", "height", "rotation", "color",
+            )) {
+                assertTrue(
+                    "$column must be null on a row written before the layout shipped",
+                    cursor.isNull(cursor.getColumnIndexOrThrow(column)),
+                )
+            }
+        }
+    }
+
+    /**
+     * The geometry has to survive as a NUMBER, not as text.
+     *
+     * `position_x` is a percentage of the logical world with a fractional part.
+     * If the column were declared with TEXT affinity, SQLite would store 26.9
+     * happily and hand it back as a string — and Room's validation would pass,
+     * because it compares the declared affinity, not what a row contains. This
+     * writes at v4 and reads the double back, so a REAL that was typed as TEXT
+     * is caught here rather than by a venue drawn at the origin.
+     */
+    @Test
+    fun migrate1To4_storesGeometryAsRealNumbers() {
+        helper.createDatabase(TEST_DB, 1).use { db ->
+            db.execSQL(
+                """
+                INSERT INTO venue_tables (id, eventId, name, capacity)
+                VALUES ('z-1', 'evt-1', 'Main Entrance', NULL)
+                """.trimIndent(),
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 4, true, *CheckinDatabase.MIGRATIONS)
+        db.execSQL(
+            """
+            UPDATE venue_tables
+               SET elementType = 'zone', shape = 'entrance',
+                   positionX = 45.375, positionY = 89.5,
+                   width = 150.0, height = 70.0, rotation = 15.5, color = '#4A7C59'
+             WHERE id = 'z-1'
+            """.trimIndent(),
+        )
+
+        db.query("SELECT * FROM venue_tables WHERE id = 'z-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("zone", cursor.getString(cursor.getColumnIndexOrThrow("elementType")))
+            assertEquals("entrance", cursor.getString(cursor.getColumnIndexOrThrow("shape")))
+            // The fractional part is the whole point: a TEXT or INTEGER column
+            // would round or stringify it and move the element across the room.
+            assertEquals(45.375, cursor.getDouble(cursor.getColumnIndexOrThrow("positionX")), 0.0001)
+            assertEquals(89.5, cursor.getDouble(cursor.getColumnIndexOrThrow("positionY")), 0.0001)
+            assertEquals(15.5, cursor.getDouble(cursor.getColumnIndexOrThrow("rotation")), 0.0001)
+            assertEquals(150.0, cursor.getDouble(cursor.getColumnIndexOrThrow("width")), 0.0001)
+        }
+    }
+
+    /**
+     * And the queue is still untouchable at v4.
+     *
+     * Re-asserted for every migration that ships, because "this one only appends
+     * columns to another table" is exactly the reasoning that stops being true
+     * one migration later. A queued check-in exists on that tablet and nowhere
+     * else (§21.3).
+     */
+    @Test
+    fun migrate1To4_leavesTheSyncQueueAlone() {
+        helper.createDatabase(TEST_DB, 1).use { db ->
+            db.execSQL(
+                """
+                INSERT INTO sync_queue
+                    (payloadType, payloadJson, eventId, createdAt, attemptCount, lastError, isStalled)
+                VALUES ('check_in', '{"clientCheckinId":"queued-1"}', 'evt-1',
+                        1780000005000, 2, NULL, 0)
+                """.trimIndent(),
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 4, true, *CheckinDatabase.MIGRATIONS)
+
+        db.query("SELECT * FROM sync_queue WHERE eventId = 'evt-1'").use { cursor ->
+            assertTrue("a queued check-in must survive any migration", cursor.moveToFirst())
+            assertEquals(2, cursor.getInt(cursor.getColumnIndexOrThrow("attemptCount")))
+            assertEquals(
+                """{"clientCheckinId":"queued-1"}""",
+                cursor.getString(cursor.getColumnIndexOrThrow("payloadJson")),
+            )
+            assertNull(cursor.getString(cursor.getColumnIndexOrThrow("lastError")))
+        }
+    }
+
     private companion object {
         const val TEST_DB = "migration-test.db"
     }

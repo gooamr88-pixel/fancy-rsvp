@@ -3,6 +3,7 @@ package com.fancyrsvp.checkin.ui.scanner
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.fancyrsvp.checkin.data.local.CheckinDatabase
+import com.fancyrsvp.checkin.data.local.VenueTableEntity
 import com.fancyrsvp.checkin.data.repo.CheckInRepository
 import com.fancyrsvp.checkin.data.repo.DeviceRepository
 import com.fancyrsvp.checkin.device.DeviceStatusMonitor
@@ -11,6 +12,7 @@ import com.fancyrsvp.checkin.scan.HardwareScanSource
 import com.fancyrsvp.checkin.scan.ScanDebouncer
 import com.fancyrsvp.checkin.sync.ConnectionState
 import com.fancyrsvp.checkin.sync.SyncCoordinator
+import com.fancyrsvp.checkin.ui.seating.isDrawablePlan
 import com.fancyrsvp.checkin.util.safeLaunch
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CoroutineScope
@@ -155,6 +157,22 @@ class ScannerViewModel @Inject constructor(
     private val _noKidsAllowed = MutableStateFlow(false)
     val noKidsAllowed: StateFlow<Boolean> = _noKidsAllowed.asStateFlow()
 
+    /**
+     * The venue layout, for the seating plan on the result screen.
+     *
+     * Read ONCE, at [start], and held — not observed. The layout is fixed for
+     * the night: it arrives with the bundle and nothing at the door can change
+     * it, so a Flow over the encrypted database would be a query per result
+     * screen for an answer that cannot have moved.
+     *
+     * Empty is the normal, expected state and must stay cheap: an organizer who
+     * never drew a plan, and every tablet prepared before the geometry shipped.
+     * The result screen renders the table numeral alone in both cases, exactly
+     * as it did before this existed.
+     */
+    private val _venue = MutableStateFlow<List<VenueTableEntity>>(emptyList())
+    val venue: StateFlow<List<VenueTableEntity>> = _venue.asStateFlow()
+
     /** Battery and storage, for the §21.9 warnings. */
     val deviceStatus: StateFlow<DeviceStatusMonitor.Status> = deviceStatusMonitor.observe()
         .catch { emit(deviceStatusMonitor.current()) }
@@ -211,6 +229,22 @@ class ScannerViewModel @Inject constructor(
             // here means an usher either admits a child at an adults-only event or
             // turns a family away from one that welcomes them.
             _noKidsAllowed.value = db.eventDao().byId(eventId)?.noKidsAllowed ?: false
+        }
+
+        /*
+         * The venue layout. Its own launch, deliberately: a failure to read the
+         * plan must not take the adults-only rule down with it. `safeLaunch`
+         * swallows the throw either way, but sharing a coroutine would mean one
+         * database error costs both answers, and only one of them is decorative.
+         *
+         * A layout that is a list of NAMES with no coordinates — every tablet
+         * prepared before the geometry shipped — is discarded here rather than
+         * at the screen, so nothing downstream has to know that "has tables" and
+         * "has a plan" are different questions.
+         */
+        safeLaunch {
+            val layout = db.venueTableDao().forEvent(eventId)
+            _venue.value = if (layout.isDrawablePlan()) layout else emptyList()
         }
 
         // The coordinator runs on an application-lifetime scope, NOT viewModelScope:

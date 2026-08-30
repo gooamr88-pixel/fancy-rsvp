@@ -209,6 +209,120 @@ test('a non-https cover value is nulled rather than shipped to a device that can
   }
 });
 
+// ══════════════════════════════════════════════════════════════════
+// The venue layout — the tablet draws the room, not a table list
+// ══════════════════════════════════════════════════════════════════
+
+const tableRow = (over = {}) => ({
+  id: 't1', table_name: 'Table 12', max_capacity: 10, element_type: 'table',
+  shape: 'round', position_x: 26.9, position_y: 75.8,
+  width: null, height: null, rotation: 0, color: null, ...over,
+});
+
+test('the layout carries geometry, not just names, or the device cannot draw a room', async () => {
+  mock.setResolver(manifestResolver({ guests: [], tables: [tableRow()] }));
+  const m = await svc.getBundleManifest(EVENT);
+
+  assert.equal(m.tables.length, 1);
+  const t = m.tables[0];
+  // `name` and `capacity` keep their original keys: a tablet already in the
+  // field parses them, and it can ignore a field it does not know but cannot
+  // invent one it stops receiving.
+  assert.equal(t.name, 'Table 12');
+  assert.equal(t.capacity, 10);
+  assert.equal(t.elementType, 'table');
+  assert.equal(t.shape, 'round');
+  assert.equal(t.positionX, 26.9);
+  assert.equal(t.positionY, 75.8);
+  assert.equal(t.rotation, 0);
+});
+
+/**
+ * The stage, the dance floor and above all the ENTRANCE are what make a plan
+ * read as a venue rather than as scattered circles. The old query filtered them
+ * out, because all it was feeding was a list of seatable tables.
+ */
+test('venue zones are included alongside seatable tables', async () => {
+  mock.setResolver(manifestResolver({
+    guests: [],
+    tables: [
+      tableRow(),
+      tableRow({
+        id: 'z1', table_name: 'Main Entrance', max_capacity: null, element_type: 'zone',
+        shape: 'entrance', width: 150, height: 70, rotation: 15, color: '#4A7C59',
+      }),
+    ],
+  }));
+  const m = await svc.getBundleManifest(EVENT);
+
+  const zone = m.tables.find((t) => t.id === 'z1');
+  assert.ok(zone, 'the entrance must reach the device');
+  assert.equal(zone.elementType, 'zone');
+  assert.equal(zone.width, 150);
+  assert.equal(zone.height, 70);
+  assert.equal(zone.rotation, 15);
+  assert.equal(zone.color, '#4A7C59');
+});
+
+/**
+ * PostgREST returns Postgres DECIMAL as a JSON STRING. Passed through, the
+ * device's parser rejects "26.9" against a Double and the whole manifest fails —
+ * one event that silently cannot be armed, with nothing in the response to say why.
+ */
+test('decimal geometry is coerced to numbers, and blanks stay null rather than becoming zero', async () => {
+  mock.setResolver(manifestResolver({
+    guests: [],
+    tables: [tableRow({ position_x: '26.9', position_y: '75.8', width: '', height: null, rotation: '0' })],
+  }));
+  const m = await svc.getBundleManifest(EVENT);
+  const t = m.tables[0];
+
+  assert.strictEqual(t.positionX, 26.9);
+  assert.strictEqual(t.positionY, 75.8);
+  assert.strictEqual(t.rotation, 0);
+  // null means "no explicit size — use the shape catalogue's". Folding it to 0
+  // would draw every unsized zone as a point.
+  assert.strictEqual(t.width, null);
+  assert.strictEqual(t.height, null);
+});
+
+/**
+ * The catalogue is edited on the web side and the device falls back to a round
+ * table for anything it cannot name. A shape this backend has never heard of
+ * must therefore travel intact rather than being normalised or dropped here.
+ */
+test('an unrecognised shape is passed through untouched', async () => {
+  mock.setResolver(manifestResolver({ guests: [], tables: [tableRow({ shape: 'chocolate_fountain' })] }));
+  const m = await svc.getBundleManifest(EVENT);
+  assert.equal(m.tables[0].shape, 'chocolate_fountain');
+});
+
+/**
+ * The integrity contract covers the GUEST set (see canonicalizeGuests). If the
+ * layout ever entered the hash, every device armed before a table was nudged
+ * would fail verification and refuse to arm — at 14:00 on the day.
+ */
+test('widening the layout does not disturb the bundle content hash', async () => {
+  const guests = [guestRow('g1', 'Alice')];
+  mock.setResolver(manifestResolver({ guests, tables: [] }));
+  const withoutLayout = (await svc.getBundleManifest(EVENT)).integrity;
+
+  mock.setResolver(manifestResolver({
+    guests,
+    tables: [tableRow(), tableRow({ id: 'z1', element_type: 'zone', shape: 'stage' })],
+  }));
+  const withLayout = (await svc.getBundleManifest(EVENT)).integrity;
+
+  assert.equal(withLayout.contentHash, withoutLayout.contentHash);
+  assert.equal(withLayout.recordCount, withoutLayout.recordCount);
+});
+
+test('an event whose organizer never drew a plan reports an empty layout, not an error', async () => {
+  mock.setResolver(manifestResolver({ guests: [guestRow('g1', 'Alice')], tables: [] }));
+  const m = await svc.getBundleManifest(EVENT);
+  assert.deepEqual(m.tables, []);
+});
+
 test('an unknown event throws EVENT_NOT_FOUND rather than returning a hollow manifest', async () => {
   mock.setResolver((s) => {
     if (s.table === 'events') return { data: null, error: { code: 'PGRST116' } };

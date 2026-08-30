@@ -42,7 +42,7 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
         VenueTableEntity::class,
         ConflictEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class CheckinDatabase : RoomDatabase() {
@@ -120,6 +120,49 @@ abstract class CheckinDatabase : RoomDatabase() {
         }
 
         /**
+         * The venue layout, so the tablet can DRAW the room rather than name a
+         * table (the seating plan on the scan result).
+         *
+         * Eight columns appended to `venue_tables`. That table has held
+         * `id, name, capacity` since v1 and been read by nothing — the plan is
+         * the first consumer, and a plan needs coordinates.
+         *
+         * ── Why every one of them is nullable ──
+         *
+         * Two reasons, and both are load-bearing:
+         *
+         *  1. A nullable column added by ALTER TABLE is already NULL for every
+         *     existing row, so no DEFAULT clause is needed — and writing one
+         *     anyway makes SQLite record a default the entity does not declare,
+         *     which is a shape `runMigrationsAndValidate` compares and fails on.
+         *     Same reasoning as MIGRATION_1_2; see the note there.
+         *  2. NULL is the honest reading of an un-re-prepared tablet: it holds
+         *     no geometry, so it draws no plan and shows the table numeral
+         *     alone, exactly as it does today. A non-null default of 0 would
+         *     stack the whole venue on the canvas origin.
+         *
+         * Appends only. No table is rebuilt, nothing is moved, and neither
+         * `check_ins` nor `sync_queue` is touched — a tablet upgrading the night
+         * before an event is holding arrivals that exist nowhere else (§21.2).
+         */
+        private val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                // REAL, not INTEGER: position is a percentage with a fractional
+                // part, and rotation is degrees. SQLite would accept the value
+                // either way, but Room compares the DECLARED affinity against
+                // the entity's Double and fails validation on a mismatch.
+                db.execSQL("ALTER TABLE venue_tables ADD COLUMN elementType TEXT")
+                db.execSQL("ALTER TABLE venue_tables ADD COLUMN shape TEXT")
+                db.execSQL("ALTER TABLE venue_tables ADD COLUMN positionX REAL")
+                db.execSQL("ALTER TABLE venue_tables ADD COLUMN positionY REAL")
+                db.execSQL("ALTER TABLE venue_tables ADD COLUMN width REAL")
+                db.execSQL("ALTER TABLE venue_tables ADD COLUMN height REAL")
+                db.execSQL("ALTER TABLE venue_tables ADD COLUMN rotation REAL")
+                db.execSQL("ALTER TABLE venue_tables ADD COLUMN color TEXT")
+            }
+        }
+
+        /**
          * All migrations, in order.
          *
          * When this grows: every entry must have a matching test in
@@ -127,7 +170,11 @@ abstract class CheckinDatabase : RoomDatabase() {
          * JSON for the PREVIOUS version. A migration with no test is how a
          * fleet of tablets loses a night's check-ins.
          */
-        val MIGRATIONS = arrayOf<androidx.room.migration.Migration>(MIGRATION_1_2, MIGRATION_2_3)
+        val MIGRATIONS = arrayOf<androidx.room.migration.Migration>(
+            MIGRATION_1_2,
+            MIGRATION_2_3,
+            MIGRATION_3_4,
+        )
 
         /**
          * Loads SQLCipher's native library. Idempotent — the JVM ignores repeat

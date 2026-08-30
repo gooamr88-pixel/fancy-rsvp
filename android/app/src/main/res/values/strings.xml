@@ -297,6 +297,27 @@
     <string name="result_dietary">Dietary: %1$s</string>
     <string name="result_no_kids">No children at this event</string>
 
+    <!--
+      The seating plan.
+
+      Read at a door, so every one of these is written for an usher with a guest
+      in front of them rather than for a guest reading their own chart.
+
+      "Marked in gold" and not "look for the star": the star is only drawn when
+      the table is big enough to carry one (see markerFits in SeatingPlanStyle),
+      and on a small card there is no star at all. The gold fill is true at every
+      size the plan is ever drawn at, so the sentence stays true on every screen.
+    -->
+    <string name="plan_open">Show the room</string>
+    <string name="plan_title">The room</string>
+    <string name="plan_back">Back to the guest</string>
+    <string name="plan_reset">Whole room</string>
+    <string name="plan_marked_in_gold">Their table is marked in gold</string>
+    <string name="plan_none">No seating plan for this event</string>
+    <!-- Spoken by a screen reader in place of the drawing itself. -->
+    <string name="plan_card_description">Floor plan of the venue, with this guest\'s table marked in gold. Tap to open it full screen.</string>
+    <string name="plan_card_description_no_table">Floor plan of the venue. Tap to open it full screen.</string>
+
     <!-- Manual search (§8.5) -->
     <string name="search_hint">Name or table</string>
     <string name="search_prompt">Start typing a guest\'s name.</string>

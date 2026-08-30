@@ -502,6 +502,70 @@ the first test in this repo that reads across the app/web boundary** — if it
 starts failing after a frontend change, the tablet's instructions are wrong, not
 the dashboard.
 
+### 12.2e The seating plan on the result screen, 2026-08-30
+
+The scan result now carries the venue's floor plan under the table numeral, and
+the same card opens a full-screen, pinch-zoomable plan. **None of it has been
+compiled** — there is no JDK on the authoring machine — so every item here is a
+first look, not a regression check.
+
+The design was built and rendered in a browser first, from the same geometry
+module the web maps use, at 1280×800, 800×1280 and 870×390. Those renders are
+what the Compose has to reproduce; they are not proof that it does.
+
+**Before anything else: the tablet must be RE-PREPARED.** Geometry arrives with
+the bundle. A device armed before this shipped holds table names and no
+coordinates, and will correctly show the numeral alone — which is
+indistinguishable from the feature being broken. Re-prepare, then test.
+
+- **An event with a seating chart.** The card appears under the numeral with the
+  whole room on it, the guest's table filled gold. Check it against the
+  organizer's own seating map side by side: same room, same orientation, nothing
+  drawn on top of anything it should be behind.
+- **`positionX`/`positionY` are the element's TOP-LEFT corner, not its centre.**
+  If they were ever read as a centre the layout would not shift, it would
+  SCRAMBLE — every element moving by half its own size, and sizes differ per
+  shape. A plan that looks *slightly* wrong is much more likely to be this than
+  anything else, so compare positions, not vibes.
+- **An event with NO seating chart, and a guest with no table.** No card, no
+  empty sheet of paper, no gap where one used to be. The screen must look exactly
+  as it did before this shipped.
+- **The numeral is still the largest thing on the screen.** That is the rule the
+  plan was fitted around; if the card has pushed the number down or shrunk it,
+  the pane arithmetic is wrong.
+- **A phone in landscape** (390dp tall). The card should be a small silhouette
+  with no numerals and no key — or, if it cannot clear 190×150dp, a **"Show the
+  room"** button instead. Neither is a bug. A clipped card is.
+- **The zone glyphs draw.** Fourteen marks transcribed by hand from the web
+  icons; a mis-transcribed path shows as a scribble or as nothing, and only a
+  screen will tell you. Check a stage, a dance floor and an entrance at minimum.
+- **Zone names move out from under tables.** Put a table inside a dance floor in
+  the organizer's map and re-prepare: the zone's name should shift to the foot or
+  head of the zone, or vanish into the key — never render half-covered.
+- **Tap the card.** It must open the full plan and NOT fall through to the
+  result screen's dismiss-anywhere. This is the single most likely defect on the
+  screen: the card suppresses its indication, and an accidentally *disabled*
+  clickable does not consume a tap, it opts out of input.
+- **The already-arrived screen times out after six seconds.** Open the plan from
+  it, hold for ten seconds, and confirm the screen is still there — the timeout
+  is suspended while the plan is open and restarts when it closes.
+- **Pinch and pan the full plan**, then let go at the far corner. It must not be
+  possible to fling the sheet off the screen; the pan is clamped to the overflow.
+  At 1x there is nothing to pan and the gesture should do nothing at all.
+- **"Whole room"** appears only once the plan has been moved, and returns it.
+- **A rotated element.** Set a table or zone to 15° in the organizer's map. The
+  shape rotates; its NUMERAL and its NAME must stay upright.
+- **An Arabic table name.** "طاولة ٧" must draw as ٧ and in the Arabic
+  face, not as a box. `displayFamilyFor` picks the face from the string, and this
+  is the first place it is asked for a single digit.
+- **Font scale.** Raise the system font size to its maximum. Every other piece of
+  type in the app grows; the numerals INSIDE the drawn tables must not, or they
+  burst out of the circles they are centred in.
+- **A forty-table venue, on the oldest tablet you have.** The plan is one Canvas,
+  not forty composables, so it should pinch smoothly — but the chair pips and the
+  ruled floor are drawn per frame and this is the only thing here with a
+  performance question attached.
+
 ### 12.3 Session, lock, security
 
 - `FLAG_SECURE`: screenshots blocked, and the app hidden in the recent-apps
@@ -574,6 +638,17 @@ invalidates every issued QR code.
 
 ### 14.4 Verify after deploy
 
+- [ ] `GET /api/v1/checkin/events/:id/bundle` returns a `tables` array whose rows
+      carry `positionX`, `positionY`, `shape` and `elementType`, and that
+      **includes zones** (stage, dance floor, entrance) alongside seatable
+      tables. If they are absent the tablet draws no plan and shows the numeral
+      alone — which looks exactly like the feature never shipped.
+- [ ] `integrity.contentHash` for an event is UNCHANGED by the above. The hash
+      covers the guest set only; if widening the layout moved it, every device
+      already armed for that event would fail verification and refuse to arm.
+- [ ] Room schema `app/schemas/…/4.json` is committed after the first build that
+      produces it (§21.2 — a migration test needs the shipped shape, and that
+      hole cannot be filled once a tablet in the field holds version 4 data).
 - [ ] All 35 check-in routes register (`/api/v1/checkin/*`, `/api/v1/admin/checkin/*`).
 - [ ] `checkin-setup` renders for an organizer; the admin device registry for a super admin.
 - [ ] `CheckinLive` on a **free-tier** event shows the upgrade prompt, not a raw error, and stops polling. (Fixed 2026-07-31, never rendered.)

@@ -251,7 +251,33 @@ data class StaffEntity(
     val failedAttempts: Int = 0,
 )
 
-/** Venue tables, filtered server-side to element_type = 'table'. */
+/**
+ * The venue layout — every element the organizer drew, tables AND zones.
+ *
+ * ── What this used to be, and why it was dead ──
+ *
+ * `id, name, capacity`, filtered server-side to `element_type = 'table'`. It was
+ * written on every prepare and read by nothing: a table's NAME already rides on
+ * each guest row, so the list carried no information any screen needed. The
+ * seating plan on the scan result is the first thing that uses it, and a plan
+ * needs the room — the stage, the dance floor, and above all the entrance,
+ * which is the element an usher actually points at.
+ *
+ * ── Geometry, and the one trap in it ──
+ *
+ * [positionX] / [positionY] are PERCENTAGES of a fixed 2600 x 1700 logical
+ * world, addressing the element's **top-left corner** — never its centre. See
+ * VenueTableDto and `ui/seating/SeatingGeometry.kt`, which is the only place
+ * allowed to convert between the two.
+ *
+ * Every geometry column is NULLABLE, and deliberately so. A row written before
+ * these columns existed reads as null everywhere, which every consumer already
+ * treats as "this event has no plan" — so an upgraded tablet that has not
+ * re-prepared shows the table numeral alone, exactly as it does today, instead
+ * of drawing a room at the origin. It also keeps MIGRATION_3_4 to bare
+ * `ALTER TABLE ... ADD COLUMN` with no DEFAULT clause, which is the only shape
+ * of migration that cannot fail Room's schema validation (see MIGRATION_1_2).
+ */
 @Entity(
     tableName = "venue_tables",
     indices = [Index("eventId")],
@@ -261,6 +287,17 @@ data class VenueTableEntity(
     val eventId: String,
     val name: String,
     val capacity: Int?,
+    /** table | zone. Null on a pre-migration row; the shape's category covers it. */
+    val elementType: String? = null,
+    /** Catalogue key. Unknown values degrade to a round table, never to a crash. */
+    val shape: String? = null,
+    val positionX: Double? = null,
+    val positionY: Double? = null,
+    /** Honoured for zones only. Null means "use the catalogue's size". */
+    val width: Double? = null,
+    val height: Double? = null,
+    val rotation: Double? = null,
+    val color: String? = null,
 )
 
 /**

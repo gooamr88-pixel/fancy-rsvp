@@ -118,6 +118,8 @@ fun ScannerScreen(
     val status by viewModel.status.collectAsState()
     val operator by viewModel.operator.collectAsState()
     val noKidsAllowed by viewModel.noKidsAllowed.collectAsState()
+    /** The venue layout for the seating plan. Empty when this event has none. */
+    val venue by viewModel.venue.collectAsState()
     val deviceStatus by viewModel.deviceStatus.collectAsState()
     val batteryAcknowledged by viewModel.batteryAcknowledged.collectAsState()
 
@@ -441,6 +443,12 @@ fun ScannerScreen(
                         outcome = current,
                         isSupervisor = operator.isSupervisor,
                         noKidsAllowed = noKidsAllowed,
+                        // Empty whenever this event has no drawable layout, which
+                        // is the normal case for an organizer who never made a
+                        // seating chart and for any tablet armed before the
+                        // geometry shipped. The result screen renders the table
+                        // numeral alone in both, exactly as it always has.
+                        venue = venue,
                         onAdmit = { party, ids -> viewModel.admit(party, ids) },
                         onOverride = { party, ids -> viewModel.override(party, ids) },
                         onSearch = {
