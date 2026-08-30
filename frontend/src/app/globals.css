@@ -1482,8 +1482,28 @@ html.fx-debug-overflow *:not(html):not(body) { outline-offset: -1px; }
      next" is what a paginated list wants — but a multicol block with an
      indefinite height fills column ONE and lets it grow forever, so the whole
      index rendered as a single 260px-wide ribbon down the left of the sheet
-     with three empty columns beside it. The default (`balance`) fills every
-     column in every page fragment, which is what was wanted all along. */
+     with three empty columns beside it. The default (`balance`) is what was
+     wanted all along: it fills every column of every page a list spills across
+     and balances only the last one. */
+
+  /* ── ONE LIST DOES NOT END THE PAGE ──
+     Each list used to be its own sheet with its own page break, which is where
+     the wasted paper came from: a section running a few millimetres long
+     printed a second page that was almost entirely white, and a seven-name
+     "Awaiting a Table" took a full sheet to itself. They flow now. The head
+     rules above still hold — a section title is never left at the foot of a
+     page, and a table's block is never split — so the breaks land in sensible
+     places without a blank half-page being reserved for them. */
+  .psc-part + .psc-part {
+    break-before: auto;
+    page-break-before: auto;
+  }
+  /* The organizer's opt-out, for handing different lists to different people. */
+  .psc-doc.is-split .psc-part + .psc-part {
+    break-before: page;
+    page-break-before: always;
+    margin-top: 0;
+  }
 }
 /* @page's size follows the organizer's paper/orientation choice and is written
    at runtime by the preview modal (an inline <style> — a size cannot be
@@ -1841,6 +1861,12 @@ html.fx-debug-overflow *:not(html):not(body) { outline-offset: -1px; }
 .psc-sectionhead {
   flex-shrink: 0;
   margin-bottom: 9px;
+}
+/* Air between one list and the next, now that they share a run of paper. Enough
+   that the sections read as separate documents, far less than the blank
+   half-page a forced break was costing. */
+.psc-part + .psc-part {
+  margin-top: 11mm;
 }
 
 /* ── the floor plan figure ── */

@@ -139,6 +139,45 @@ describe('the seating pack renders', () => {
     expect(text()).toContain('Ahmed Hassan');
   });
 
+  it('lets the lists share one run of paper', () => {
+    /**
+     * THE WASTED-PAPER REGRESSION, PINNED.
+     *
+     * Every list used to be its own sheet with its own forced page break. On a
+     * real pack that printed three pages that were mostly white — measured from
+     * the actual PDF: one page with 115mm of blank foot, one with 152mm, and
+     * one carrying five lines of type on a 186mm page. Six sheets became four
+     * once they flowed.
+     *
+     * So: exactly two sheets by default (the plan, and the lists), with the
+     * three lists as parts inside the second one.
+     */
+    renderPack();
+    expect(document.querySelectorAll('.psc-sheet')).toHaveLength(2);
+    const parts = document.querySelectorAll('.psc-part');
+    expect(parts).toHaveLength(3);
+    // …and they are in the order the night needs them: find a guest, find a
+    // table, then chase whoever still has neither.
+    expect([...parts].map((p) => p.querySelector('h2').textContent.trim().replace(/\s*\d+$/, '')))
+      .toEqual(['Guest Index', 'Table Assignments', 'Awaiting a Table']);
+  });
+
+  it('does not spread a short list over the full column count', () => {
+    // Seven names across four columns is two per column: stubs with a dot
+    // leader running most of the way across the paper and nothing beneath.
+    renderPack();
+    const cols = [...document.querySelectorAll('.psc-cols')];
+    expect(cols).toHaveLength(3);
+    // A landscape page carries four columns; this fixture's lists are all
+    // short, so none of them may claim four. Two is the floor — one column of
+    // names with a 27cm dot leader is its own kind of wrong.
+    for (const el of cols) {
+      const n = Number(el.style.columnCount);
+      expect(n).toBeGreaterThanOrEqual(2);
+      expect(n).toBeLessThan(4);
+    }
+  });
+
   it('tells the organizer what to do instead of drawing an empty room', () => {
     renderPack({ elements: [] });
     expect(text()).toContain('Add at least one table or zone');

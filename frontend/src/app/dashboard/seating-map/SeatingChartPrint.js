@@ -1091,6 +1091,10 @@ export default function SeatingChartPrintModal({
   const [showSeats, setShowSeats] = useState(true);
   const [showCounts, setShowCounts] = useState(true);
   const [showNames, setShowNames] = useState(false);
+  /* Off: the lists flow and no paper is wasted between them. On: each list
+     opens its own page, for handing the index to the door and the assignments
+     to whoever is laying out place cards. */
+  const [splitParts, setSplitParts] = useState(false);
 
   /* ── this printout's element positions (never written back) ── */
   const [overrides, setOverrides] = useState({});
@@ -1257,6 +1261,9 @@ export default function SeatingChartPrintModal({
   const seatedGuests = roster.length > 0 ? rosterSeated : (summary?.seatedGuests ?? 0);
   const unseatedCount = (unseatedParties || []).reduce((n, p) => n + (Number(p.size) || 1), 0);
   const totalCapacity = roster.reduce((n, t) => n + (t.capacity || 0), 0);
+  const hasLists = (sections.index && indexRows.length > 0)
+    || (sections.tables && roster.length > 0)
+    || (sections.unseated && (unseatedParties || []).length > 0);
 
   const formattedDate = eventDate
     ? formatInZone(eventDate, eventTimezone, { year: 'numeric', month: 'long', day: 'numeric' })
@@ -1305,7 +1312,21 @@ export default function SeatingChartPrintModal({
      four comfortable columns; a 186mm portrait one holds three. One value for
      every list in the pack — two identically-valued constants read as though
      the lists differ on purpose, and they do not. */
-  const columns = orientation === 'landscape' ? 4 : 3;
+  const maxColumns = orientation === 'landscape' ? 4 : 3;
+  /**
+   * …but a SHORT list does not get the full four.
+   *
+   * Seven people waiting for a table, spread over four columns, is two names
+   * per column: a row of stubs with a dot leader running most of the way across
+   * the paper and nothing under it. The column count is capped by how much
+   * there is to put in it, so a short list reads as a short list instead of as
+   * a wide one that failed to fill.
+   *
+   * `per` is roughly how many lines one entry occupies — an index row is one
+   * line, a table block is about five — so both sections are asking the same
+   * question in their own units.
+   */
+  const colsFor = (count, per) => Math.max(2, Math.min(maxColumns, Math.ceil(count / per)));
 
   /* ── measured page counts, for the preview's page marks ── */
   const sheetRefs = useRef({});
@@ -1574,6 +1595,13 @@ export default function SeatingChartPrintModal({
               label="Table cards" hint="Cut out and stand on each table" count={tableCount}
             />
 
+            <Toggle
+              checked={splitParts} onChange={setSplitParts}
+              label="Start each list on a new page"
+              hint="Off, the lists flow and use less paper"
+              disabled={!hasLists}
+            />
+
             <h3 className="ppm-rail-head">Floor plan</h3>
             <Toggle checked={showSeats} onChange={setShowSeats} label="Draw the chairs" hint="Filled where a seat is taken" />
             <Toggle
@@ -1625,7 +1653,7 @@ export default function SeatingChartPrintModal({
             <div className="ppm-empty">Add at least one table or zone to the seating map before printing.</div>
           ) : (
             <div
-              className="print-seating-chart psc-doc"
+              className={`print-seating-chart psc-doc${splitParts ? ' is-split' : ''}`}
               style={{
                 '--psc-page-w': `${geom.w}mm`,
                 '--psc-page-h': `${geom.h}mm`,
@@ -1679,70 +1707,82 @@ export default function SeatingChartPrintModal({
                 </Sheet>
               )}
 
-              {sections.index && indexRows.length > 0 && (
-                <Sheet
-                  innerRef={(n) => { sheetRefs.current.index = n; }}
-                  pages={pageCounts.index || 1}
-                  label="Guest index"
-                >
-                  <SectionHead
-                    title="Guest Index"
-                    note="Everyone attending, A to Z, with the table they are seated at."
-                    eventTitle={eventTitle}
-                    count={indexRows.length}
-                  />
-                  <div className="psc-cols" style={{ columnCount: columns, columnGap: '9mm' }}>
-                    {indexGroups.map((g) => (
-                      <div key={g.letter} className="psc-idx-group">
-                        <p className="psc-idx-letter">{g.letter}</p>
-                        {g.rows.map((row) => <IndexRow key={row.key} row={row} fontSize={idxFont} />)}
-                      </div>
-                    ))}
-                  </div>
-                  <PrintFooter />
-                </Sheet>
-              )}
+              {/* ── THE LISTS SHARE ONE RUN OF PAPER ──
+                  Every list used to open its own sheet, and that is where the
+                  blank space came from. A section that ran nine millimetres
+                  past a page printed a second page that was ninety percent
+                  white; "Awaiting a Table" — seven names — took a whole sheet
+                  of its own. Three sections, three ragged tails.
 
-              {sections.tables && roster.length > 0 && (
-                <Sheet
-                  innerRef={(n) => { sheetRefs.current.tables = n; }}
-                  pages={pageCounts.tables || 1}
-                  label="Table assignments"
-                >
-                  <SectionHead
-                    title="Table Assignments"
-                    note={`${seatedGuests} of ${totalCapacity || '—'} seats filled across ${tableCount} table${tableCount === 1 ? '' : 's'}.`}
-                    eventTitle={eventTitle}
-                    count={tableCount}
-                  />
-                  <div className="psc-cols" style={{ columnCount: columns, columnGap: '9mm' }}>
-                    {roster.map((t) => <TableBlock key={t.id} table={t} fontSize={rosterFont} />)}
-                  </div>
-                  <PrintFooter />
-                </Sheet>
-              )}
+                  They flow now, one after another, the way the reference pages
+                  of any printed programme do: a ruled section head, a little
+                  air above it, and the paper carries on. The break rules below
+                  still keep a head off the foot of a page and never split a
+                  table's block, so nothing lands badly — there is simply no
+                  deliberate blank left between one list and the next.
 
-              {sections.unseated && (unseatedParties || []).length > 0 && (
+                  "Start each list on a new page" in the options rail puts the
+                  old behaviour back for anyone handing different lists to
+                  different people. */}
+              {hasLists && (
                 <Sheet
-                  innerRef={(n) => { sheetRefs.current.unseated = n; }}
-                  pages={pageCounts.unseated || 1}
-                  label="Awaiting a table"
+                  innerRef={(n) => { sheetRefs.current.lists = n; }}
+                  pages={pageCounts.lists || 1}
+                  label="Guest lists"
                 >
-                  <SectionHead
-                    title="Awaiting a Table"
-                    note="Attending, with no seat assigned yet. The figure is how many people arrive in the party. Keep this sheet at the door."
-                    eventTitle={eventTitle}
-                    count={unseatedCount}
-                  />
-                  <div className="psc-cols" style={{ columnCount: columns, columnGap: '9mm' }}>
-                    {[...(unseatedParties || [])].sort((a, b) => byName(a.name, b.name)).map((p) => (
-                      <div key={p.id} className="psc-idx-row psc-item" style={{ fontSize: idxFont }}>
-                        <span className="psc-idx-name" style={{ unicodeBidi: 'plaintext' }}>{p.name}</span>
-                        <span className="psc-dots" aria-hidden="true" />
-                        <span className="psc-idx-table">{p.size}<span style={{ opacity: 0.45, fontWeight: 600 }}> pax</span></span>
+                  {sections.index && indexRows.length > 0 && (
+                    <section className="psc-part">
+                      <SectionHead
+                        title="Guest Index"
+                        note="Everyone attending, A to Z, with the table they are seated at."
+                        eventTitle={eventTitle}
+                        count={indexRows.length}
+                      />
+                      <div className="psc-cols" style={{ columnCount: colsFor(indexRows.length, 9), columnGap: '9mm' }}>
+                        {indexGroups.map((g) => (
+                          <div key={g.letter} className="psc-idx-group">
+                            <p className="psc-idx-letter">{g.letter}</p>
+                            {g.rows.map((row) => <IndexRow key={row.key} row={row} fontSize={idxFont} />)}
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
+                    </section>
+                  )}
+
+                  {sections.tables && roster.length > 0 && (
+                    <section className="psc-part">
+                      <SectionHead
+                        title="Table Assignments"
+                        note={`${seatedGuests} of ${totalCapacity || '—'} seats filled across ${tableCount} table${tableCount === 1 ? '' : 's'}.`}
+                        eventTitle={eventTitle}
+                        count={tableCount}
+                      />
+                      <div className="psc-cols" style={{ columnCount: colsFor(roster.length, 4), columnGap: '9mm' }}>
+                        {roster.map((t) => <TableBlock key={t.id} table={t} fontSize={rosterFont} />)}
+                      </div>
+                    </section>
+                  )}
+
+                  {sections.unseated && (unseatedParties || []).length > 0 && (
+                    <section className="psc-part">
+                      <SectionHead
+                        title="Awaiting a Table"
+                        note="Attending, with no seat assigned yet. The figure is how many people arrive in the party."
+                        eventTitle={eventTitle}
+                        count={unseatedCount}
+                      />
+                      <div className="psc-cols" style={{ columnCount: colsFor(unseatedParties.length, 9), columnGap: '9mm' }}>
+                        {[...(unseatedParties || [])].sort((a, b) => byName(a.name, b.name)).map((p) => (
+                          <div key={p.id} className="psc-idx-row psc-item" style={{ fontSize: idxFont }}>
+                            <span className="psc-idx-name" style={{ unicodeBidi: 'plaintext' }}>{p.name}</span>
+                            <span className="psc-dots" aria-hidden="true" />
+                            <span className="psc-idx-table">{p.size}<span style={{ opacity: 0.45, fontWeight: 600 }}> pax</span></span>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
                   <PrintFooter />
                 </Sheet>
               )}
