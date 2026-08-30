@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useMemo } from 'react';
 import Icon from '../../components/icons/Icon';
+import SeatingLegend from './SeatingLegend';
 /* The world/element model is shared verbatim with the organizer seating map
    (dashboard/seating-map) — imported, never re-declared, because a local copy
    that fell behind drew the organizer's zones as round tables here without
@@ -18,6 +19,7 @@ import {
   elementStyle, seatPositions, seatStyle,
   planNumeral, numeralStyle, numeralFits,
   spotlightStyle, markerStyle, zoneGlyphSize, ZONE_GLYPH_OPACITY,
+  zoneLabel, zoneLabelStyle, zoneMarkStyle, labelObstacles, planLegend,
 } from '../../utils/seatingPlanStyle';
 
 /**
@@ -30,9 +32,12 @@ import {
  * at a venue door to show a barcode, and a half-screen floor plan pushed the
  * one thing they came for off the top of the phone.
  */
-export default function SeatingMiniMap({ tables, myTableId, maxHeight = 320 }) {
+export default function SeatingMiniMap({ tables, myTableId, maxHeight = 320, showLegend = true }) {
   const wrapRef = useRef(null);
   const [boxW, setBoxW] = useState(0);
+  /* Named in the host's own words — "Champagne Bar", not the catalogue's
+     "Bar". See planLegend. */
+  const legend = useMemo(() => planLegend(tables), [tables]);
 
   useEffect(() => {
     const node = wrapRef.current;
@@ -79,6 +84,25 @@ export default function SeatingMiniMap({ tables, myTableId, maxHeight = 320 }) {
      dimmed, which just looks broken. */
   const hasMine = els.some((el) => !isZone(el) && el.id === myTableId);
 
+  /**
+   * Every element's drawn rectangle, worked out ONCE before anything renders.
+   *
+   * The layout used to be computed inside the render loop, which meant an
+   * element knew where it was and nothing else knew where anything was. A zone
+   * cannot decide where to put its name without knowing which tables are drawn
+   * over it, so the pass is hoisted: positions first, then obstacles, then
+   * paint. Screen pixels here — the geometry is scaled before layout in this
+   * map, unlike the expanded one.
+   */
+  const placed = els.map((el) => ({
+    el,
+    x: (pctToPx(el.position_x, WORLD_W) - minX) * scale,
+    y: (pctToPx(el.position_y, WORLD_H) - minY) * scale,
+    w: elWidth(el) * scale,
+    h: elHeight(el) * scale,
+  }));
+  const obstacles = labelObstacles(placed);
+
   return (
     <div ref={wrapRef} style={{ width: '100%', overflow: 'hidden' }}>
       <div style={{
@@ -90,17 +114,15 @@ export default function SeatingMiniMap({ tables, myTableId, maxHeight = 320 }) {
         <div aria-hidden style={floorGrainStyle(scale)} />
         <div aria-hidden style={floorVignetteStyle()} />
 
-        {els.map(el => {
+        {placed.map(({ el, x: left, y: top, w, h }) => {
           const zone = isZone(el);
           const meta = shapeMeta(el.shape);
-          const left = (pctToPx(el.position_x, WORLD_W) - minX) * scale;
-          const top = (pctToPx(el.position_y, WORLD_H) - minY) * scale;
-          const w = elWidth(el) * scale;
-          const h = elHeight(el) * scale;
           const rotation = Number(el.rotation) || 0;
           const mine = !zone && el.id === myTableId;
           const color = el.color || meta.color || '#B8944F';
           const numeral = zone || !numeralFits(h) ? null : planNumeral(el.table_name);
+          // scale 1: this map lays elements out at their final screen size.
+          const label = zone ? zoneLabel(el, { x: left, y: top, w, h }, 1, obstacles) : null;
 
           return (
             <React.Fragment key={el.id}>
@@ -111,6 +133,7 @@ export default function SeatingMiniMap({ tables, myTableId, maxHeight = 320 }) {
 
               <div style={{
                 ...elementStyle(el, { scale, mine, dimOthers: hasMine }),
+                ...zoneMarkStyle(label),
                 left, top, width: w, height: h,
                 transform: `rotate(${rotation}deg)`, transformOrigin: 'center center',
               }}>
@@ -123,6 +146,12 @@ export default function SeatingMiniMap({ tables, myTableId, maxHeight = 320 }) {
                     style={{ opacity: ZONE_GLYPH_OPACITY, flexShrink: 0 }}
                   />
                 )}
+                {/* A zone names itself when it is drawn big enough to be read —
+                    measured in the pixels it actually occupies here, so the same
+                    stage is labelled on a roomy preview and left to the legend on
+                    a cramped one — and it sits in a band of the zone that no
+                    table is covering. */}
+                {label && <span style={zoneLabelStyle(label.size, color, rotation)}>{label.text}</span>}
                 {numeral && <span style={numeralStyle(h, mine, rotation)}>{numeral}</span>}
                 {!zone && seatPositions(el).map((pos, i) => (
                   <span key={i} aria-hidden style={seatStyle(pos, scale, mine)} />
@@ -137,6 +166,14 @@ export default function SeatingMiniMap({ tables, myTableId, maxHeight = 320 }) {
           );
         })}
       </div>
+
+      {/* THE KEY. This map had none — on the entry pass and at the end of the
+          RSVP, which between them are the map most guests will ever see, the
+          venue's zones were coloured boxes with a 9px glyph and no name
+          anywhere on the screen. */}
+      {showLegend && legend.length > 0 && (
+        <SeatingLegend items={legend} compact style={{ margin: '10px auto 0', maxWidth: renderW, justifyContent: 'center' }} />
+      )}
     </div>
   );
 }

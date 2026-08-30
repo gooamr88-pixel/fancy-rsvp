@@ -565,7 +565,13 @@ export default function CheckInPage() {
                       <Icon name="mapPin" size={12} strokeWidth={1.8} /> {selectedGuest.tableName}
                     </span>
                   </div>
-                  <SeatingMiniMap tables={seatingElements} myTableId={selectedGuest.tableId} youLabel={selectedGuest.guestName} />
+                  {/* `youLabel` used to be passed here and has not been a prop
+                      since the worded "you are here" pill was replaced by a gold
+                      star — see markerStyle in seatingPlanStyle.js. It was doing
+                      nothing. The legend under the map is new and earns its
+                      place on this screen: it is what lets someone walking a
+                      guest to their seat say "past the champagne bar". */}
+                  <SeatingMiniMap tables={seatingElements} myTableId={selectedGuest.tableId} />
                 </div>
               )}
               {!selectedGuest.isCheckedIn && (

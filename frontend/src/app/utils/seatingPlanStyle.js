@@ -180,6 +180,20 @@ export function elementStyle(el, { scale, mine = false, dimOthers = false }) {
   if (zone) {
     return {
       ...base,
+      // A COLUMN, so a zone's glyph and its name stack. The base is a centring
+      // flex row, which put "CHAMPAGNE BAR" alongside the cocktail glass
+      // instead of under it and left each of them about a third of the width
+      // they needed. Harmless for a zone too small to be named: a lone glyph
+      // centres identically either way.
+      flexDirection: 'column',
+      /* NO PERCENTAGE PADDING HERE. A percentage padding resolves against the
+         CONTAINING BLOCK's width, not the element's own — and a zone is
+         absolutely positioned inside the 2600px world layer, so `padding: 0 6%`
+         was 156px of inset on each side of a 300px dance floor. Its content box
+         collapsed to zero and the name rendered as a single clipped letter; the
+         420px stage fared better and showed "ST…". The label's own
+         `max-width: 92%` gives the inset, and that percentage IS relative to
+         the zone, because the zone is the label's containing block. */
       background: `linear-gradient(160deg, ${color}2E 0%, ${color}1A 100%)`,
       border: `1px solid ${color}5E`,
       boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.5), 0 1px 2px rgba(60,45,25,0.07)',
@@ -354,7 +368,11 @@ export const numeralStyle = (h, mine, rotation = 0) => ({
   fontVariantNumeric: 'tabular-nums lining-nums',
   letterSpacing: '0.01em',
   lineHeight: 1,
-  color: mine ? '#5A4212' : 'rgba(74,59,34,0.74)',
+  /* 0.74 alpha was too light to read on the thumbnail: a table number set at
+     seven or eight pixels on warm ivory needs the contrast of near-solid ink,
+     and the guest's own table is what the gold is for — the others do not need
+     to be faded to make it stand out. */
+  color: mine ? '#5A4212' : 'rgba(58,46,26,0.92)',
   // Counter-rotated. The numeral is a child of the table, and the table carries
   // `rotate(Ndeg)`, so without this a plan with angled tables makes the guest
   // tilt their head to read "12" — exactly the cheapness this redesign removes.
@@ -368,22 +386,192 @@ export const zoneGlyphSize = (w, h) => Math.max(9, Math.min(Math.min(w, h) * 0.4
 export const ZONE_GLYPH_OPACITY = 0.82;
 
 /**
- * The zones present on a plan, de-duplicated by shape, for the legend.
+ * ── A ZONE MAY CARRY ITS OWN NAME, WHEN THERE IS ROOM FOR IT ──
  *
- * The legend is what makes removing the zone names cost the guest nothing: the
- * plan stays clean, and "what is that purple square" is answered once underneath
- * it. Ordered by the catalogue rather than by position so the same venue always
+ * The glyph-and-legend rule above is a rule about SMALL zones, and it had been
+ * applied to all of them. "DANCE FLOOR" set inside a 130px DJ booth either
+ * shrinks below reading size or spills over the table next to it — that is
+ * real, and it is why the names came off. But a 420×150 stage has room for its
+ * name three times over, and making a guest hunt a key at the foot of the plan
+ * to learn that the microphone is the stage is friction that zone never had to
+ * cost them.
+ *
+ * So the question is asked per zone, and it is asked in RENDERED PIXELS —
+ * `w`/`h` are what the element actually measures on the guest's screen, after
+ * the map's own scale. The same 420-unit stage is a comfortable label on the
+ * expanded plan and an illegible smear on the thumbnail under a QR code, and
+ * this returns a label for the first and null for the second without either
+ * caller needing to know why.
+ *
+ * A zone too small to be named still has its glyph, and the legend still names
+ * every zone underneath the plan — so nothing is ever unexplained.
+ */
+const ZONE_LABEL_MIN_PX = 8;
+const ZONE_LABEL_MAX_PX = 15;
+
+/**
+ * `scale` IS NOT OPTIONAL DECORATION — it is what makes the answer mean
+ * anything, and the two maps disagree about it on purpose.
+ *
+ * SeatingMiniMap hands over `w`/`h` that are already SCREEN pixels: it scales
+ * the geometry itself and lays every element out at its final size, so its
+ * scale is 1. SeatingMapFullscreen hands over WORLD pixels and puts the whole
+ * plan inside one `transform: scale(view.scale)` layer, so a 15px font there is
+ * 15 × view.scale on the guest's screen — about four pixels at a typical fit.
+ *
+ * Getting this wrong is not subtle in hindsight and was invisible in code: the
+ * first version reasoned in whichever units it was handed, so the expanded map
+ * drew every zone name at a size nobody could read while the thumbnail was
+ * correct. The fit is decided in screen pixels and the answer is converted back
+ * into the caller's own units, which also means the labels hold their size as
+ * the guest zooms — the way labels on a map are supposed to behave.
+ */
+const overlaps = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+
+export function zoneLabel(el, box, scale = 1, obstacles = []) {
+  if (!el || !isZone(el) || !box) return null;
+  const { w, h } = box;
+  const meta = shapeMeta(el.shape);
+  const text = String(el.table_name || meta.label || '').trim();
+  if (!text || !(scale > 0) || !(w > 0) || !(h > 0)) return null;
+
+  const screenW = w * scale;
+  const screenH = h * scale;
+  const glyph = zoneGlyphSize(w, h);
+  const glyphPx = glyph * scale;
+  /* 0.72em per character: ~0.64 for uppercase sans plus the 0.08 of tracking
+     set below. Measured, not guessed — 0.62 sized "Dance Floor" at 285px into a
+     276px slot and clipped the last letter. Erring wide sends a name that would
+     only just have fitted to the legend instead, which is the harmless
+     direction to be wrong in. */
+  const byWidth = (screenW * 0.84) / Math.max(1, text.length * 0.72);
+  /* And it has to sit UNDER the glyph without either of them touching an edge. */
+  const byHeight = (screenH - glyphPx) * 0.42;
+  const px = Math.min(byWidth, byHeight, ZONE_LABEL_MAX_PX);
+  if (!(px >= ZONE_LABEL_MIN_PX)) return null;
+
+  /**
+   * ── AND IT GOES WHERE NOTHING IS COVERING IT ──
+   *
+   * A zone is painted BEHIND the tables, and that order is not negotiable: a
+   * guest hunting table 13 must see table 13, not a dance floor drawn over it.
+   * The consequence was that a host who put a table inside a zone — which is
+   * exactly what a dance floor with a cocktail table on it looks like — got
+   * "DANCE FL⬤OR", the middle of the name hidden under a circle.
+   *
+   * So the name is placed rather than positioned: the glyph and the name move
+   * together to the first band of the zone that nothing is sitting on. Centred
+   * if it is clear, then the foot of the zone, then its head. If a table covers
+   * all three the name is dropped entirely and the legend carries it, because a
+   * name that is half a name is worse than no name — the guest reads it as a
+   * different room.
+   *
+   * This is what a cartographer does with a label that collides, and it costs
+   * one rectangle test per table per zone.
+   */
+  const size = px / scale;
+  const gap = Math.max(1, size * 0.28);
+  const stackH = glyph + gap + size * 1.1;
+  const stackW = Math.max(glyph, text.length * size * 0.72);
+  const inset = size * 0.35;
+  const cx = box.x + w / 2;
+
+  const bands = [
+    { justify: 'center', y: box.y + (h - stackH) / 2 },
+    { justify: 'flex-end', y: box.y + h - inset - stackH },
+    { justify: 'flex-start', y: box.y + inset },
+  ];
+
+  for (const band of bands) {
+    const rect = { x: cx - stackW / 2, y: band.y, w: stackW, h: stackH };
+    if (!obstacles.some((o) => overlaps(rect, o))) {
+      return { text, size, justify: band.justify, inset };
+    }
+  }
+  return null;
+}
+
+/**
+ * The things a zone's name has to keep out from under: every element drawn on
+ * top of it, which is every table.
+ *
+ * Boxes are in whatever units the caller lays out in — screen px for the
+ * thumbnail, world px for the expanded map — so the caller passes the same
+ * rectangles it is about to render, and the placement test needs no idea which
+ * of the two it is looking at.
+ */
+export const labelObstacles = (placed) => (placed || [])
+  .filter((p) => p && !isZone(p.el))
+  .map((p) => ({ x: p.x, y: p.y, w: p.w, h: p.h }));
+
+/** How that name is set: quiet, tracked, and never louder than a table numeral. */
+/**
+ * The inset a zone needs once its mark has been pushed to the head or foot —
+ * without it the name sits on the zone's own border. Returned in the caller's
+ * units and applied as PIXELS, never as a percentage: a percentage padding
+ * resolves against the containing block, and a zone is absolutely positioned
+ * inside the 2600px world layer, so `padding: 0 6%` once meant 156px of inset
+ * on each side of a 300px dance floor and collapsed its content box to nothing.
+ */
+export const zoneMarkStyle = (label) => (label
+  ? { justifyContent: label.justify, paddingTop: `${label.inset}px`, paddingBottom: `${label.inset}px` }
+  : null);
+
+export const zoneLabelStyle = (size, color, rotation = 0) => ({
+  fontFamily: 'var(--font-sans)',
+  fontSize: `${size}px`,
+  fontWeight: 700,
+  letterSpacing: '0.08em',
+  textTransform: 'uppercase',
+  lineHeight: 1.1,
+  color,
+  opacity: 0.9,
+  marginTop: `${Math.max(1, size * 0.28)}px`,
+  maxWidth: '92%',
+  textAlign: 'center',
+  // A zone is drawn at the host's rotation; its name should still be read
+  // straight, exactly as the table numerals are.
+  ...(rotation ? { transform: `rotate(${-rotation}deg)` } : null),
+  // Mixed-script venues: an Arabic zone name inside an English plan (and the
+  // reverse) each render in their own direction.
+  unicodeBidi: 'plaintext',
+  pointerEvents: 'none',
+  userSelect: 'none',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+});
+
+/**
+ * The zones present on a plan, for the legend.
+ *
+ * The legend is what makes a glyph cost the guest nothing: the plan stays
+ * clean, and "what is that purple square" is answered once underneath it.
+ * Ordered by first appearance rather than by position, so the same venue always
  * produces the same legend.
+ *
+ * ── IT USES THE HOST'S OWN NAME, NOT THE CATALOGUE'S ──
+ *
+ * This keyed on `el.shape` and printed `meta.label`, which meant a host who
+ * named their zone "Champagne Bar" got a legend that said "Bar" — the plan and
+ * the key quietly disagreeing with the invitation, the signage and everything
+ * the guest had been told. Two zones of the same shape with different names
+ * (a "Bar" and a "Champagne Bar") also collapsed into one row, so one of them
+ * vanished from the key entirely.
+ *
+ * Keyed on shape AND name now: same shape, same name folds together and counts;
+ * same shape, different names stay as separate rows.
  */
 export function planLegend(elements) {
   const seen = new Map();
   for (const el of elements || []) {
     if (!el || !isZone(el)) continue;
     const meta = shapeMeta(el.shape);
-    const key = el.shape === 'rectangular' ? 'rectangle' : el.shape;
-    if (!seen.has(key)) {
-      seen.set(key, { shape: key, label: meta.label, icon: meta.icon, color: meta.color || GOLD });
-    }
+    const shape = el.shape === 'rectangular' ? 'rectangle' : el.shape;
+    const label = String(el.table_name || '').trim() || meta.label;
+    const key = `${shape}::${label.toLowerCase()}`;
+    if (seen.has(key)) { seen.get(key).count += 1; continue; }
+    seen.set(key, { key, shape, label, icon: meta.icon, color: meta.color || GOLD, count: 1 });
   }
   return [...seen.values()];
 }

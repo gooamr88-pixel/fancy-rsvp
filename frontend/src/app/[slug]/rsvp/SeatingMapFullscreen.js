@@ -15,8 +15,9 @@ import {
   elementStyle, seatPositions, seatStyle,
   planNumeral, numeralStyle, numeralFits,
   spotlightStyle, markerStyle, zoneGlyphSize, ZONE_GLYPH_OPACITY,
-  planLegend,
+  planLegend, zoneLabel, zoneLabelStyle, zoneMarkStyle, labelObstacles,
 } from '../../utils/seatingPlanStyle';
+import SeatingLegend from './SeatingLegend';
 
 /**
  * Fullscreen, pannable + zoomable viewer for the guest's seating chart.
@@ -43,6 +44,18 @@ export default function SeatingMapFullscreen({ tables, myTableId, myTableName, i
      makes removing the zone names cost the guest nothing. */
   const legend = useMemo(() => planLegend(els), [els]);
   const hasMine = useMemo(() => els.some((el) => !isZone(el) && el.id === myTableId), [els, myTableId]);
+  /* Every element's drawn rectangle in WORLD px — this map puts the whole plan
+     inside one scaled layer, so layout is world-space here. A zone needs these
+     to know which tables are sitting on it before it decides where to put its
+     name; see zoneLabel. */
+  const placed = useMemo(() => els.map((el) => ({
+    el,
+    x: pctToPx(el.position_x, WORLD_W),
+    y: pctToPx(el.position_y, WORLD_H),
+    w: elWidth(el),
+    h: elHeight(el),
+  })), [els]);
+  const obstacles = useMemo(() => labelObstacles(placed), [placed]);
   const containerRef = useRef(null);
   const [view, setView] = useState({ scale: 0.4, tx: 0, ty: 0 });
   const [dragging, setDragging] = useState(false);
@@ -282,6 +295,10 @@ export default function SeatingMapFullscreen({ tables, myTableId, myTableName, i
             // exists for the thumbnail. Kept anyway so the two maps run the same
             // rule rather than one of them assuming it.
             const numeral = zone || !numeralFits(h) ? null : planNumeral(el.table_name);
+            // view.scale, because everything here is drawn in world px inside
+            // one scaled layer — see the note on zoneLabel. It also means the
+            // names hold their size as the guest zooms.
+            const label = zone ? zoneLabel(el, { x: left, y: top, w, h }, view.scale, obstacles) : null;
 
             return (
               <React.Fragment key={el.id}>
@@ -289,6 +306,7 @@ export default function SeatingMapFullscreen({ tables, myTableId, myTableName, i
 
                 <div style={{
                   ...elementStyle(el, { scale: 1, mine, dimOthers: hasMine }),
+                  ...zoneMarkStyle(label),
                   left, top, width: w, height: h,
                   transform: `rotate(${rotation}deg)`, transformOrigin: 'center center',
                 }}>
@@ -301,6 +319,11 @@ export default function SeatingMapFullscreen({ tables, myTableId, myTableName, i
                       style={{ opacity: ZONE_GLYPH_OPACITY, flexShrink: 0 }}
                     />
                   )}
+                  {/* Named on the plan itself. Here the zones are drawn in world
+                      px inside the transformed layer, so they are at their full
+                      size and almost every one of them earns its name — which is
+                      the whole point of the expanded map. */}
+                  {label && <span style={zoneLabelStyle(label.size, color, rotation)}>{label.text}</span>}
                   {numeral && <span style={numeralStyle(h, mine, rotation)}>{numeral}</span>}
                   {!zone && seatPositions(el).map((pos, i) => (
                     <span key={i} aria-hidden style={seatStyle(pos, 1, mine)} />
@@ -395,30 +418,15 @@ export default function SeatingMapFullscreen({ tables, myTableId, myTableName, i
         * entries rather than a catalogue of fourteen.
         */}
       {legend.length > 0 && (
-        <div
+        <SeatingLegend
+          items={legend}
           style={{
-            // Wraps rather than scrolls: a legend that runs off the side of a
-            // phone is a legend nobody reads the end of.
-            display: 'flex', flexWrap: 'wrap', gap: '8px 20px',
             padding: '12px 20px',
             paddingBottom: 'max(12px, calc(env(safe-area-inset-bottom) + 6px))',
-            background: '#FDFBF6', borderTop: '1px solid #EFE7D6',
-            fontFamily: 'var(--font-sans)',
+            background: '#FDFBF6',
+            borderTop: '1px solid #EFE7D6',
           }}
-        >
-          {legend.map((z) => (
-            <span key={z.shape} style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '11.5px', color: '#6B6355' }}>
-              <span aria-hidden style={{
-                width: '20px', height: '20px', borderRadius: '6px', flexShrink: 0,
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                background: `${z.color}2E`, border: `1px solid ${z.color}5E`,
-              }}>
-                <Icon name={z.icon} size={12} color={z.color} strokeWidth={1.7} />
-              </span>
-              {z.label}
-            </span>
-          ))}
-        </div>
+        />
       )}
 
       {/* No <style jsx> here on purpose — fancySeatPulse is defined in
