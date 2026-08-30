@@ -321,6 +321,70 @@ export function groupIndexRows(rows) {
  * all green while it did. `test/seatingPrintScope.test.js` pins it now.
  */
 /**
+ * ── THE BRAND MARK, DRAWN RATHER THAN LOADED ──
+ *
+ * `<img src="/logo.svg">` DOES NOT WORK ON THIS DOCUMENT, for two independent
+ * reasons, and the organizer's report was simply "the name and logo don't show
+ * at all".
+ *
+ *  1. THE FONT NEVER LOADS. public/logo.svg sets its wordmark in 'Great Vibes'
+ *     and 'Playfair Display' via an `@import` of Google Fonts INSIDE the file.
+ *     An SVG referenced by <img> is rendered in the browser's secure static
+ *     mode: no scripts, and no external resource loading of any kind. The
+ *     @import is ignored, both faces fall back, and the signature comes out as
+ *     a squashed generic cursive.
+ *  2. IT IS GOLD ON WHITE. The mark is a #EBD9A6→#8A6D34 gradient. At the ~17px
+ *     a document letterhead gives it, that is faint on a good inkjet and a pale
+ *     grey smear on the office mono laser half these charts are printed on —
+ *     which is the entire reason everything else on this sheet is one ink.
+ *
+ * So it is drawn here instead: the envelope monogram as real geometry with a
+ * non-scaling hairline (crisp at any size, on any printer), and the wordmark in
+ * the document's own faces — which are already loaded, because the rest of the
+ * sheet is set in them. Ink only, like everything else. It cannot fail to load,
+ * cannot fall back, and cannot disappear into the paper.
+ *
+ * The geometry is the monogram from public/logo.svg, re-expressed in its own
+ * 56×50 box. If that artwork ever changes, this is the second place to edit.
+ */
+function BrandMark({ height = 15, wordmark = true }) {
+  const h = height;
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: h * 0.4, color: INK, lineHeight: 1 }}>
+      <svg
+        width={h * (56 / 50)} height={h} viewBox="0 0 56 50" fill="none"
+        aria-hidden="true" style={{ display: 'block', flexShrink: 0, overflow: 'visible' }}
+      >
+        {/* non-scaling-stroke: the mark is drawn at 15px in the letterhead,
+            11px on a section head and 10px in a footer, and a scaled stroke
+            would go from a hairline to a thread across the three.
+            The 2.5-unit inset is what that costs: a non-scaling stroke is half
+            its width OUTSIDE the path in device pixels, which at this scale is
+            a couple of user units — drawn flush to the viewBox the left edge of
+            the envelope would sit on the boundary. */}
+        <rect x="2.5" y="16.5" width="51" height="31.5" rx="3" stroke={INK} strokeWidth="1.3" vectorEffect="non-scaling-stroke" />
+        <path d="M2.5 20.6 L28 41.5 L53.5 20.6" stroke={INK} strokeWidth="1.3" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+        <path d="M5.5 16.5 L28 2.5 L50.5 16.5" stroke={INK} strokeWidth="1.1" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+        <path d="M28 5.6 L31.4 9.7 L28 13.8 L24.6 9.7 Z" fill={INK} />
+      </svg>
+      {wordmark && (
+        <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: h * 0.28 }}>
+          <span style={{ fontFamily: 'var(--font-serif, serif)', fontSize: h * 0.92, fontWeight: 600, letterSpacing: '0.005em' }}>
+            Fancy
+          </span>
+          {/* 0.72, not 0.6: this is 6px tracked caps, and on a mono laser a
+              lighter grey is rendered as a halftone dot pattern rather than as
+              type. Small text wants density. */}
+          <span style={{ fontSize: h * 0.4, fontWeight: 800, letterSpacing: '0.26em', opacity: 0.72 }}>
+            RSVP
+          </span>
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
  * A TITLE BLOCK, NOT A COVER.
  *
  * This used to be a centred stack — wordmark row, then a 26px event name, then
@@ -333,6 +397,14 @@ export function groupIndexRows(rows) {
  * of the sheet the way a drawing is titled: identity left, subject centre,
  * figures right, one rule under all three. It costs about 14mm, and the ~30mm
  * that buys goes straight into the size of every table on the plan.
+ *
+ * `eventTimezone` IS A PROP, and leaving it out killed the whole feature once:
+ * it used to be read straight out of the body below without being declared here
+ * or passed in — but it is a `useState` local of the seating-map PAGE component,
+ * a different function entirely, so the identifier resolved nowhere and every
+ * render threw ReferenceError. The print preview opened the dashboard's error
+ * boundary for everybody, and `next build`, eslint and the full test suite were
+ * all green while it did. `test/seatingPrintScope.test.js` pins it now.
  */
 function PrintLetterhead({ eventTitle, eventTimezone, organizerName, formattedDate, stats }) {
   const metaParts = [
@@ -349,9 +421,8 @@ function PrintLetterhead({ eventTitle, eventTimezone, organizerName, formattedDa
           edge rather than dropping them to a second line. */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 18, flexWrap: 'wrap' }}>
         <div style={{ flexShrink: 0 }}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.svg" alt="Fancy RSVP" style={{ height: 17, display: 'block' }} />
-          <p style={{ fontSize: 7.5, margin: '3px 0 0', letterSpacing: '0.22em', textTransform: 'uppercase', fontWeight: 800, opacity: 0.55 }}>
+          <BrandMark height={15} />
+          <p style={{ fontSize: 7.5, margin: '4px 0 0', letterSpacing: '0.22em', textTransform: 'uppercase', fontWeight: 800, opacity: 0.55 }}>
             Seating Chart
           </p>
         </div>
@@ -408,8 +479,15 @@ function SectionHead({ title, note, eventTitle, count }) {
             </span>
           )}
         </h2>
-        <span style={{ fontSize: 8.5, textTransform: 'uppercase', letterSpacing: '0.16em', fontWeight: 700, opacity: 0.45, unicodeBidi: 'plaintext' }}>
-          {eventTitle}
+        {/* The corner signature. Every sheet in the pack carries it, so a page
+            that gets separated from the rest still says whose document it is
+            and which event it belongs to — at a size that stays out of the way
+            of the list underneath. */}
+        <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3, flexShrink: 0 }}>
+          <span style={{ fontSize: 8.5, textTransform: 'uppercase', letterSpacing: '0.16em', fontWeight: 700, opacity: 0.5, unicodeBidi: 'plaintext' }}>
+            {eventTitle}
+          </span>
+          <BrandMark height={11} />
         </span>
       </div>
       {note && <p style={{ margin: '3px 0 0', fontSize: 9.5, opacity: 0.55 }}>{note}</p>}
@@ -427,11 +505,12 @@ function SectionHead({ title, note, eventTitle, count }) {
  */
 function PrintFooter() {
   return (
-    <div className="psc-foot" style={{ textAlign: 'center', flexShrink: 0, marginTop: 'auto', paddingTop: 10 }}>
-      <div style={{ width: 70, height: 1, margin: '0 auto 6px', background: INK, opacity: 0.22 }} />
-      <p style={{ fontSize: 8, opacity: 0.55, margin: 0, letterSpacing: '0.05em' }}>
-        Crafted with <span style={{ fontWeight: 700 }}>Fancy RSVP</span>
-      </p>
+    <div className="psc-foot" style={{ flexShrink: 0, marginTop: 'auto', paddingTop: 10, textAlign: 'center' }}>
+      <div style={{ width: 64, height: 1, margin: '0 auto 7px', background: INK, opacity: 0.22 }} />
+      {/* The mark rather than "Crafted with Fancy RSVP". A signature is what a
+          finished document carries at its foot; a sentence about the tool that
+          made it is what a template carries. */}
+      <BrandMark height={10} />
     </div>
   );
 }
@@ -1595,7 +1674,8 @@ export default function SeatingChartPrintModal({
                   />
                   {/* No footer on this sheet. The plan page is one drawing and
                       every millimetre it gives up comes off the size of the
-                      tables; the credit is on every other sheet in the pack. */}
+                      tables; the mark is in the letterhead above, and on every
+                      other sheet in the pack. */}
                 </Sheet>
               )}
 

@@ -202,6 +202,25 @@ describe('the seating map print preview can actually render', () => {
     expect(usage[0]).toMatch(/eventTimezone=\{eventTimezone\}/);
   });
 
+  it('the brand mark is drawn, not loaded from a file', () => {
+    /**
+     * `<img src="/logo.svg">` produced a document with no visible logo at all,
+     * for two reasons that both bite only at print time:
+     *   • public/logo.svg sets its wordmark with an @import of Google Fonts,
+     *     and an SVG inside <img> renders in secure static mode where no
+     *     external resource loads — so both faces silently fall back.
+     *   • the mark is a pale gold gradient, which at letterhead size is a grey
+     *     smear on the mono laser these charts are printed on.
+     * The mark is inline geometry in one ink now. This keeps the img from
+     * coming back, since nothing about its return would look broken on screen.
+     */
+    expect(printCode).not.toMatch(/<img[^>]*logo\.svg/);
+    expect(printCode).toMatch(/function BrandMark\s*\(/);
+    // And it is on the plan sheet, the section heads and the footer — every
+    // sheet in the pack is identifiable on its own.
+    expect((printCode.match(/<BrandMark/g) || []).length).toBeGreaterThanOrEqual(3);
+  });
+
   it('the page hands the print modal everything it destructures', () => {
     // The same failure one level up: a prop the modal reads but the page never
     // passes is `undefined`, and `undefined.map` is the error boundary again.

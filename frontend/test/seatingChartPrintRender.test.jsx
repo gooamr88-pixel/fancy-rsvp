@@ -90,6 +90,19 @@ describe('the seating pack renders', () => {
     expect(text()).toContain('Prepared for Nour Mansour');
   });
 
+  it('shows the Fancy name and mark, without loading an image', () => {
+    // The organizer's report was "the name and logo don't show at all": the
+    // wordmark in public/logo.svg needs a Google font that an <img>-referenced
+    // SVG is never allowed to fetch, and the mark is pale gold on white. Drawn
+    // inline in ink, it is text in the DOM and geometry on the page, so it can
+    // be asserted rather than hoped for.
+    renderPack();
+    expect(text()).toContain('Fancy');
+    expect(text()).toContain('RSVP');
+    expect(document.querySelector('img[src*="logo"]')).toBeNull();
+  });
+
+
   it('draws the plan, with a numeral per table', () => {
     renderPack();
     const svg = document.querySelector('.psc-plan-figure svg');
