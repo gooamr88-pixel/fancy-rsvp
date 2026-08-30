@@ -15,7 +15,7 @@ import {
   elementStyle, seatPositions, seatStyle,
   planNumeral, numeralStyle, numeralFits,
   spotlightStyle, markerStyle, zoneGlyphSize, ZONE_GLYPH_OPACITY,
-  planLegend, zoneLabel, zoneLabelStyle, zoneMarkStyle, labelObstacles,
+  planLegend, zoneLabel, zoneLabelStyle, zoneMarkStyle, labelObstacles, seatsFit, markerFits,
 } from '../../utils/seatingPlanStyle';
 import SeatingLegend from './SeatingLegend';
 
@@ -279,7 +279,9 @@ export default function SeatingMapFullscreen({ tables, myTableId, myTableName, i
           {/* The ruled floor + corner shading. `scale` is 1 here on purpose: this
               layer lives INSIDE the transformed world, so the module is already
               in world px and the browser scales it with everything else. */}
-          <div aria-hidden style={floorGrainStyle(1)} />
+          {/* 1 because this layer is already in world px, and view.scale so the
+              ruling knows how big it will actually come out on screen. */}
+          <div aria-hidden style={floorGrainStyle(1, view.scale)} />
           <div aria-hidden style={floorVignetteStyle()} />
 
           {els.map((el) => {
@@ -291,10 +293,13 @@ export default function SeatingMapFullscreen({ tables, myTableId, myTableName, i
             const rotation = Number(el.rotation) || 0;
             const mine = !zone && el.id === myTableId;
             const color = el.color || meta.color || GOLD;
-            // World px, so `numeralFits` is always satisfied here — the guard
-            // exists for the thumbnail. Kept anyway so the two maps run the same
-            // rule rather than one of them assuming it.
-            const numeral = zone || !numeralFits(h) ? null : planNumeral(el.table_name);
+            // view.scale, because `h` is world px and this layer is scaled: at a
+            // zoomed-out fit a 96px table is drawn at fourteen, and asking the
+            // question about the world size answered it for a table nobody can
+            // see. The plan simplifies as it shrinks and fills back in as the
+            // guest zooms, which is what a map does.
+            const numeral = zone || !numeralFits(h, view.scale) ? null : planNumeral(el.table_name);
+            const showSeats = !zone && seatsFit(h, view.scale);
             // view.scale, because everything here is drawn in world px inside
             // one scaled layer — see the note on zoneLabel. It also means the
             // names hold their size as the guest zooms.
@@ -305,7 +310,9 @@ export default function SeatingMapFullscreen({ tables, myTableId, myTableName, i
                 {mine && <div aria-hidden style={spotlightStyle(left, top, w, h)} />}
 
                 <div style={{
-                  ...elementStyle(el, { scale: 1, mine, dimOthers: hasMine }),
+                  // scale 1 because this layer is world px; screenScale so the
+                  // outlines stay one real pixel however far the guest zooms out.
+                  ...elementStyle(el, { scale: 1, mine, dimOthers: hasMine, screenScale: view.scale }),
                   ...zoneMarkStyle(label),
                   left, top, width: w, height: h,
                   transform: `rotate(${rotation}deg)`, transformOrigin: 'center center',
@@ -323,12 +330,12 @@ export default function SeatingMapFullscreen({ tables, myTableId, myTableName, i
                       px inside the transformed layer, so they are at their full
                       size and almost every one of them earns its name — which is
                       the whole point of the expanded map. */}
-                  {label && <span style={zoneLabelStyle(label.size, color, rotation)}>{label.text}</span>}
+                  {label && <span style={zoneLabelStyle(label.size, rotation)}>{label.text}</span>}
                   {numeral && <span style={numeralStyle(h, mine, rotation)}>{numeral}</span>}
-                  {!zone && seatPositions(el).map((pos, i) => (
+                  {showSeats && seatPositions(el).map((pos, i) => (
                     <span key={i} aria-hidden style={seatStyle(pos, 1, mine)} />
                   ))}
-                  {mine && (
+                  {mine && markerFits(h, view.scale) && (
                     <>
                       <span aria-hidden style={markerStyle(w)}>★</span>
                       {/**
@@ -359,30 +366,58 @@ export default function SeatingMapFullscreen({ tables, myTableId, myTableName, i
           })}
         </div>
 
-        {/* Controls — bottom right */}
+        {/**
+          * ── ONE CONTROL CLUSTER, NOT FOUR THINGS FLOATING ──
+          *
+          * This was three separate 44px white circles stacked down the right
+          * edge, a gold pill under them, and a bordered hint card in the
+          * opposite corner: five objects with five outlines and five shadows,
+          * scattered over the drawing they were supposed to serve. The gold
+          * pill also sat exactly where the top-right of the plan is, so on this
+          * very room it covered the cake table.
+          *
+          * The zoom controls are one segmented card now — the way a map's
+          * controls are grouped — and the seat button sits under it as the one
+          * coloured thing in the chrome. Both are anchored to the bottom, out
+          * of the plan's own corner.
+          */}
         <div style={{
           position: 'absolute', bottom: 'max(18px, calc(env(safe-area-inset-bottom) + 10px))',
-          ...(isRTL ? { left: '18px' } : { right: '18px' }),
-          display: 'flex', flexDirection: 'column', gap: '8px',
+          ...(isRTL ? { left: '16px' } : { right: '16px' }),
+          display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '10px',
         }}>
-          <CircleBtn aria-label="Zoom in" onClick={() => zoom(1.25)}>+</CircleBtn>
-          <CircleBtn aria-label="Zoom out" onClick={() => zoom(0.8)}>−</CircleBtn>
-          <CircleBtn aria-label="Fit to screen" onClick={fitToScreen} title={isRTL ? 'ملء الشاشة' : 'Fit'}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="4 14 4 20 10 20" /><polyline points="20 10 20 4 14 4" />
-              <line x1="14" y1="10" x2="21" y2="3" /><line x1="3" y1="21" x2="10" y2="14" />
-            </svg>
-          </CircleBtn>
+          <div style={{
+            display: 'flex', flexDirection: 'column',
+            background: 'rgba(255,255,255,0.94)',
+            backdropFilter: 'blur(8px)',
+            border: '1px solid rgba(31,26,18,0.10)',
+            borderRadius: '14px',
+            boxShadow: '0 10px 30px -12px rgba(31,26,18,0.35)',
+            overflow: 'hidden',
+          }}>
+            <CircleBtn aria-label={isRTL ? 'تكبير' : 'Zoom in'} onClick={() => zoom(1.25)}>+</CircleBtn>
+            <span aria-hidden style={{ height: '1px', background: 'rgba(31,26,18,0.08)' }} />
+            <CircleBtn aria-label={isRTL ? 'تصغير' : 'Zoom out'} onClick={() => zoom(0.8)}>−</CircleBtn>
+            <span aria-hidden style={{ height: '1px', background: 'rgba(31,26,18,0.08)' }} />
+            <CircleBtn aria-label={isRTL ? 'ملء الشاشة' : 'Fit to screen'} onClick={fitToScreen}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="4 14 4 20 10 20" /><polyline points="20 10 20 4 14 4" />
+                <line x1="14" y1="10" x2="21" y2="3" /><line x1="3" y1="21" x2="10" y2="14" />
+              </svg>
+            </CircleBtn>
+          </div>
           {myTableId && (
             <button
               onClick={centerOnMyTable}
               style={{
-                marginTop: '4px', padding: '10px 14px', borderRadius: '999px',
-                background: 'linear-gradient(135deg, #D7BE80, #B8944F)', color: '#FFFFFF',
+                padding: '12px 16px', borderRadius: '14px',
+                background: 'linear-gradient(150deg, #C9A85C, #A8873F)', color: '#FFFFFF',
                 border: 'none', cursor: 'pointer',
-                fontFamily: 'var(--font-sans)', fontSize: '12px', fontWeight: 700,
-                display: 'inline-flex', alignItems: 'center', gap: '6px',
-                boxShadow: '0 10px 20px rgba(184,148,79,0.4)',
+                fontFamily: 'var(--font-sans)', fontSize: '12.5px', fontWeight: 700,
+                letterSpacing: '0.02em',
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+                minHeight: '44px', whiteSpace: 'nowrap',
+                boxShadow: '0 10px 26px -10px rgba(138,109,52,0.65)',
               }}
             >
               ★ {isRTL ? 'مكاني' : 'My seat'}
@@ -390,18 +425,17 @@ export default function SeatingMapFullscreen({ tables, myTableId, myTableName, i
           )}
         </div>
 
-        {/* Help hint — bottom left, fades out after first interaction */}
+        {/* The gesture hint, set as a caption on the ground rather than as a
+            bordered card. It is an aside, and a card with its own outline and
+            shadow claimed the authority of a control. */}
         <div style={{
-          position: 'absolute', bottom: '18px',
-          ...(isRTL ? { right: '18px' } : { left: '18px' }),
-          fontSize: '11px', color: '#77736A',
-          background: 'rgba(255,255,255,0.92)', border: '1px solid #E8E2D6',
-          padding: '8px 12px', borderRadius: '8px',
-          boxShadow: '0 2px 8px rgba(25,27,30,0.06)',
-          fontFamily: 'var(--font-sans)', maxWidth: '210px', lineHeight: 1.5,
-          pointerEvents: 'none',
+          position: 'absolute', bottom: 'max(22px, calc(env(safe-area-inset-bottom) + 12px))',
+          left: '50%', transform: 'translateX(-50%)',
+          fontSize: '11px', color: 'rgba(31,26,18,0.42)',
+          fontFamily: 'var(--font-sans)', letterSpacing: '0.02em',
+          whiteSpace: 'nowrap', pointerEvents: 'none',
         }}>
-          {isRTL ? 'اسحب للتحريك • العجلة أو الإصبعين للتكبير' : 'Drag to pan • Scroll or pinch to zoom'}
+          {isRTL ? 'اسحب للتحريك • قرّب بإصبعين' : 'Drag to pan · pinch to zoom'}
         </div>
       </div>
 
@@ -436,17 +470,21 @@ export default function SeatingMapFullscreen({ tables, myTableId, myTableName, i
   );
 }
 
+/**
+ * One cell of the control cluster. It carries no border, no radius and no
+ * shadow of its own any more — the card around it owns all three, which is what
+ * turns three floating pucks into a single object.
+ */
 function CircleBtn({ children, onClick, ...rest }) {
   return (
     <button
       onClick={onClick}
       {...rest}
       style={{
-        width: '44px', height: '44px', borderRadius: '50%',
-        background: '#FFFFFF', border: '1px solid #E8E2D6',
-        color: '#3A3631', cursor: 'pointer', fontSize: '20px', fontWeight: 700,
+        width: '46px', height: '46px',
+        background: 'transparent', border: 'none',
+        color: 'rgba(31,26,18,0.72)', cursor: 'pointer', fontSize: '19px', fontWeight: 600,
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        boxShadow: '0 4px 14px rgba(25,27,30,0.10)',
         fontFamily: 'var(--font-sans)', lineHeight: 1,
       }}
     >{children}</button>

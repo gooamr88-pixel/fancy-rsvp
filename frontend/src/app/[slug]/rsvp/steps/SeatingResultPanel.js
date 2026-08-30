@@ -44,16 +44,22 @@ export default function SeatingResultPanel({ view, loading, isRTL, onBack, compa
       style={{ display: 'flex', flexDirection: 'column', gap: '14px', textAlign: isRTL ? 'right' : 'left' }}
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-        <div>
+        {/* The one fact this screen exists to deliver, set like it. It was an
+            18px line of the same weight as everything under it, on a page where
+            the guest is looking for exactly one thing. */}
+        <div style={{ minWidth: 0 }}>
           <span style={{
-            fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1.2px',
-            color: '#77736A', fontWeight: 700, display: 'block', fontFamily: 'var(--font-sans)',
+            fontSize: '9.5px', textTransform: 'uppercase', letterSpacing: '0.2em',
+            color: '#8A8478', fontWeight: 700, display: 'block', fontFamily: 'var(--font-sans)',
           }}>
             {isRTL ? 'طاولتك' : 'Your table'}
           </span>
           <strong style={{
-            fontSize: '18px', color: assigned ? '#B8944F' : '#A09A91',
-            fontFamily: 'var(--font-serif)',
+            display: 'block', marginTop: '1px',
+            fontSize: compact ? '24px' : '28px', lineHeight: 1.1,
+            color: assigned ? '#8A6D34' : '#A09A91',
+            fontFamily: 'var(--font-serif)', fontWeight: 600,
+            letterSpacing: '-0.01em', unicodeBidi: 'plaintext', overflowWrap: 'anywhere',
           }}>
             {assigned ? formatTableLabel(view.myTableName, isRTL) : (isRTL ? 'لم تُخصّص بعد' : 'Not assigned yet')}
           </strong>
@@ -107,12 +113,19 @@ export default function SeatingResultPanel({ view, loading, isRTL, onBack, compa
           <button
             type="button"
             onClick={() => setFullscreen(true)}
+            /* Solid, not a washed beige gradient with gold text on it. This is
+               the primary action of the screen — the thumbnail is a preview and
+               the full map is where the guest actually finds their seat — and it
+               was the palest element on the page. Same gold as the "My seat"
+               button inside the map it opens, so the two read as one journey. */
             style={{
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
-              width: '100%', minHeight: '44px', padding: '11px 16px',
-              borderRadius: '12px', border: '1px solid #E7D9B8', cursor: 'pointer',
-              background: 'linear-gradient(180deg, #FFFDF8 0%, #F8F1E2 100%)',
-              fontFamily: 'var(--font-sans)', fontSize: '13.5px', fontWeight: 700, color: '#8A6D34',
+              width: '100%', minHeight: '46px', padding: '12px 16px',
+              borderRadius: '13px', border: 'none', cursor: 'pointer',
+              background: 'linear-gradient(150deg, #C9A85C, #A8873F)',
+              boxShadow: '0 10px 24px -12px rgba(138,109,52,0.7)',
+              fontFamily: 'var(--font-sans)', fontSize: '13.5px', fontWeight: 700,
+              color: '#FFFFFF', letterSpacing: '0.01em',
             }}
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -128,95 +141,108 @@ export default function SeatingResultPanel({ view, loading, isRTL, onBack, compa
         <SeatingMiniMap tables={view.tables} myTableId={view.myTableId} maxHeight={compact ? 240 : 340} />
       )}
 
-      {/* Host card */}
-      {host && (
-        <div style={{
-          padding: '1.5px', borderRadius: '14px',
-          background: 'linear-gradient(135deg, #E7D4A8 0%, #B8944F 50%, #D7BE80 100%)',
-        }}>
-          <div style={{
-            background: 'linear-gradient(180deg, #FFFCF6 0%, #F8F4EC 100%)',
-            borderRadius: '12.5px', padding: '12px 14px',
-            display: 'flex', alignItems: 'center', gap: '12px',
-          }}>
-            <span aria-hidden style={{
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              width: '34px', height: '34px', borderRadius: '50%',
-              background: 'linear-gradient(135deg, #D7BE80, #B8944F)',
-              color: '#FFFFFF', fontSize: '16px', flexShrink: 0,
-              boxShadow: '0 4px 10px rgba(184,148,79,0.4)',
-            }}>♛</span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <span style={{
-                fontSize: '9px', textTransform: 'uppercase', letterSpacing: '0.18em',
-                color: '#8A6D34', fontWeight: 700, fontFamily: 'var(--font-sans)',
-              }}>
-                {isRTL ? 'صاحب الدعوة' : 'Invitee'}{isRTL ? ' (أنت)' : ' (you)'}
-              </span>
-              <strong style={{
-                display: 'block', fontSize: '15px', color: '#191B1E',
-                fontFamily: 'var(--font-serif)', fontWeight: 600, lineHeight: 1.25,
-              }}>{host.name}</strong>
-              {host.meal && (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#77736A', fontFamily: 'var(--font-sans)' }}>
-                  <UtensilsIcon size={11} strokeWidth={1.8} /> {host.meal}
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Companions list */}
-      {companions.length > 0 && (
-        <div style={{
-          background: '#FAFAF8', border: '1px solid #E8E2D6', borderRadius: '12px', padding: '14px',
-        }}>
+      {/**
+        * ── ONE PARTY LIST, NOT A CARD PLUS A BOX OF CARDS ──
+        *
+        * This was a gold-gradient-bordered card wrapping a second gradient for
+        * the invitee, then a grey box containing one bordered white card per
+        * companion: four levels of container, five border colours and three
+        * gradients, sitting directly under a floor plan that had just been
+        * stripped back to ink on paper. It read as a different product.
+        *
+        * Three things went, and each was doing harm rather than nothing:
+        *
+        *  • THE NUMBERS. Each companion carried a circled 2, 3, 4 — their index
+        *    in the party, offset by one because the invitee was silently 1. On
+        *    a screen whose whole subject is table numbers, a guest reading
+        *    "Omar Farouk (2)" has every reason to read it as table 2. It is
+        *    the person's initial now — decoration that at least belongs to
+        *    them.
+        *  • THE ♛. A text glyph, so it was a chess queen on one phone, a
+        *    different crown on the next and a tofu box on the rest — and it was
+        *    saying what the label beside it already said.
+        *  • THE BOXES. The invitee is now simply the first row, marked with the
+        *    one gold thing on the list. Rows are separated by a hairline, the
+        *    way a guest list is set on paper.
+        */}
+      {members.length > 0 && (
+        <div>
           <span style={{
-            fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px',
-            color: '#77736A', fontWeight: 700, display: 'block', marginBottom: '10px',
+            fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.14em',
+            color: '#8A8478', fontWeight: 700, display: 'block', marginBottom: '2px',
             fontFamily: 'var(--font-sans)',
           }}>
-            {isRTL ? `مرافقوك (${companions.length})` : `Your guests (${companions.length})`}
+            {isRTL ? `مجموعتك (${members.length})` : `Your party (${members.length})`}
           </span>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {companions.map((p, i) => {
-              return (
-                <div key={i} style={{
-                  background: '#FFFFFF', border: '1px solid #F0ECE3', borderRadius: '10px',
-                  padding: '10px 12px',
-                  display: 'flex', alignItems: 'center', gap: '10px',
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+            {[...(host ? [host] : []), ...companions].map((p, i) => (
+              <li
+                key={`${p.name}-${i}`}
+                style={{
+                  display: 'flex', alignItems: 'flex-start', gap: '11px',
+                  padding: '11px 0',
+                  borderTop: i === 0 ? 'none' : '1px solid #EFEBE2',
+                }}
+              >
+                <span aria-hidden style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  width: '30px', height: '30px', borderRadius: '50%', flexShrink: 0,
+                  background: p.isHost ? 'linear-gradient(150deg, #C9A85C, #A8873F)' : '#F2EEE5',
+                  color: p.isHost ? '#FFFFFF' : '#8A8478',
+                  fontFamily: 'var(--font-serif)', fontSize: '13px', fontWeight: 600,
+                  lineHeight: 1,
                 }}>
-                  <span aria-hidden style={{
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    width: '26px', height: '26px', borderRadius: '50%',
-                    background: '#F0ECE3', color: '#8A6D34',
-                    fontSize: '11px', fontWeight: 700, flexShrink: 0,
-                    fontFamily: 'var(--font-sans)',
-                  }}>{i + 2}</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <span style={{ display: 'block', fontSize: '13px', color: '#191B1E', fontWeight: 600, fontFamily: 'var(--font-sans)' }}>
-                      {p.name}
-                    </span>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '4px' }}>
+                  {String(p.name || '').trim().charAt(0).toUpperCase()}
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{
+                    display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: '7px',
+                  }}>
+                    <strong style={{
+                      fontSize: p.isHost ? '15px' : '14px',
+                      fontFamily: 'var(--font-serif)', fontWeight: 600,
+                      color: '#191B1E', lineHeight: 1.25,
+                      unicodeBidi: 'plaintext', overflowWrap: 'anywhere',
+                    }}>{p.name}</strong>
+                    {p.isHost && (
+                      <span style={{
+                        fontSize: '8.5px', letterSpacing: '0.16em', textTransform: 'uppercase',
+                        fontWeight: 800, color: '#8A6D34', fontFamily: 'var(--font-sans)',
+                        border: '1px solid rgba(138,109,52,0.35)', borderRadius: '999px',
+                        padding: '2px 7px', whiteSpace: 'nowrap',
+                      }}>
+                        {isRTL ? 'أنت' : 'You'}
+                      </span>
+                    )}
+                  </span>
+                  {(p.meal || p.dietaryNotes) && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginTop: '5px' }}>
                       {p.meal && <Tag color="gold"><UtensilsIcon size={11} strokeWidth={1.8} />{p.meal}</Tag>}
                       {p.dietaryNotes && <Tag color="muted" dim><WarningIcon size={11} strokeWidth={1.8} />{p.dietaryNotes}</Tag>}
                     </div>
-                  </div>
+                  )}
                 </div>
-              );
-            })}
-          </div>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
       {/* Says how to read the plan now that it carries numerals instead of
           names — without this the gold star is decoration the guest has to
-          decode. */}
-      <p style={{ fontSize: '11px', color: '#A09A91', fontStyle: 'italic', fontFamily: 'var(--font-sans)' }}>
+          decode. Set as a caption, not as italic afterthought text. */}
+      <p style={{
+        fontSize: '11.5px', lineHeight: 1.5, color: '#8A8478',
+        fontFamily: 'var(--font-sans)', margin: 0,
+        borderTop: '1px solid #EFEBE2', paddingTop: '12px',
+      }}>
+        {/* "marked in gold", not "marked with a gold star": the star is a pin
+            that is only drawn once the table is big enough to carry one, so on
+            the preview above there is no star to look for — the gold table is
+            the mark. Naming the colour is true on both surfaces. */}
         {isRTL
-          ? 'الأرقام على الخريطة هي أرقام الطاولات، وطاولتك عليها نجمة ذهبية.'
-          : 'The numbers on the plan are table numbers. Yours is the one marked with a gold star.'}
+          ? 'الأرقام على الخريطة هي أرقام الطاولات، وطاولتك مميّزة باللون الذهبي.'
+          : 'The numbers on the plan are table numbers. Yours is the one marked in gold.'}
       </p>
 
       {fullscreen && (

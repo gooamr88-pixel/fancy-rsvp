@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  planNumeral, numeralFits, planLegend, zoneLabel, labelObstacles,
+  planNumeral, numeralFits, planLegend, zoneLabel, labelObstacles, seatsFit, markerFits,
 } from '../src/app/utils/seatingPlanStyle';
 
 /**
@@ -159,8 +159,8 @@ describe('planNumeral', () => {
 
 describe('numeralFits', () => {
   it('draws the numeral once the table can carry legible type', () => {
-    expect(numeralFits(96)).toBe(true);   // world px, the expanded plan
-    expect(numeralFits(14)).toBe(true);   // a table on the entry-pass thumbnail
+    expect(numeralFits(96)).toBe(true); // world px, the expanded plan
+    expect(numeralFits(40)).toBe(true);
   });
 
   it('refuses below the legibility floor', () => {
@@ -168,6 +168,55 @@ describe('numeralFits', () => {
     // the mark would be an illegible smudge a guest might mistake for their
     // table number.
     expect(numeralFits(6)).toBe(false);
+  });
+
+  it('refuses at the size where the floor would have to INFLATE the numeral', () => {
+    /**
+     * This case used to assert `true`, and asserting it is what kept the bug
+     * alive. The threshold allowed a numeral from a 13px table (`7 - 1.5`) and
+     * `numeralStyle` then floored the type at 7px — a seven-pixel digit inside
+     * a fourteen-pixel circle, wider than half the circle it sits in. Fourteen
+     * of those bursting out of their tables is what the map under the QR code
+     * actually looked like.
+     *
+     * The rule now: a numeral appears only once its NATURAL size (0.42 of the
+     * table) already clears the floor, so the floor never resizes anything.
+     */
+    expect(numeralFits(14)).toBe(false);
+    expect(14 * 0.42).toBeLessThan(7);
+    // …and 17 is where the natural size reaches it.
+    expect(numeralFits(17)).toBe(true);
+  });
+
+  it('asks about the size on SCREEN, not the size in the drawing', () => {
+    // The expanded map draws a 96px table inside a scaled layer. At a zoomed-out
+    // fit that is fourteen real pixels, and the numeral has to go with it.
+    expect(numeralFits(96, 1)).toBe(true);
+    expect(numeralFits(96, 0.15)).toBe(false);
+  });
+});
+
+describe('seatsFit', () => {
+  it('draws the chairs only when they can be told apart', () => {
+    expect(seatsFit(96)).toBe(true);
+    // A ring of ten 1.8px pips around a 13px table is not ten chairs, it is a
+    // halo that makes the table look out of focus.
+    expect(seatsFit(13)).toBe(false);
+  });
+
+  it('answers for the screen, so the expanded map sheds them as it zooms out', () => {
+    expect(seatsFit(96, 1)).toBe(true);
+    expect(seatsFit(96, 0.2)).toBe(false);
+  });
+});
+
+describe('markerFits', () => {
+  it('drops the pin when it would be bigger than the table it points at', () => {
+    // markerStyle floors the disc at 11px; on a 13px table that covered its top
+    // third and the two merged into one blob — the one element on the map that
+    // exists to be found became the hardest to read.
+    expect(markerFits(96)).toBe(true);
+    expect(markerFits(13)).toBe(false);
   });
 });
 

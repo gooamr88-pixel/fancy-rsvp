@@ -103,47 +103,118 @@ export function seatPositions(el) {
 const seatPx = (scale) => Math.max(SEAT_MIN_PX, SEAT_SIZE * scale);
 
 /**
- * The paper the plan is printed on.
+ * ═════════════════════════════════════════════════════════════════════════════
+ * THE GUEST'S PLAN, AFTER THE CALMING PASS (2026-08-30)
  *
- * An engraved double rule drawn entirely with inset shadows — white keyline,
- * ivory gutter, gold hairline — so the frame costs no extra element and cannot
- * be clipped by the elements sitting on top of it.
+ * The complaint was that it looked cluttered and cheap, and it did. Everything
+ * on it was competing:
+ *
+ *   • every one of forty tables carried a 45px-blur brown drop shadow, so the
+ *     paper had forty smudges on it before a single number was read;
+ *   • zones were five different pastel fills at 18% alpha over a beige ground —
+ *     five hues, none of them saying anything the legend did not;
+ *   • the paper itself was #F7F2E7 under a brown radial vignette AND a
+ *     gold-brown ruled grid, which together read as a stain, not as paper;
+ *   • the guest's own table carried FIVE separate emphasis devices at once —
+ *     gradient, gold border, inner highlight, a 21px spread ring, a 90px glow —
+ *     plus a spotlight, a star and a pulsing ring drawn by the callers.
+ *
+ * Nothing there was individually wrong. Together they left no quiet ground for
+ * anything to stand out against, which is the definition of cluttered.
+ *
+ * The rule now, borrowed from the printed pack the same event uses: THE ROOM IS
+ * QUIET AND ONE THING IS LOUD. Near-white paper, a neutral hairline ruling,
+ * tables as plain white discs with a hairline edge and no shadow at all, zones
+ * as one restrained tint of their own hue. The single loud object is the
+ * guest's table, and it is loud because it is the only saturated, the only
+ * shadowed and the only white-on-dark thing on the sheet — not because six
+ * effects are stacked on it.
+ * ═════════════════════════════════════════════════════════════════════════════
+ */
+
+/** The ink everything on the plan is drawn in. Warm near-black, not pure. */
+const INK = '31,26,18';
+
+/**
+ * The paper.
+ *
+ * One hairline instead of the engraved white/ivory/gold triple rule. The triple
+ * rule was a nice detail at 400px and a muddy 5px band on a phone, and it was
+ * the first thing the eye landed on.
  */
 export const planSurfaceStyle = (radius = 14) => ({
-  background: '#F7F2E7',
+  background: '#FCFBF8',
   borderRadius: `${radius}px`,
-  boxShadow: [
-    'inset 0 0 0 1px rgba(255,255,255,0.85)',
-    'inset 0 0 0 4px #F7F2E7',
-    'inset 0 0 0 5px rgba(138,109,52,0.26)',
-    '0 1px 0 rgba(255,255,255,0.7)',
-    '0 10px 26px -14px rgba(60,45,20,0.45)',
-  ].join(', '),
+  // A hairline and ONE soft cast, so the sheet reads as paper lying on the
+  // ground beneath it rather than as a panel painted onto it. This is the only
+  // drop shadow in the whole plan besides the guest's own table.
+  boxShadow: `inset 0 0 0 1px rgba(${INK},0.10), 0 18px 44px -22px rgba(${INK},0.45)`,
 });
 
 /**
  * The ruled floor. `scale` is world px → screen px, so the module stays a
  * property of the ROOM: zoom in and the ruling grows with the tables, exactly as
  * a printed plan would.
+ *
+ * Neutral now, not gold-brown. A tinted grid over a tinted ground is what made
+ * the paper look dirty; a grey ruling at 3% reads as a drawing surface and
+ * disappears the moment you look at a table.
  */
-export const floorGrainStyle = (scale) => ({
-  position: 'absolute',
-  inset: 0,
-  pointerEvents: 'none',
-  backgroundImage:
-    'linear-gradient(rgba(138,109,52,0.045) 1px, transparent 1px), '
-    + 'linear-gradient(90deg, rgba(138,109,52,0.045) 1px, transparent 1px)',
-  backgroundSize: `${FLOOR_MODULE * scale}px ${FLOOR_MODULE * scale}px`,
-});
+/**
+ * @param unitScale   FLOOR_MODULE → the units this element is laid out in.
+ *                    The thumbnail scales its geometry before layout, so it
+ *                    passes its own scale; the expanded map lays out in world
+ *                    px and passes 1.
+ * @param screenScale those units → device pixels. 1 for the thumbnail; the
+ *                    expanded map is inside `transform: scale(view.scale)` and
+ *                    passes that.
+ *
+ * Both are needed, and using one for both is what made the ruling look like a
+ * stain rather than a floor:
+ *
+ *  • THE RULE. A 1px line inside a 0.35 layer lands on a third of a device
+ *    pixel, and Chrome draws that as fractional coverage — some columns on a
+ *    pixel boundary, some not — so the grid came out banded and blotchy. The
+ *    rule is widened in the layer's own units so it always resolves to one
+ *    device pixel.
+ *  • THE MODULE. A hundred world units is a good square at reading size and a
+ *    12px mesh on the thumbnail under a QR code, where it stops being a floor
+ *    and becomes noise over the one thing the guest is looking for. It doubles
+ *    until the square is at least 22px on screen — powers of two, so every line
+ *    of the coarser grid sits on a line of the finer one and the ruling never
+ *    appears to shift as the guest zooms.
+ */
+export const floorGrainStyle = (unitScale, screenScale = 1) => {
+  const px = Math.max(screenScale, 0.001);
+  const rule = Math.max(1, 1 / px);
 
-/** Corner shading — enough to stop the paper reading as a flat fill. */
+  let module = FLOOR_MODULE * unitScale;
+  for (let i = 0; i < 8 && module * px < 22; i += 1) module *= 2;
+
+  return {
+    position: 'absolute',
+    inset: 0,
+    pointerEvents: 'none',
+    backgroundImage:
+      `linear-gradient(rgba(${INK},0.05) ${rule}px, transparent ${rule}px), `
+      + `linear-gradient(90deg, rgba(${INK},0.05) ${rule}px, transparent ${rule}px)`,
+    backgroundSize: `${module}px ${module}px`,
+  };
+};
+
+/**
+ * The paper's edge — and only its edge.
+ *
+ * This was a radial that put a brown wash across the whole sheet and a white
+ * bloom through its middle, which is why the plan looked like it had been left
+ * in the sun. What a sheet of paper actually needs is the faintest darkening
+ * where it meets its own edge, and nothing in the middle at all.
+ */
 export const floorVignetteStyle = () => ({
   position: 'absolute',
   inset: 0,
   pointerEvents: 'none',
-  background:
-    'radial-gradient(120% 95% at 50% 40%, rgba(255,255,255,0.32) 0%, '
-    + 'rgba(255,255,255,0) 34%, rgba(92,70,34,0.11) 100%)',
+  background: `radial-gradient(115% 100% at 50% 50%, rgba(${INK},0) 62%, rgba(${INK},0.05) 100%)`,
 });
 
 /**
@@ -160,10 +231,21 @@ export const floorVignetteStyle = () => ({
  * gold is the only warm object on cool paper; that contrast is doing the work,
  * and it does not need the rest of the room sacrificed to it.
  */
-export function elementStyle(el, { scale, mine = false, dimOthers = false }) {
+export function elementStyle(el, { scale, mine = false, dimOthers = false, screenScale = 1 }) {
   const zone = isZone(el);
   const meta = shapeMeta(el.shape);
   const color = el.color || meta.color || GOLD;
+  /**
+   * A hairline that is one DEVICE pixel, whatever units the caller draws in.
+   *
+   * `Math.max(1, …)` floors the outline at one unit of the caller's own space,
+   * and in the expanded map one unit is a world pixel — 0.4 of a real one at a
+   * typical fit. So the floor that was supposed to keep a table's edge crisp
+   * quietly did nothing on the surface that needed it most, and the tables
+   * there rendered at partial coverage: soft, grey, and washed out. Same
+   * mistake as the ruled floor, one function further down.
+   */
+  const hairline = 1 / Math.max(screenScale, 0.001);
 
   const base = {
     position: 'absolute',
@@ -194,34 +276,42 @@ export function elementStyle(el, { scale, mine = false, dimOthers = false }) {
          420px stage fared better and showed "ST…". The label's own
          `max-width: 92%` gives the inset, and that percentage IS relative to
          the zone, because the zone is the label's containing block. */
-      background: `linear-gradient(160deg, ${color}2E 0%, ${color}1A 100%)`,
-      border: `1px solid ${color}5E`,
-      boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.5), 0 1px 2px rgba(60,45,25,0.07)',
+      /* ONE flat tint of the zone's own hue, and no shadow. The gradient plus
+         the inner white highlight plus the drop shadow made every zone look
+         like a button; a floor plan's zones are areas of the room, and an area
+         is a wash, not an object. 0x12 is about 7% — enough to read as a
+         distinct region on near-white paper, quiet enough that five of them do
+         not turn the plan into a colour chart. */
+      background: `${color}1C`,
+      border: `${hairline}px solid ${color}59`,
     };
   }
 
   if (mine) {
     return {
       ...base,
-      background: 'linear-gradient(145deg, #F8E8C4 0%, #EBD199 46%, #D6B26E 100%)',
-      border: `${Math.max(1.4, 9.6 * scale)}px solid ${GOLD}`,
-      boxShadow: [
-        'inset 0 1px 0 rgba(255,255,255,0.7)',
-        `0 0 0 ${Math.max(3, 21 * scale)}px rgba(184,148,79,0.15)`,
-        `0 ${Math.max(3, 42 * scale)}px ${Math.max(8, 90 * scale)}px -6px rgba(138,109,52,0.55)`,
-      ].join(', '),
+      /* THE ONE LOUD THING. Solid gold, a white keyline to lift it off the
+         paper, and a single shadow — the only shadow anywhere on the plan, so
+         it reads as raised rather than as one more smudge among forty. The
+         numeral on it goes white (see numeralStyle), which is what actually
+         makes it findable at a glance; the old pale-gold gradient carried a
+         brown numeral and needed a 90px glow to be seen at all. */
+      background: 'linear-gradient(150deg, #D9BB77 0%, #B8944F 55%, #9A7A3C 100%)',
+      border: `${Math.max(1.5, 7 * scale)}px solid #FFFFFF`,
+      boxShadow: `0 ${Math.max(2, 14 * scale)}px ${Math.max(8, 34 * scale)}px -${Math.max(2, 10 * scale)}px rgba(138,109,52,0.55)`,
     };
   }
 
+  /* An ordinary table: white, one hairline, NO SHADOW.
+     The shadow is the single biggest thing that was making this plan look
+     cheap. At 45px of blur under every one of forty tables, the paper carried
+     forty overlapping brown clouds — and because they were on every table, they
+     distinguished nothing while dirtying everything. A drawn plan uses an
+     outline; depth is for the one table that matters. */
   return {
     ...base,
-    background: 'linear-gradient(160deg, #FFFDF8 0%, #EFE7D6 100%)',
-    border: '1px solid rgba(112,92,60,0.34)',
-    boxShadow: [
-      'inset 0 1px 0 rgba(255,255,255,0.9)',
-      '0 1px 1px rgba(60,45,25,0.07)',
-      `0 ${Math.max(2, 21 * scale)}px ${Math.max(4, 45 * scale)}px -6px rgba(60,45,25,0.4)`,
-    ].join(', '),
+    background: '#FFFFFF',
+    border: `${Math.max(hairline, 1.6 * scale)}px solid rgba(${INK},0.38)`,
   };
 }
 
@@ -235,22 +325,29 @@ export const seatStyle = (pos, scale, mine) => {
     borderRadius: '50%',
     left: `${pos.x * scale - d / 2}px`,
     top: `${pos.y * scale - d / 2}px`,
-    background: mine ? 'rgba(138,109,52,0.62)' : 'rgba(112,92,60,0.38)',
+    // White on the gold table, ink elsewhere: the chairs stay legible against
+    // whatever they sit on instead of turning to mud on one of the two.
+    background: mine ? 'rgba(255,255,255,0.85)' : `rgba(${INK},0.28)`,
     pointerEvents: 'none',
   };
 };
 
 /**
- * The spotlight under the guest's table.
+ * The soft ground under the guest's table.
  *
  * Positioned by the CALLER in plan coordinates rather than as a child of the
  * table, because a child would be clipped by the table's own `border-radius:
  * 50%` and inherit its rotation — a glow that rotates with a table reads as a
  * smear.
+ *
+ * Cut from 3.4× the table to 2.2×, and from 30% gold to 12%. At the old size
+ * and strength it was a dinner-plate of colour that reached the tables either
+ * side of the guest's, and with the table itself now solid gold it was
+ * competing with the thing it was supposed to be pointing at.
  */
 export const spotlightStyle = (left, top, w, h) => {
-  const gw = w * 3.4;
-  const gh = h * 3.4;
+  const gw = w * 2.2;
+  const gh = h * 2.2;
   return {
     position: 'absolute',
     left: `${left + w / 2 - gw / 2}px`,
@@ -261,7 +358,7 @@ export const spotlightStyle = (left, top, w, h) => {
     pointerEvents: 'none',
     zIndex: 4,
     background:
-      'radial-gradient(circle, rgba(184,148,79,0.30) 0%, rgba(184,148,79,0.12) 38%, rgba(184,148,79,0) 68%)',
+      'radial-gradient(circle, rgba(184,148,79,0.14) 0%, rgba(184,148,79,0.06) 45%, rgba(184,148,79,0) 70%)',
   };
 };
 
@@ -275,23 +372,27 @@ export const spotlightStyle = (left, top, w, h) => {
  * it belongs to.
  */
 export const markerStyle = (w) => {
-  const s = Math.max(11, Math.min(w * 0.44, 30));
+  const s = Math.max(11, Math.min(w * 0.4, 26));
   return {
     position: 'absolute',
-    top: `-${s * 0.72}px`,
+    top: `-${s * 0.66}px`,
     left: '50%',
     transform: 'translateX(-50%)',
     width: `${s}px`,
     height: `${s}px`,
     borderRadius: '50%',
-    background: `linear-gradient(140deg, #E8CE95, ${GOLD})`,
-    color: '#FFFFFF',
+    /* WHITE disc, GOLD star — the reverse of what it was. The table underneath
+       is solid gold now, and a gold disc on a gold table is a smudge on a
+       smudge; a white pin reads as a marker pinned to it, which is what it is.
+       One small shadow, not the 0.6-alpha halo it used to carry. */
+    background: '#FFFFFF',
+    color: GOLD,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontSize: `${s * 0.56}px`,
+    fontSize: `${s * 0.6}px`,
     lineHeight: 1,
-    boxShadow: `0 ${s * 0.18}px ${s * 0.44}px -2px rgba(138,109,52,0.6), inset 0 1px 0 rgba(255,255,255,0.5)`,
+    boxShadow: `0 ${s * 0.1}px ${s * 0.3}px -1px rgba(60,45,25,0.35)`,
     zIndex: 7,
   };
 };
@@ -356,11 +457,64 @@ export function planNumeral(tableName) {
  * decoration that looks like information is worse than nothing, so the caller
  * skips it entirely (see `numeralFits`).
  */
-export const NUMERAL_MIN_PX = 7;
-export const numeralFits = (h) => h * 0.42 >= NUMERAL_MIN_PX - 1.5;
+const NUMERAL_MIN_PX = 7;
+
+/**
+ * ── THE FLOOR AND THE THRESHOLD HAVE TO AGREE ──
+ *
+ * They did not, and it is why the thumbnail looked like a smudge.
+ *
+ * `numeralStyle` floors the type at 7px so a numeral is never hairline. This
+ * test allowed one through at `7 - 1.5`, i.e. from a table 13px across — and
+ * the floor then INFLATED it back to 7px. A seven-pixel digit inside a
+ * thirteen-pixel circle is wider than half the circle it is centred in, so on
+ * the map under the QR code every table carried a number bursting out of it.
+ * Fourteen of those is the clutter, and it was caused by two guards each doing
+ * its job in a direction the other did not know about.
+ *
+ * The threshold is now the point at which the NATURAL size reaches the floor,
+ * so the floor never has to inflate anything: below a 17px table there is no
+ * numeral at all, and the guest's table number is stated in full above the map
+ * anyway.
+ *
+ * `screenScale` is how many device pixels one unit of `h` is worth — 1 for the
+ * thumbnail, which lays out at final size, and `view.scale` for the expanded
+ * map, which draws in world px inside a scaled layer. Without it the expanded
+ * map answers this question about a 96px table it is currently drawing at
+ * fourteen.
+ */
+export const numeralFits = (h, screenScale = 1) => h * screenScale * 0.42 >= NUMERAL_MIN_PX;
+
+/**
+ * Chairs, same question.
+ *
+ * `seatPx` floors a chair at 1.8px so it survives the thumbnail — and around a
+ * 13px table that produced ten 1.8px dots at a 1.3px gap, which is not ten
+ * chairs, it is a fuzzy halo that makes the table look out of focus. A ring of
+ * pips only says "a table for ten" when the pips can be told apart; below that
+ * it is texture. 30px is where they separate.
+ */
+export const seatsFit = (h, screenScale = 1) => h * screenScale >= 30;
+
+/**
+ * And the pin.
+ *
+ * `markerStyle` floors the disc at 11px so it is never a speck — which on the
+ * thumbnail put an 11px pin on a 13px table, overlapping its top third. The two
+ * merged into one gold-and-white blob, and the one element on the map that
+ * exists to be found was the hardest thing on it to read.
+ *
+ * Below this the pin is not drawn and the gold fill is the marker on its own,
+ * which is enough: it is the only saturated object on a plan of white discs.
+ * The copy under the map says "marked in gold" rather than naming the star, so
+ * it stays true on both surfaces.
+ */
+export const markerFits = (h, screenScale = 1) => h * screenScale >= 26;
 
 export const numeralStyle = (h, mine, rotation = 0) => ({
   fontFamily: 'var(--font-serif)',
+  // The max() is a safety net now rather than a resize: numeralFits above only
+  // lets a numeral through once its natural size already clears the floor.
   fontSize: `${Math.max(NUMERAL_MIN_PX, Math.min(h * 0.42, 30))}px`,
   fontWeight: mine ? 700 : 500,
   // Tabular figures so "11" and "17" occupy the same width and a row of tables
@@ -368,11 +522,12 @@ export const numeralStyle = (h, mine, rotation = 0) => ({
   fontVariantNumeric: 'tabular-nums lining-nums',
   letterSpacing: '0.01em',
   lineHeight: 1,
-  /* 0.74 alpha was too light to read on the thumbnail: a table number set at
-     seven or eight pixels on warm ivory needs the contrast of near-solid ink,
-     and the guest's own table is what the gold is for — the others do not need
-     to be faded to make it stand out. */
-  color: mine ? '#5A4212' : 'rgba(58,46,26,0.92)',
+  /* WHITE on the guest's own table, near-solid ink on every other.
+     0.74 alpha was too light to read on the thumbnail — a table number set at
+     seven or eight pixels needs the contrast of real ink — and the old dark
+     numeral on a pale gold table was the reason that table needed a 90px glow
+     to be findable. Reversing it out does the same job with nothing added. */
+  color: mine ? '#FFFFFF' : `rgba(${INK},0.9)`,
   // Counter-rotated. The numeral is a child of the table, and the table carries
   // `rotate(Ndeg)`, so without this a plan with angled tables makes the guest
   // tilt their head to read "12" — exactly the cheapness this redesign removes.
@@ -517,15 +672,23 @@ export const zoneMarkStyle = (label) => (label
   ? { justifyContent: label.justify, paddingTop: `${label.inset}px`, paddingBottom: `${label.inset}px` }
   : null);
 
-export const zoneLabelStyle = (size, color, rotation = 0) => ({
+/**
+ * INK, not the zone's own hue.
+ *
+ * Ten-pixel tracked capitals in a 7%-tint colour on near-white paper is the
+ * definition of mud, and with five zones it was five different muds. The GLYPH
+ * keeps the hue — that is what colour-codes the zone, at a size where colour
+ * actually reads — and the name is set in the same ink as every table numeral,
+ * so the plan speaks with one voice.
+ */
+export const zoneLabelStyle = (size, rotation = 0) => ({
   fontFamily: 'var(--font-sans)',
   fontSize: `${size}px`,
   fontWeight: 700,
   letterSpacing: '0.08em',
   textTransform: 'uppercase',
   lineHeight: 1.1,
-  color,
-  opacity: 0.9,
+  color: `rgba(${INK},0.66)`,
   marginTop: `${Math.max(1, size * 0.28)}px`,
   maxWidth: '92%',
   textAlign: 'center',

@@ -19,7 +19,7 @@ import {
   elementStyle, seatPositions, seatStyle,
   planNumeral, numeralStyle, numeralFits,
   spotlightStyle, markerStyle, zoneGlyphSize, ZONE_GLYPH_OPACITY,
-  zoneLabel, zoneLabelStyle, zoneMarkStyle, labelObstacles, planLegend,
+  zoneLabel, zoneLabelStyle, zoneMarkStyle, labelObstacles, planLegend, seatsFit, markerFits,
 } from '../../utils/seatingPlanStyle';
 
 /**
@@ -151,16 +151,16 @@ export default function SeatingMiniMap({ tables, myTableId, maxHeight = 320, sho
                     stage is labelled on a roomy preview and left to the legend on
                     a cramped one — and it sits in a band of the zone that no
                     table is covering. */}
-                {label && <span style={zoneLabelStyle(label.size, color, rotation)}>{label.text}</span>}
+                {label && <span style={zoneLabelStyle(label.size, rotation)}>{label.text}</span>}
                 {numeral && <span style={numeralStyle(h, mine, rotation)}>{numeral}</span>}
-                {!zone && seatPositions(el).map((pos, i) => (
+                {!zone && seatsFit(h) && seatPositions(el).map((pos, i) => (
                   <span key={i} aria-hidden style={seatStyle(pos, scale, mine)} />
                 ))}
                 {/* A mark, not a word. The old "★ You're here" pill was 8px type
                     and wider than the 96px table it pointed at, so on a dense
                     plan it covered the two tables either side of the one it was
                     identifying. */}
-                {mine && <span aria-hidden style={markerStyle(w)}>★</span>}
+                {mine && markerFits(h) && <span aria-hidden style={markerStyle(w)}>★</span>}
               </div>
             </React.Fragment>
           );
