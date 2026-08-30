@@ -32,6 +32,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.fancyrsvp.checkin.R
 import com.fancyrsvp.checkin.ui.theme.LocalDimens
+import com.fancyrsvp.checkin.ui.theme.safeChrome
 
 /**
  * Every screen that is not the scanner.
@@ -61,7 +62,20 @@ fun ScreenScaffold(
     val dimens = LocalDimens.current
 
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Column(Modifier.fillMaxSize()) {
+        /*
+         * Inset INSIDE the Surface, not outside it.
+         *
+         * The Surface keeps the whole window so its background colour still runs
+         * under the system bars — anything less and the bars sit on a strip of
+         * bare window with the wrong colour behind them. Only the content is
+         * pushed clear, which is what stops the navigation bar covering
+         * BackToScannerBar at the foot of every screen that uses this.
+         */
+        Column(
+            Modifier
+                .fillMaxSize()
+                .safeChrome(),
+        ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -198,9 +212,11 @@ fun BackToScannerBar(
  * BOTH ends — so what disappears first is the heading at the top and the button
  * at the bottom, leaving explanatory prose and no way to act on it.
  *
- * The app is locked to landscape, where height is always the scarce axis, and
- * nothing here ever scrolled. The PIN pad, the close-event confirmation and the
- * prepare card are all taller than a phone's landscape content area.
+ * In landscape, height is the scarce axis and nothing here ever scrolled. The
+ * PIN pad, the close-event confirmation and the prepare card are all taller than
+ * a phone's landscape content area. Rotation is unlocked now, so portrait has
+ * height to spare — which makes this a no-op there rather than unnecessary: the
+ * landscape case is still the one that has to survive.
  *
  * ── Why `heightIn(min = maxHeight)` and not just `verticalScroll` ──
  *

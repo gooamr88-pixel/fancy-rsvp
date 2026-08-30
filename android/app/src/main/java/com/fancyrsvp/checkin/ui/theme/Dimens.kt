@@ -49,8 +49,8 @@ import androidx.compose.ui.unit.sp
  * against the width. That distinction decides whether the app works on a phone
  * at all.
  *
- * The activity is locked to landscape (§21.9). A modern phone in landscape
- * reports roughly 870dp WIDE and 390dp TALL — so a width-only test classified
+ * A modern phone in landscape reports roughly 870dp WIDE and 390dp TALL — so a
+ * width-only test classified
  * every phone as a tablet and handed it the arm's-length metrics: 56dp screen
  * padding, 96dp keypad keys, 88dp bars. The PIN pad alone is then 426dp tall
  * inside a 280dp content area, which does not mean "slightly cramped" — it means
@@ -141,9 +141,12 @@ data class Dimens(
          */
         val Compact = Dimens(
             compact = true,
-            // Vertical space is the scarce axis on a phone: locked to landscape,
-            // a 390dp-tall window has to hold a heading, its content and an
-            // 72dp way home. Padding is the first thing to give.
+            // Vertical space is the scarce axis on a phone in landscape: a
+            // 390dp-tall window has to hold a heading, its content and a 72dp way
+            // home. Padding is the first thing to give. Rotation is no longer
+            // locked, so in portrait these values are merely tight rather than
+            // load-bearing — the landscape case remains the one that constrains
+            // them.
             screenPadding = 24.dp,
             sectionGap = 20.dp,
             cardPadding = 18.dp,

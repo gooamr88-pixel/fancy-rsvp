@@ -72,6 +72,8 @@ import com.fancyrsvp.checkin.ui.theme.CameraScrim
 import com.fancyrsvp.checkin.ui.theme.Gold
 import com.fancyrsvp.checkin.ui.theme.LocalDimens
 import com.fancyrsvp.checkin.ui.theme.OnCamera
+import com.fancyrsvp.checkin.ui.theme.safeChromeBottom
+import com.fancyrsvp.checkin.ui.theme.safeChromeTop
 import com.fancyrsvp.checkin.ui.theme.StateAlready
 import com.fancyrsvp.checkin.ui.theme.StateAttention
 import com.fancyrsvp.checkin.ui.theme.StateNeutral
@@ -366,9 +368,19 @@ fun ScannerScreen(
                     .fillMaxWidth()
                     // Covers the status bar AND the battery banner, whether or not
                     // the banner is showing and however many lines it wraps to.
+                    //
+                    // ORDER IS LOAD-BEARING. onSizeChanged sits OUTSIDE
+                    // safeChromeTop, so the height it reports includes the system
+                    // inset. Written the other way round it would report only the
+                    // content, the viewfinder would be told the chrome is shorter
+                    // than it is, and the brackets would ride up under the status
+                    // bar — the exact overlap this change exists to remove.
                     .onSizeChanged { size ->
                         topChrome = with(density) { size.height.toDp() }
-                    },
+                    }
+                    // Clear of the system status bar and any cutout. The camera
+                    // behind this stays full-bleed — only the chrome is inset.
+                    .safeChromeTop(),
             ) {
                 StatusBar(
                     status = status,
@@ -399,9 +411,15 @@ fun ScannerScreen(
                     onSearch = { showSearch = true },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
+                        // Same ordering rule as the top bar: measure first, inset
+                        // second, so the viewfinder avoids the navigation bar as
+                        // well as the controls.
                         .onSizeChanged { size ->
                             bottomChrome = with(density) { size.height.toDp() }
-                        },
+                        }
+                        // THE reported bug. Without this the navigation bar sits
+                        // on top of LIGHT and SEARCH BY NAME.
+                        .safeChromeBottom(),
                 )
             }
 

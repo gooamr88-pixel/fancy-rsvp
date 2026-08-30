@@ -13,6 +13,17 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <style name="Theme.FancyCheckin" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/parchment</item>
+        <!--
+          These three are now OVERRIDDEN AT RUNTIME and changing them here has no
+          effect. MainActivity calls enableEdgeToEdge(SystemBarStyle.light(...)),
+          which makes both bars transparent and forces dark icons; from API 35 the
+          two colour attributes are no-ops anyway.
+
+          Kept rather than deleted because they still describe the intent, and they
+          are what a device would fall back to if the runtime call were ever
+          removed. Change MainActivity, not this, if the bars need to look
+          different.
+        -->
         <item name="android:statusBarColor">@color/parchment</item>
         <item name="android:navigationBarColor">@color/parchment</item>
         <item name="android:windowLightStatusBar" tools:targetApi="23">true</item>

@@ -38,6 +38,7 @@ import com.fancyrsvp.checkin.ui.components.BackToScannerBar
 import com.fancyrsvp.checkin.ui.components.Chevron
 import com.fancyrsvp.checkin.ui.components.pressableSurface
 import com.fancyrsvp.checkin.ui.theme.LocalDimens
+import com.fancyrsvp.checkin.ui.theme.safeChrome
 import com.fancyrsvp.checkin.ui.theme.StateAlready
 import com.fancyrsvp.checkin.ui.theme.StateVip
 import com.fancyrsvp.checkin.ui.theme.displayFamilyFor
@@ -110,7 +111,11 @@ fun ManualSearchOverlay(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
+            // Background first, insets second: the colour fills the whole window
+            // so the system bars sit on it rather than on bare canvas, while the
+            // field and the results are pushed clear of them.
+            .background(MaterialTheme.colorScheme.background)
+            .safeChrome(),
     ) {
         Column(
             modifier = Modifier

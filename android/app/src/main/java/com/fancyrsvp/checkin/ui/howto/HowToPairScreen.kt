@@ -42,6 +42,7 @@ import com.fancyrsvp.checkin.ui.theme.enterDeeper
 import com.fancyrsvp.checkin.ui.theme.enterShallower
 import com.fancyrsvp.checkin.ui.theme.exitDeeper
 import com.fancyrsvp.checkin.ui.theme.exitShallower
+import com.fancyrsvp.checkin.ui.theme.safeChrome
 
 /**
  * How to connect this tablet to Fancy.
@@ -90,7 +91,13 @@ fun HowToPairScreen(
     val isLast = index == STEPS.lastIndex
 
     Surface(modifier = Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize()) {
+        // Surface keeps the full window so its colour runs under the system bars;
+        // the content inside is inset clear of them.
+        Column(
+            Modifier
+                .fillMaxSize()
+                .safeChrome(),
+        ) {
 
             Row(
                 modifier = Modifier
@@ -198,10 +205,15 @@ fun HowToPairScreen(
 /**
  * Picture on one side, words on the other.
  *
- * The app is locked to landscape, so this is a row on every device it runs on —
- * there is no portrait case to branch for. Height is the scarce axis, and a
+ * A row rather than a stack because height is the scarce axis in landscape: a
  * stacked layout would put the illustration above the fold on a compact tablet
  * and the instruction below it.
+ *
+ * Rotation is unlocked now, so a portrait case does exist. On a tablet the row
+ * still has the width for it; on a portrait phone the illustration and the text
+ * would each get roughly 170dp. Left as a row deliberately — this is a one-time
+ * setup screen and it degrades rather than breaks — but it is the first place to
+ * branch if the app is ever used on a phone in portrait.
  */
 @Composable
 private fun StepBody(

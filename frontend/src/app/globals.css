@@ -1287,21 +1287,31 @@ html.fx-debug-overflow *:not(html):not(body) { outline-offset: -1px; }
 
 /* ── Seating map print export ──────────────────────────────────────────────
    The organizer dashboard's seating-map page renders .print-seating-chart
-   inside PrintPreviewModal, an on-screen, interactive preview (drag to
-   rearrange for this printout) that's only mounted while open — unlike the
-   old always-in-the-DOM/CSS-hidden version, there is deliberately no
-   `display: none` default here anymore: React mounting/unmounting the modal
-   is what controls visibility now, and this content needs to actually be
-   visible on screen for the preview to work at all. Triggering window.print()
-   from inside that modal swaps to the @media print rule set below, which
-   collapses every other top-level node out of the page flow and strips the
-   modal's own toolbar/backdrop chrome — so printing (or "Print to PDF")
-   produces a clean single-sheet chart with no toolbar, sidebar, backdrop or
-   edit handles, and no stray blank pages around it. Kept in the
-   global stylesheet rather than a component-scoped <style jsx> block, since
-   scoped styles inside a nested (non-default-export) component were found
-   not to reliably compile in this build (see FooterLink in FooterSection.js
-   for the same issue). */
+   inside SeatingChartPrintModal (dashboard/seating-map/SeatingChartPrint.js),
+   an on-screen, interactive preview of the whole event-day pack — floor plan,
+   guest index, table assignments, the not-yet-seated list — which is only
+   mounted while open. There is deliberately no `display: none` default here:
+   React mounting/unmounting the modal is what controls visibility, and the
+   content has to be genuinely visible on screen for the preview to work.
+
+   window.print() from inside that modal swaps to the @media print rules below,
+   which collapse every other top-level node out of the page flow and strip the
+   modal's own top bar, options rail and backdrop — so printing (or "Save as
+   PDF") produces the document and nothing else: no toolbar, no sidebar, no
+   selection handles, and no stray blank sheets around it.
+
+   ── WHAT CHANGED, AND WHY IT MATTERS MORE THAN IT LOOKS ──
+   This used to force the entire chart into ONE page box (`height: 186mm;
+   overflow: hidden`) with the floor plan and the roster side by side inside
+   it. On a real event that silently threw guests away: past one sheet the
+   content was clipped, not paginated. The document now flows and the browser
+   paginates it, and every rule below exists to make those breaks land in
+   sensible places rather than to stop them happening.
+
+   Kept in the global stylesheet rather than a component-scoped <style jsx>
+   block, since scoped styles inside a nested (non-default-export) component
+   were found not to reliably compile in this build (see FooterLink in
+   FooterSection.js for the same issue). */
 @media print {
   /* WHY `display: none` AND NOT `visibility: hidden`:
      this used to be `body * { visibility: hidden }`, which is why the export
@@ -1337,21 +1347,59 @@ html.fx-debug-overflow *:not(html):not(body) { outline-offset: -1px; }
     background: none !important;
     overflow: visible !important;
   }
-  .ppm-toolbar {
+  /* Everything the organizer used to BUILD the document, and nothing the
+     document itself is made of. */
+  .ppm-topbar,
+  .ppm-rail {
     display: none !important;
   }
-  .ppm-sheet-wrap {
+  .ppm-body {
+    display: block !important;
+  }
+  .ppm-stage {
     display: block !important;
     padding: 0 !important;
     margin: 0 !important;
     background: none !important;
     overflow: visible !important;
-    box-shadow: none !important;
   }
   .print-seating-chart {
     display: block !important;
     width: 100% !important;
     margin: 0 !important;
+  }
+  /* The preview scales the sheets down to fit the window; paper does not need
+     scaling, and leaving the zoom on would print a half-size chart. */
+  .psc-doc {
+    zoom: 1 !important;
+    gap: 0 !important;
+    display: block !important;
+  }
+  .psc-sheet-outer {
+    display: block !important;
+    margin: 0 !important;
+  }
+  /* THE SHEET IS NO LONGER A FIXED BOX WITH ITS OVERFLOW HIDDEN.
+     It used to be `height: 186mm; overflow: hidden`, which is why a real event
+     printed a chart with guests missing: anything past one page was clipped
+     rather than paginated. The page box now comes from @page, the sheet
+     contributes no size of its own, and the content flows for as many pages as
+     it needs. Only the floor plan keeps a fixed height (below), and an SVG
+     cannot clip — it scales. */
+  .psc-sheet {
+    /* BLOCK, not flex. A flex container does not fragment its children across
+       pages reliably in any engine — the list sheets have to be ordinary block
+       flow for `break-inside: avoid` to mean anything. The plan sheet is the
+       one exception and puts its flex back below, because it is a single page
+       that must never fragment at all. */
+    display: block !important;
+    width: auto !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
   }
 
   /* Chrome/Edge strip background fills and shadows from print output by
@@ -1378,60 +1426,131 @@ html.fx-debug-overflow *:not(html):not(body) { outline-offset: -1px; }
     display: none !important;
   }
 
-  /* Bound the sheet to exactly one page. The on-screen preview sizes itself
-     with `height: 95vh`, which is meaningless on paper, so it's overridden
-     with a real page-relative height: landscape default paper minus the 10mm
-     @page margins leaves 190mm on A4 and ~196mm on US Letter, so 186mm fits
-     either with room to spare. Anything that still doesn't fit is clipped
-     here rather than being pushed onto a second sheet. */
-  .print-page {
-    height: 186mm !important;
-    max-height: 186mm !important;
-    overflow: hidden !important;
+  /* ── PAGINATION ──
+     Each part of the pack opens a fresh sheet, so the floor plan, the guest
+     index, the table assignments and the not-yet-seated list are never
+     interleaved. The first one does not, or the document opens on a blank
+     page. */
+  /* `.psc-sheet-outer + .psc-sheet-outer`, NOT `:first-child`.
+     `:first-child` is structural and does not care that a sibling is
+     display:none — and the two screen-only advisories (the plan-is-too-dense
+     note, the loading-guest-names note) are siblings that render BEFORE the
+     first sheet. Whenever either was showing, the first sheet stopped being
+     the first child, took a page break before it, and the document opened on
+     a blank sheet. The adjacent-sibling form says what is actually meant:
+     break between sheets, never before the first one. */
+  .psc-sheet-outer + .psc-sheet-outer {
+    break-before: page;
+    page-break-before: always;
+  }
+
+  /* Nothing in a list is ever cut in half by a page edge: not a table's block,
+     not a guest's row, not a table card. This is the rule that replaces the old
+     `overflow: hidden` — content moves to the next page instead of vanishing. */
+  .psc-item {
     break-inside: avoid;
     page-break-inside: avoid;
   }
-  @page {
-    size: landscape;
-    margin: 10mm;
+  /* A section title stranded at the foot of a page with its list starting on
+     the next one reads as an empty section. */
+  .psc-sectionhead,
+  .psc-idx-letter {
+    break-after: avoid;
+    page-break-after: avoid;
   }
+  .psc-sectionhead {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  /* THE ONE FIXED-HEIGHT PAGE. The plan is a single SVG with
+     preserveAspectRatio="xMidYMid meet", so constraining it cannot clip it —
+     it scales to whatever box it is handed. The height is the @page content
+     box: paper height less both margins. */
+  .psc-sheet.is-fixed {
+    height: calc(var(--psc-page-h) - var(--psc-margin) * 2) !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+  }
+  .psc-plan-figure {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+  }
+
+  /* NO `column-fill: auto` HERE, and that is deliberate.
+     It looks like the right answer — "fill each column before starting the
+     next" is what a paginated list wants — but a multicol block with an
+     indefinite height fills column ONE and lets it grow forever, so the whole
+     index rendered as a single 260px-wide ribbon down the left of the sheet
+     with three empty columns beside it. The default (`balance`) fills every
+     column in every page fragment, which is what was wanted all along. */
+}
+/* @page's size follows the organizer's paper/orientation choice and is written
+   at runtime by the preview modal (an inline <style> — a size cannot be
+   expressed as an inline style property). This is the fallback for any path
+   that renders the sheet without the modal. */
+@page {
+  size: A4 landscape;
+  margin: 12mm;
 }
 
-/* ── Print preview modal on-screen chrome ────────────────────────────────
-   PrintPreviewModal (seating-map/page.js) is a nested, non-default-export
-   component — <style jsx> blocks there don't reliably compile in this build
-   (same issue noted for FooterLink in FooterSection.js and for the seating-
-   map export view above), so its responsive rules live here globally
-   instead. None of this reaches the printed page itself: everything below
-   is outside .print-seating-chart, so the existing `body * { visibility:
-   hidden }` print rule above already hides all of it — only the sheet
-   content prints, never this toolbar/backdrop. */
+/* ══════════════════════════════════════════════════════════════════════════
+   PRINT PREVIEW — on-screen chrome  (.ppm-*)  and the document itself (.psc-*)
+
+   SeatingChartPrintModal (dashboard/seating-map/SeatingChartPrint.js) is a
+   nested, non-default-export component in places — <style jsx> blocks there do
+   not reliably compile in this build (same issue as FooterLink in
+   FooterSection.js), so every rule it needs lives here.
+
+   The split is worth keeping straight:
+     .ppm-*  is the editor around the document — top bar, options rail, the
+             grey stage the sheets sit on. None of it prints.
+     .psc-*  is the document. It prints, and it is laid out in MILLIMETRES so
+             the preview is the printed page at 1:1 before the organizer's own
+             zoom.
+   ══════════════════════════════════════════════════════════════════════════ */
 .ppm-overlay {
   position: fixed;
   inset: 0;
   z-index: 300;
-  background: rgba(25, 27, 30, 0.6);
+  background: #23252A;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 16px;
-  padding: 24px 20px;
-  overflow: auto;
+  overflow: hidden;
 }
-.ppm-toolbar {
-  width: 100%;
-  max-width: 1400px;
+.ppm-topbar {
+  flex-shrink: 0;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
+  padding: 12px 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  background: #191B1E;
 }
-.ppm-toolbar-actions {
+.ppm-title {
+  margin: 0;
+  font-family: var(--font-serif, serif);
+  font-size: 17px;
+  font-weight: 600;
+  color: #fff;
+}
+.ppm-sub {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.62);
+  max-width: 60ch;
+}
+.ppm-topbar-actions {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
   flex-shrink: 0;
+}
+/* The rail is permanent from md up, so its toggle only exists on a phone. */
+.ppm-rail-toggle {
+  display: none;
 }
 .ppm-btn {
   display: inline-flex;
@@ -1465,36 +1584,518 @@ html.fx-debug-overflow *:not(html):not(body) { outline-offset: -1px; }
   color: #fff;
   border: 1px solid rgba(255, 255, 255, 0.25);
 }
-.ppm-sheet-wrap {
-  width: 100%;
-  max-width: 1400px;
-  background: #fff;
-  border-radius: 14px;
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.4);
-  overflow: auto;
-  padding: 28px;
+
+/* ── the two-pane body: options rail + paper stage ── */
+.ppm-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+.ppm-rail {
+  flex: 0 0 268px;
+  background: #191B1E;
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.ppm-rail-scroll {
+  overflow-y: auto;
+  padding: 16px 16px 28px;
+  /* The rail is a fixed-position element inside a full-height overlay; on a
+     phone in landscape its last control can otherwise sit under the home
+     indicator. */
+  padding-bottom: max(28px, env(safe-area-inset-bottom));
+}
+.ppm-rail-head {
+  margin: 18px 0 8px;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.42);
+}
+.ppm-rail-head:first-child {
+  margin-top: 0;
+}
+.ppm-rail-note {
+  margin: 20px 0 0;
+  font-size: 11px;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.45);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 12px;
+}
+.ppm-rail-note strong {
+  color: rgba(255, 255, 255, 0.72);
+  font-weight: 700;
+}
+
+/* ── an option row ──
+   The whole row is the hit target, not the 13px checkbox: this rail is used on
+   a tablet propped on a venue desk as often as on a laptop. */
+.ppm-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  margin: 0 -10px;
+  border-radius: 9px;
+  cursor: pointer;
+  min-height: 44px;
   box-sizing: border-box;
 }
-/* Tablet (< md): toolbar copy and actions still fit one row down to about
-   this width, then the sheet's own internal flex (floor plan + roster) is
-   what needs room — letting the wrap scroll horizontally beats squeezing
-   the diagram unreadable. Moved from an off-scale 720px onto the md step;
-   the extra 48px only means the toolbar centres marginally sooner. */
-@media (max-width: 767.98px) {
-  .ppm-overlay { padding: 14px 10px; }
-  .ppm-toolbar { justify-content: center; text-align: center; }
-  .ppm-toolbar-copy { width: 100%; }
-  .ppm-toolbar-actions { width: 100%; justify-content: center; }
-  .ppm-sheet-wrap { padding: 14px; border-radius: 10px; }
+.ppm-opt:hover {
+  background: rgba(255, 255, 255, 0.05);
 }
-/* Phone: the print sheet's internal layout (floor plan + roster side by
-   side) is designed for a landscape page, not a phone's portrait width —
-   rather than mangling that into an unreadable stack, keep its real
-   proportions and let it scroll horizontally within the wrap, same as
-   scrolling a wide table. The toolbar above it (drag hint, Print/Close)
-   stays fully usable at any width regardless. */
-@media (max-width: 639.98px) {
-  .ppm-sheet-wrap { padding: 10px; }
+.ppm-opt.is-disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+.ppm-opt input {
+  margin: 2px 0 0;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  accent-color: #B8944F;
+}
+.ppm-opt-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.ppm-opt-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.ppm-opt-count {
+  font-size: 10px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.09);
+  border-radius: 20px;
+  padding: 1px 7px;
+  font-variant-numeric: tabular-nums;
+}
+.ppm-opt-hint {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.42);
+  line-height: 1.4;
+}
+
+/* ── segmented control ── */
+.ppm-seg-wrap,
+.ppm-zoom {
+  margin-top: 12px;
+}
+.ppm-seg-label {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.45);
+  margin-bottom: 5px;
+}
+.ppm-seg {
+  display: flex;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 9px;
+  padding: 3px;
+  gap: 3px;
+}
+.ppm-seg-btn {
+  flex: 1;
+  border: none;
+  background: none;
+  color: rgba(255, 255, 255, 0.62);
+  font-family: var(--font-sans, sans-serif);
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 8px 4px;
+  border-radius: 7px;
+  cursor: pointer;
+  min-height: 34px;
+  white-space: nowrap;
+}
+.ppm-seg-btn.is-on {
+  background: #B8944F;
+  color: #fff;
+}
+.ppm-seg-btn:not(.is-on):hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+/* ── the stage the paper sits on ── */
+.ppm-stage {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 24px 16px 60px;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  background:
+    radial-gradient(120% 80% at 50% 0%, rgba(255, 255, 255, 0.05), transparent 70%),
+    #2B2E33;
+}
+.ppm-empty {
+  padding: 60px 24px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 13px;
+}
+.ppm-advice {
+  width: min(100%, 640px);
+  margin: 0 0 4px;
+  padding: 9px 13px;
+  border-radius: 9px;
+  background: rgba(184, 148, 79, 0.14);
+  border: 1px solid rgba(184, 148, 79, 0.4);
+  color: #F0DFBE;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+/* ══ THE DOCUMENT ══════════════════════════════════════════════════════════
+   Sized in millimetres from the chosen paper. `zoom` — not `transform:
+   scale()` — because zoom reflows, so the stage's scrollbars follow the scaled
+   sheet automatically and a phone never gets a horizontal scrollbar under a
+   print preview. It is reset to 1 for print. */
+.psc-doc {
+  zoom: var(--psc-zoom, 1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 26px;
+  color: #101215;
+  font-family: var(--font-sans, sans-serif);
+}
+.psc-sheet-outer {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+.psc-sheet {
+  position: relative;
+  width: var(--psc-page-w);
+  min-height: var(--psc-page-h);
+  padding: var(--psc-margin);
+  box-sizing: border-box;
+  background: #fff;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+}
+.psc-sheet.is-fixed {
+  height: var(--psc-page-h);
+  overflow: hidden;
+}
+.psc-sheet-label {
+  margin: 8px 2px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.42);
+}
+.psc-sheet-pages {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  padding: 2px 8px;
+}
+/* Where the printer will actually break the sheet. Measured from the rendered
+   height rather than estimated, so it is a fact about this document and not a
+   guess — and it is the answer to "how many pages am I about to print". */
+.psc-pagemark {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed rgba(16, 18, 21, 0.28);
+  pointer-events: none;
+}
+.psc-pagemark span {
+  position: absolute;
+  right: 0;
+  top: 3px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(16, 18, 21, 0.35);
+}
+
+.psc-sectionhead {
+  flex-shrink: 0;
+  margin-bottom: 9px;
+}
+
+/* ── the floor plan figure ── */
+.psc-plan-figure {
+  flex: 1;
+  min-height: 0;
+  margin: 9px 0 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(16, 18, 21, 0.22);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #fff;
+}
+.psc-plan-key {
+  flex-shrink: 0;
+  border-top: 1px solid rgba(16, 18, 21, 0.16);
+  padding: 7px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 18px;
+  justify-content: center;
+}
+.psc-key-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #101215;
+}
+
+/* ── multi-column lists ── */
+.psc-cols {
+  flex: 1;
+  min-height: 0;
+}
+.psc-idx-group {
+  break-inside: avoid-column;
+}
+.psc-idx-letter {
+  margin: 9px 0 3px;
+  font-family: var(--font-serif, serif);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: rgba(16, 18, 21, 0.55);
+  border-bottom: 1px solid rgba(16, 18, 21, 0.85);
+  padding-bottom: 1px;
+}
+.psc-idx-group:first-child .psc-idx-letter {
+  margin-top: 0;
+}
+
+/* A directory row: name, a rule of dots, the table. The leader is what keeps
+   the eye on one line across a 60mm column — three columns of names with a
+   number floated right is unreadable at arm's length in a dim room. */
+.psc-idx-row {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  line-height: 1.55;
+}
+.psc-idx-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.psc-idx-extra {
+  font-size: 0.82em;
+  font-weight: 700;
+  opacity: 0.5;
+  margin-inline-start: 4px;
+}
+.psc-dots {
+  flex: 1 1 auto;
+  min-width: 10px;
+  align-self: flex-end;
+  margin-bottom: 0.28em;
+  border-bottom: 1px dotted rgba(16, 18, 21, 0.42);
+}
+.psc-idx-table {
+  flex: 0 0 auto;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.psc-idx-none {
+  font-weight: 600;
+  opacity: 0.45;
+}
+
+/* ── a table's block on the assignments sheet ── */
+.psc-table-block {
+  margin: 0 0 9px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid rgba(16, 18, 21, 0.14);
+}
+.psc-table-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid rgba(16, 18, 21, 0.85);
+  padding-bottom: 2px;
+  margin-bottom: 4px;
+}
+.psc-table-name {
+  font-family: var(--font-serif, serif);
+  font-size: 1.28em;
+  font-weight: 600;
+  line-height: 1.1;
+}
+.psc-table-count {
+  font-size: 0.95em;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.psc-table-empty,
+.psc-table-free {
+  margin: 3px 0 0;
+  font-size: 0.85em;
+  font-style: italic;
+  opacity: 0.5;
+}
+.psc-party-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.psc-party {
+  margin-bottom: 2px;
+  line-height: 1.4;
+}
+.psc-party-name {
+  font-weight: 600;
+}
+/* The party's headcount, set as a mark rather than a sentence — "Ahmed Hassan
+   4" is read at a glance while laying out place cards. */
+.psc-party-size {
+  display: inline-block;
+  margin-inline-start: 5px;
+  min-width: 1.25em;
+  padding: 0 0.3em;
+  border: 1px solid rgba(16, 18, 21, 0.55);
+  border-radius: 20px;
+  font-size: 0.76em;
+  font-weight: 800;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.psc-party-members {
+  display: block;
+  font-size: 0.86em;
+  opacity: 0.62;
+  padding-inline-start: 8px;
+  line-height: 1.35;
+}
+
+/* ── table cards ── */
+.psc-cards {
+  display: block;
+}
+.psc-card {
+  border: 1px dashed rgba(16, 18, 21, 0.45);
+  border-radius: 4px;
+  padding: 6mm;
+  margin-bottom: 4mm;
+  box-sizing: border-box;
+  display: flex;
+}
+.psc-card-inner {
+  margin: auto;
+  text-align: center;
+  width: 100%;
+}
+.psc-card-event {
+  margin: 0;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  font-weight: 700;
+  opacity: 0.5;
+}
+.psc-card-numeral {
+  margin: 2mm 0 0;
+  font-family: var(--font-serif, serif);
+  font-size: 34px;
+  font-weight: 600;
+  line-height: 1;
+}
+.psc-card-rule {
+  width: 40mm;
+  height: 1px;
+  background: #101215;
+  opacity: 0.5;
+  margin: 3mm auto;
+}
+.psc-card-guests {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  columns: 2;
+  column-gap: 8mm;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* ── responsive ──
+   The document never reflows: it is paper, and paper has one shape. What
+   changes is the editor around it — the options rail becomes a sheet the
+   organizer pulls open, and the stage takes the whole width with the document
+   scaled down to fit it (see the fit-to-width effect in SeatingChartPrint.js).
+   That is what removes the horizontal scrolling the old preview forced on a
+   phone. */
+@media (max-width: 767.98px) {
+  .ppm-topbar {
+    padding: 10px 12px;
+  }
+  .ppm-topbar-actions {
+    width: 100%;
+  }
+  /* `flex: 1` alone does not wrap: every button keeps its nowrap min-content
+     width, so "Print / Save as PDF" pushed Close off the right edge of a 390px
+     phone. A 46% basis puts two on a row and wraps the rest. */
+  .ppm-topbar-actions .ppm-btn {
+    flex: 1 1 46%;
+    justify-content: center;
+  }
+  .ppm-rail-toggle {
+    display: inline-flex;
+  }
+  .ppm-rail {
+    display: none;
+    flex: none;
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(300px, 86vw);
+    z-index: 2;
+    border-right: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow: 0 0 60px rgba(0, 0, 0, 0.6);
+  }
+  .ppm-rail.is-open {
+    display: flex;
+  }
+  .ppm-body {
+    position: relative;
+  }
+  .ppm-stage {
+    padding: 14px 8px 48px;
+  }
 }
 
 

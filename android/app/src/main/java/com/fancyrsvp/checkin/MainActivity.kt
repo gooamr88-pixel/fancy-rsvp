@@ -4,6 +4,8 @@ import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -40,8 +42,11 @@ import javax.inject.Inject
  *  • KEEP_SCREEN_ON (§21.9). Staff must never have to wake and unlock a tablet
  *    with a queue forming at the door.
  *
- *  • Orientation is locked in the manifest, not here, because an unexpected
- *    rotation mid-scan disrupts the CameraX pipeline.
+ *  • Orientation is set in the manifest, not here, and is no longer LOCKED. The
+ *    app follows the device in all four orientations — the kiosk is a portrait
+ *    panel. The old warning that rotation "disrupts the CameraX pipeline"
+ *    described an Activity RECREATION, which the manifest's configChanges has
+ *    always prevented.
  */
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -50,6 +55,35 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var sessionManager: SessionManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        /*
+         * Edge-to-edge, declared rather than inherited.
+         *
+         * targetSdk 35 means Android 15 and later impose this anyway. Calling it
+         * explicitly makes ANDROID 11 — which is what the kiosk runs — behave the
+         * same way, so the layout is not one shape on the test device and another
+         * on the hardware at the venue. Insets are then handled per-surface; see
+         * ui/theme/Insets.kt for why not at the root.
+         *
+         * Both bars are forced to the LIGHT style, which is what actually decides
+         * the icon colour: light() means dark icons, for a pale background. The
+         * default is `auto`, which picks from the SYSTEM's dark-mode setting — and
+         * this app is light-only by deliberate choice (see FancyCheckinTheme), so
+         * on a tablet with dark mode on, auto would paint white system icons onto
+         * the app's parchment and they would disappear.
+         *
+         * Before super.onCreate(), as the API requires.
+         */
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.light(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT,
+            ),
+            navigationBarStyle = SystemBarStyle.light(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT,
+            ),
+        )
+
         super.onCreate(savedInstanceState)
 
         window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)

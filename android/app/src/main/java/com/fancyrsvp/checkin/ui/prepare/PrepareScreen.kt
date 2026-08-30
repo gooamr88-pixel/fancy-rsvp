@@ -55,6 +55,7 @@ import com.fancyrsvp.checkin.ui.theme.StateAlready
 import com.fancyrsvp.checkin.ui.theme.StateAttention
 import com.fancyrsvp.checkin.ui.theme.StateNeutral
 import com.fancyrsvp.checkin.ui.theme.StateWelcome
+import com.fancyrsvp.checkin.ui.theme.safeChrome
 import java.text.DateFormat
 import java.util.Date
 import java.util.TimeZone
@@ -128,10 +129,14 @@ fun PrepareScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                // Half the padding vertically. The app is locked to landscape, so
-                // height is always the scarce axis and the full inset is spent
-                // where there is least of it — on a phone, 24dp top and bottom is
-                // an eighth of the whole window given to empty margin.
+                // Clear of the system bars and any cutout first; the design's own
+                // padding then applies inside that.
+                .safeChrome()
+                // Half the padding vertically. In landscape height is the scarce
+                // axis, and the full inset is spent where there is least of it —
+                // on a phone, 24dp top and bottom is an eighth of the whole window
+                // given to empty margin. Rotation is no longer locked, so in
+                // portrait this is simply generous rather than necessary.
                 .padding(
                     horizontal = dimens.screenPadding,
                     vertical = dimens.screenPadding * 0.5f,

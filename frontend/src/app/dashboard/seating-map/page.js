@@ -2,40 +2,35 @@
 import { toast } from '../../utils/toast';
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { logout, apiFetch } from '../../utils/apiClient';
 import LogoutModal from '../../components/LogoutModal';
 import { useIsClient } from '../../utils/useIsClient';
-import Icon, { ICON_PATHS } from '../../components/icons/Icon';
+import Icon from '../../components/icons/Icon';
 import { useConfirm } from '../../components/useConfirm';
 // The shape catalogue and world geometry are shared with the two guest-facing
 // maps — see utils/seatingGeometry.js for why they must not be re-declared here.
 import {
   WORLD_W, WORLD_H, SHAPES, shapeMeta, isZone,
-  elWidth, elHeight, pctToPx, elCenterX, elCenterY, elBox,
+  elWidth, elHeight, pctToPx, elBox,
 } from '../../utils/seatingGeometry';
-import { formatInZone } from '../../utils/timezone';
+/**
+ * The printed pack lives in its own module, and that is not just file hygiene.
+ * This page is already ~2,700 lines of editor; the export is a different
+ * artefact with its own layout rules, its own page geometry and its own type
+ * scale, and the one time they shared a scope the export shipped dead for
+ * everybody (a top-level function read a `useState` local of THIS component and
+ * threw ReferenceError on every render). Separate modules make that class of
+ * mistake a build-visible import instead of a silent free variable.
+ */
+import SeatingChartPrintModal from './SeatingChartPrint';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
 const C = { gold: '#B8944F', goldHover: '#a6833f', charcoal: '#191B1E', ivory: '#F8F4EC', champagne: '#D7BE80', stone: '#77736A', border: '#E8E2D6', white: '#FFFFFF', danger: '#C45E5E' };
-/**
- * THE PRINTED CHART IS DRAWN IN ONE INK.
- *
- * Not `C.charcoal` under a different name — a separate constant because it
- * means something different. Everything inside the exported floor plan is this
- * colour on white paper: no gold, no zone tints, no drop shadows, no fills.
- *
- * The screen map is colour-coded because colour is free there and helps an
- * organizer scan a 200-element layout. On paper it is the opposite: half of
- * these charts are printed on an office mono laser, where a #6B5FA8 dance floor
- * and a #4A7C59 entrance both come out as the same indistinct grey wash behind
- * the one thing anybody at the venue is actually reading — the table number.
- * Weight, dash pattern and a glyph carry the distinctions instead, and all
- * three survive a photocopier.
- */
-const INK = '#101215';
+/* The printed chart's one ink now lives with the document that uses it, in
+   SeatingChartPrint.js — this editor is deliberately colour-coded and does not
+   share it. */
 // Shared style for the "Select All ▾" menu's Type/Capacity <select> controls.
 const selectMenuInputStyle = { width: '100%', boxSizing: 'border-box', border: `1px solid ${C.border}`, borderRadius: 6, padding: '6px 8px', fontSize: 12, outline: 'none', marginTop: 3, background: C.white, color: C.charcoal, fontFamily: 'var(--font-sans, sans-serif)' };
 
@@ -708,6 +703,65 @@ export default function SeatingMapPage() {
     return () => clearTimeout(t);
   }, [eventId, summary, fetchAllGuestsForLabels]);
 
+  /* ── who is actually IN each party, for the printed guest index ──
+     The seating endpoints deal in parties: one row, one label, a headcount.
+     That is the right shape for seating people, and the wrong shape for the
+     document somebody holds at the door — a companion arriving before the host
+     is not findable under a party label. The full guest list already returns
+     every party's member names, so the pack is built from that when it can be.
+
+     Fetched only once the organizer opens the preview, because it is a handful
+     of extra requests that nothing on this page needs otherwise, and it
+     degrades cleanly: an empty map just means the index lists parties instead
+     of people, which is exactly what it did before. */
+  const [membersByParty, setMembersByParty] = useState(null);
+  const [membersLoading, setMembersLoading] = useState(false);
+
+  // Cleared whenever the active event changes, so the pack can never print one
+  // event's guest names against another's tables. `membersByParty` is the
+  // effect's own "already loaded" flag, and without this reset a truthy map
+  // from the previous event would suppress the refetch entirely.
+  const [membersEventId, setMembersEventId] = useState(eventId);
+  if (membersEventId !== eventId) {
+    setMembersEventId(eventId);
+    setMembersByParty(null);
+  }
+
+  useEffect(() => {
+    if (!showPrintPreview || !eventId || membersByParty) return undefined;
+    let cancelled = false;
+    setMembersLoading(true);
+    (async () => {
+      try {
+        const map = {};
+        // 100 is the endpoint's own hard ceiling; 50 pages is the same runaway
+        // guard fetchAllGuestsForLabels uses.
+        for (let page = 1; page <= 50; page++) {
+          const qs = new URLSearchParams({ response: 'yes', page: String(page), limit: '100' });
+          const res = await fetch(`${API_URL}/events/${eventId}/rsvps?${qs}`, { credentials: 'include' });
+          const data = await res.json();
+          const parties = data?.data?.rsvps;
+          if (!data?.success || !Array.isArray(parties) || parties.length === 0) break;
+          parties.forEach((p) => {
+            const names = (p.guests || [])
+              .map((g) => (g.full_name || '').trim())
+              .filter(Boolean);
+            if (names.length > 0) map[p.id] = names;
+          });
+          const total = data?.meta?.pagination?.total || 0;
+          if (Object.keys(map).length >= total || parties.length < 100) break;
+        }
+        if (!cancelled) setMembersByParty(map);
+      } catch {
+        // Non-fatal by design — the pack still prints, keyed on party labels.
+        if (!cancelled) setMembersByParty({});
+      } finally {
+        if (!cancelled) setMembersLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [showPrintPreview, eventId, membersByParty]);
+
   /* ── derived: seated guest names per table, for the canvas labels ── */
   const namesByTable = useMemo(() => {
     const m = {};
@@ -718,6 +772,33 @@ export default function SeatingMapPage() {
     });
     return m;
   }, [allSeatedGuests, pending]);
+
+  /* ── derived: the parties at each table, WITH their headcount ──
+     namesByTable above is a list of labels, which is all a canvas caption
+     needs. The printed pack needs the size too: one row here is one RSVP, and
+     an RSVP can cover four people. Counting rows is how the old export printed
+     "3" against a table with ten chairs occupied. */
+  const partiesByTable = useMemo(() => {
+    const m = {};
+    allSeatedGuests.forEach(g => {
+      const tableId = pending[g.id] ? pending[g.id].to : g.tableId;
+      if (!tableId) return;
+      (m[tableId] || (m[tableId] = [])).push({
+        id: g.id,
+        name: g.guest_name,
+        size: Number(g.party_size) || 1,
+      });
+    });
+    return m;
+  }, [allSeatedGuests, pending]);
+
+  /* ── derived: attending, but with nowhere to sit yet ──
+     They get their own sheet in the pack. A guest who is missing from every
+     printed page is a guest the door concludes was never invited. */
+  const unseatedParties = useMemo(() => allSeatedGuests
+    .filter(g => !(pending[g.id] ? pending[g.id].to : g.tableId))
+    .map(g => ({ id: g.id, name: g.guest_name, size: Number(g.party_size) || 1 })),
+  [allSeatedGuests, pending]);
 
   /* ── derived: live occupancy per table (server + pending deltas) ── */
   const occByTable = useMemo(() => {
@@ -2143,7 +2224,7 @@ export default function SeatingMapPage() {
           {layoutDirty && <button onClick={saveLayout} disabled={saving} style={{ ...btn, background: C.white, border: `1px solid ${C.gold}`, color: C.gold }}>Save Layout</button>}
           <button
             onClick={() => setShowPrintPreview(true)}
-            title="Preview and arrange the printable chart, then print or save as PDF"
+            title="Build the event-day pack — floor plan, guest index, table assignments — then print it or save it as a PDF"
             style={{ ...btn, background: 'transparent', border: `1px solid ${C.gold}`, color: C.gold, display: 'flex', alignItems: 'center', gap: 6 }}
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9V2h12v7" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><rect x="6" y="14" width="12" height="8" /></svg>
@@ -2561,18 +2642,22 @@ export default function SeatingMapPage() {
       {/* Add element modal */}
       {showAdd && <AddElementModal onClose={() => setShowAdd(false)} onAdd={addElement} btn={btn} view={view} saving={saving} elements={elements} />}
 
-      {/* Print preview — an on-screen, drag-to-arrange rehearsal of the
-          printed chart. Only mounted while open; window.print() inside it
+      {/* Print preview — an on-screen, drag-to-arrange rehearsal of the whole
+          event-day pack. Only mounted while open; window.print() inside it
           targets its own .print-seating-chart content (see globals.css). */}
       {showPrintPreview && (
-        <PrintPreviewModal
+        <SeatingChartPrintModal
           eventTitle={eventTitle}
           eventDate={eventDate}
           eventTimezone={eventTimezone}
           organizerName={organizerName}
           elements={elements}
-          namesByTable={namesByTable}
+          partiesByTable={partiesByTable}
+          unseatedParties={unseatedParties}
+          membersByParty={membersByParty}
+          occByTable={occByTable}
           summary={summary}
+          membersLoading={membersLoading}
           onClose={() => setShowPrintPreview(false)}
         />
       )}
@@ -2676,604 +2761,6 @@ function getUniqueZoneName(elements, baseLabel) {
   return `${baseLabel} ${n}`;
 }
 
-
-/* A branded letterhead repeated at the top of every printed/exported page —
-   Fancy's own wordmark (so the document is unmistakably a Fancy RSVP export,
-   not a bare screenshot), the event name, and who it was prepared for. */
-/* Redesigned as a proper document header: a top row identifies the
-   document (logo + "Seating Chart" + print date), a centered hero carries
-   the event's own identity (title + date/host), and a row of stat pills
-   surfaces the event details (table/zone/guest counts) a seating chart
-   export should actually lead with — the previous version was a single
-   centered stack with no real hierarchy and no event details at all. */
-/* Ink only, like the plan below it — the tinted gold stat pills and the gold
-   gradient rule went with the coloured floor plan. On a mono printer the pills
-   came out as grey lozenges competing with the event name; plain figures over a
-   hairline rule read as a document rather than a dashboard screenshot. The
-   wordmark keeps its own artwork: it is the brand signature, not decoration. */
-/**
- * `eventTimezone` IS A PROP, and leaving it out crashed the whole feature.
- *
- * It used to be read straight out of the body below without being declared
- * here or passed in. `eventTimezone` is a useState local of the page component
- * — a different function entirely — so inside this one the identifier resolved
- * nowhere and every render threw ReferenceError. The print preview never
- * opened for anybody: it showed the dashboard error boundary instead.
- *
- * Nothing caught it. Webpack does not scope-analyse, and eslint exits 0 here
- * without checking anything (see the note in the repo's frontend tooling), so
- * a build and a full test run both stayed green while the button was dead.
- */
-function PrintLetterhead({ eventTitle, eventTimezone, organizerName, formattedDate, stats }) {
-  const metaParts = [formattedDate, organizerName ? `Prepared for ${organizerName}` : null].filter(Boolean);
-  return (
-    <div style={{ fontFamily: 'var(--font-sans, sans-serif)', flexShrink: 0, color: INK }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/logo.svg" alt="Fancy RSVP" style={{ height: 22, display: 'block' }} />
-        <div style={{ textAlign: 'right' }}>
-          <p style={{ fontSize: 9.5, color: INK, margin: 0, letterSpacing: '0.16em', textTransform: 'uppercase', fontWeight: 800 }}>Seating Chart</p>
-          <p style={{ fontSize: 10, color: INK, opacity: 0.6, margin: '2px 0 0' }}>Printed {formatInZone(Date.now(), eventTimezone, { year: 'numeric', month: 'long', day: 'numeric' })}</p>
-        </div>
-      </div>
-
-      <div style={{ textAlign: 'center', marginTop: 6 }}>
-        <h1 style={{ fontFamily: 'var(--font-serif, serif)', fontSize: 25, fontWeight: 600, margin: 0, color: INK, lineHeight: 1.2 }}>
-          {eventTitle || 'Seating Chart'}
-        </h1>
-        {metaParts.length > 0 && (
-          <p style={{ fontSize: 11.5, color: INK, opacity: 0.65, margin: '4px 0 0', letterSpacing: '0.02em' }}>{metaParts.join('  ·  ')}</p>
-        )}
-      </div>
-
-      {stats && stats.length > 0 && (
-        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'baseline', gap: 22, marginTop: 10, flexWrap: 'wrap' }}>
-          {stats.map((s) => (
-            <span key={s.label} style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5 }}>
-              <span style={{ fontSize: 13, fontWeight: 800, color: INK }}>{s.value}</span>
-              <span style={{ fontSize: 9, color: INK, opacity: 0.6, textTransform: 'uppercase', letterSpacing: '0.09em', fontWeight: 700 }}>{s.label}</span>
-            </span>
-          ))}
-        </div>
-      )}
-
-      <div style={{ height: 1, margin: '11px 0 0', background: INK, opacity: 0.85 }} />
-    </div>
-  );
-}
-
-/* Matching footer — small, quiet brand credit so a printed/exported page is
-   still identifiable as a Fancy RSVP document once separated from any cover
-   sheet, without competing with the letterhead above. */
-function PrintFooter() {
-  return (
-    <div style={{ textAlign: 'center', flexShrink: 0, fontFamily: 'var(--font-sans, sans-serif)' }}>
-      <div style={{ width: 88, height: 1, margin: '0 auto 8px', background: INK, opacity: 0.25 }} />
-      <p style={{ fontSize: 9, color: INK, opacity: 0.6, margin: 0, letterSpacing: '0.03em' }}>
-        Crafted with <span style={{ fontWeight: 700 }}>Fancy RSVP</span>
-      </p>
-    </div>
-  );
-}
-
-/* Numeric-aware compare so "Table 2" sorts before "Table 10" instead of
-   after it (plain string compare would put "10" before "2") — falls back to
-   locale compare for non-numeric zone/table labels. */
-function compareTableNames(a, b) {
-  const an = parseInt(a, 10), bn = parseInt(b, 10);
-  const aIsNum = !isNaN(an) && String(an) === a.trim();
-  const bIsNum = !isNaN(bn) && String(bn) === b.trim();
-  if (aIsNum && bIsNum) return an - bn;
-  if (aIsNum !== bIsNum) return aIsNum ? -1 : 1; // numbered tables before named zones
-  return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
-}
-
-/* ════════════════════════════════════════════════════════════════
-   Print preview modal — an on-screen, interactive rehearsal of the export
-   before it hits the printer. window.print() (see .print-seating-chart in
-   globals.css) still does the actual printing, but now targets THIS
-   modal's content instead of a permanently-mounted, invisible-until-print
-   copy — so what you arrange here is exactly what prints, and you get a
-   chance to fix it first instead of finding out after paper (or a PDF) is
-   already sitting in front of you.
-
-   Elements can be dragged to a new spot specifically for this printout —
-   `overrides` is local component state, never written back to `elements`/
-   the database. Closing and reopening this preview always starts fresh
-   from the organizer's actual live arrangement; a mis-arranged printout
-   can never bleed into the real seating plan, and the real plan can't
-   accidentally get "fixed" by someone rearranging a printout. Dragging is
-   done in SVG user-space via getScreenCTM().inverse(), so it stays
-   pixel-accurate regardless of how the viewBox has scaled the diagram to
-   fit its column.
-
-   Floor plan + roster share ONE page (see the file-level history in git
-   blame / project memory for why — this used to force the roster onto a
-   second page, and a long roster would then overflow onto a third).
-
-   ── THE DIAGRAM IS DRAWN IN ONE INK. See the INK constant at the top. ──
-
-   Every element is a white shape with a black outline. Tables carry their
-   NUMBER and nothing else; zones carry their catalogue GLYPH and nothing
-   else, with a legend beneath the plan naming them. Removed from the sheet
-   in the process: the paper tint, the gold table strokes, the translucent
-   zone fills, the white zone label chips, the drop shadow on every element,
-   and the "N / cap seated" line under each table number.
-
-   The glyph-plus-legend split is the part worth defending. Putting "DANCE
-   FLOOR" inside the shape means the longest words land on the largest zones
-   and the type either shrinks below reading size or spills over a table
-   sitting inside the zone — which is exactly what the old white label chip
-   was clipping around. A glyph is a fixed, dense mark that never collides,
-   and the legend gives it a name once, in body copy, at full size. It also
-   keeps a free-text "Custom Area" readable: its typed name lands in the
-   legend rather than being crushed into a 130px box.
-   ════════════════════════════════════════════════════════════════ */
-function PrintPreviewModal({ eventTitle, eventDate, eventTimezone, organizerName, elements, namesByTable, summary, onClose }) {
-  const [overrides, setOverrides] = useState({});
-  const [dragging, setDragging] = useState(false);
-  const [selectedIds, setSelectedIds] = useState(() => new Set());
-  const [marquee, setMarquee] = useState(null); // { x0, y0, x1, y1 } in SVG world coords, while shift-dragging empty canvas
-  const svgRef = useRef(null);
-  const elementsRef = useRef(elements);
-  elementsRef.current = elements;
-  // Single-element drag: { mode: 'single', id, offX, offY } — offset from the
-  // shape's TOP-LEFT corner to the grab point, in world px (see elCenterX for
-  // why top-left and not centre).
-  // Group drag: { mode: 'group', ids, startP, origins } — origins snapshots
-  // every selected element's position at drag start, so the whole group
-  // moves by the same delta and keeps its relative layout instead of
-  // drifting apart (same approach as the main canvas's group-move).
-  const dragRef = useRef(null);
-  const marqueeRef = useRef(null);
-
-  // SVG has no z-index — it paints strictly in document order, so whatever
-  // comes last in this array lands on top. Left in raw insertion order, any
-  // zone created after a table painted OVER that table: a zone is large, has
-  // a translucent fill, and carries a solid white label chip up to 240×44,
-  // which is enough to tint or completely swallow the table number sitting
-  // inside it. That's the "elements merge into each other" in the export.
-  //
-  // Fixed ordering, back to front: zones (largest first, so an outer hall
-  // outline can never cover a smaller stage/bar drawn inside it), then all
-  // tables. Only affects paint order — positions, the bounding box and the
-  // roster below are all unchanged.
-  const displayElements = useMemo(() => {
-    const positioned = (elements || []).map((el) => {
-      const o = overrides[el.id];
-      return o ? { ...el, position_x: o.x, position_y: o.y } : el;
-    });
-    const area = (el) => (Number(elWidth(el)) || 0) * (Number(elHeight(el)) || 0);
-    return positioned.sort((a, b) => {
-      const az = isZone(a);
-      const bz = isZone(b);
-      if (az !== bz) return az ? -1 : 1; // zones behind tables
-      if (az && bz) return area(b) - area(a); // bigger zones behind smaller ones
-      return 0;
-    });
-  }, [elements, overrides]);
-
-  const hasOverrides = Object.keys(overrides).length > 0;
-  const isEmpty = !elements || elements.length === 0;
-
-  const PAD = 70;
-  let minX = 0, minY = 0, boxW = 1, boxH = 1;
-  if (!isEmpty) {
-    let mnX = Infinity, mnY = Infinity, mxX = -Infinity, mxY = -Infinity;
-    displayElements.forEach((el) => {
-      const b = elBox(el);
-      mnX = Math.min(mnX, b.x);
-      mnY = Math.min(mnY, b.y);
-      mxX = Math.max(mxX, b.right);
-      mxY = Math.max(mxY, b.bottom);
-    });
-    minX = mnX - PAD; minY = mnY - PAD;
-    boxW = Math.max(1, mxX + PAD - minX);
-    boxH = Math.max(1, mxY + PAD - minY);
-  }
-
-  const formattedDate = eventDate
-    ? formatInZone(eventDate, eventTimezone, { year: 'numeric', month: 'long', day: 'numeric' })
-    : null;
-
-  // Sorted table-by-table, and guests sorted within each table.
-  const roster = displayElements
-    .filter((el) => !isZone(el) && (namesByTable[el.id] || []).length > 0)
-    .map((el) => ({
-      id: el.id,
-      name: el.table_name || 'Table',
-      guests: [...(namesByTable[el.id] || [])].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
-    }))
-    .sort((a, b) => compareTableNames(a.name, b.name));
-
-  /**
-   * The key to the glyphs on the plan — one row per zone actually placed.
-   *
-   * Keyed by the zone's own NAME rather than its shape, so two "Bar" elements
-   * collapse to one row while a "Bar" and a "Champagne Bar" (both the `bar`
-   * shape, one renamed) stay distinct. Without that, an organizer who renamed
-   * their zones would get a legend that silently disagreed with the plan.
-   * Skips anything whose shape has no icon, since it draws nothing to explain.
-   */
-  const zoneLegend = useMemo(() => {
-    const seen = new Map();
-    (elements || []).filter(isZone).forEach((el) => {
-      const meta = shapeMeta(el.shape);
-      if (!meta.icon || !ICON_PATHS[meta.icon]) return;
-      const name = (el.table_name || meta.label || '').trim() || meta.label;
-      const key = `${meta.icon}::${name.toLowerCase()}`;
-      if (seen.has(key)) { seen.get(key).count += 1; return; }
-      seen.set(key, { key, icon: meta.icon, name, count: 1 });
-    });
-    return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
-  }, [elements]);
-
-  const totalGuests = roster.reduce((sum, t) => sum + t.guests.length, 0);
-  const rosterCols = totalGuests > 260 ? 3 : totalGuests > 90 ? 2 : 1;
-  const rosterFontSize = totalGuests > 260 ? 9.5 : totalGuests > 150 ? 10.5 : 11.5;
-  const rosterPad = totalGuests > 150 ? '7px 10px' : '9px 12px';
-
-  const tableCount = (elements || []).filter((el) => !isZone(el)).length;
-  const zoneCount = (elements || []).filter(isZone).length;
-  const stats = [
-    { label: 'Tables', value: tableCount },
-    { label: 'Guests Seated', value: summary?.seatedGuests ?? totalGuests },
-    ...(zoneCount > 0 ? [{ label: 'Venue Zones', value: zoneCount }] : []),
-  ];
-
-  // ── select + drag-to-arrange (this printout only) ──
-  const toSvgPoint = (clientX, clientY) => {
-    const svg = svgRef.current;
-    if (!svg) return { x: 0, y: 0 };
-    const pt = svg.createSVGPoint();
-    pt.x = clientX; pt.y = clientY;
-    const ctm = svg.getScreenCTM();
-    if (!ctm) return { x: 0, y: 0 };
-    const p = pt.matrixTransform(ctm.inverse());
-    return { x: p.x, y: p.y };
-  };
-  const posOf = (id) => {
-    const o = overrides[id];
-    if (o) return o;
-    const el = (elementsRef.current || []).find((x) => x.id === id);
-    return { x: Number(el?.position_x) || 0, y: Number(el?.position_y) || 0 };
-  };
-  const onElPointerDown = (e, el) => {
-    e.stopPropagation();
-    e.preventDefault();
-    const p = toSvgPoint(e.clientX, e.clientY);
-
-    // Shift/Ctrl/Cmd-click toggles this one element in or out of the
-    // multi-selection, mirroring the main canvas — a discrete pick, not a drag.
-    if (e.shiftKey || e.ctrlKey || e.metaKey) {
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        if (next.has(el.id)) next.delete(el.id); else next.add(el.id);
-        return next;
-      });
-      return;
-    }
-
-    // Dragging an element that's part of an active multi-selection moves the
-    // whole group together, preserving everyone's relative position.
-    if (selectedIds.size > 1 && selectedIds.has(el.id)) {
-      const origins = {};
-      selectedIds.forEach((id) => { origins[id] = posOf(id); });
-      dragRef.current = { mode: 'group', ids: Array.from(selectedIds), startP: p, origins };
-    } else {
-      setSelectedIds(new Set([el.id]));
-      // Grab offset is measured from the TOP-LEFT corner, because that is what
-      // onSvgPointerMove writes back into `overrides` (and overrides feed
-      // position_x/position_y directly). Measuring it from the centre made the
-      // element jump by half its size the instant you started dragging it.
-      const x = pctToPx(el.position_x, WORLD_W);
-      const y = pctToPx(el.position_y, WORLD_H);
-      dragRef.current = { mode: 'single', id: el.id, offX: p.x - x, offY: p.y - y };
-    }
-    setDragging(true);
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* unsupported — pointermove on the svg still covers it */ }
-  };
-  // Background click clears the selection; Shift-drag on empty canvas
-  // rubber-band selects a cluster of elements at once, same as the main canvas.
-  const onSvgBackgroundPointerDown = (e) => {
-    if (e.shiftKey) {
-      const p = toSvgPoint(e.clientX, e.clientY);
-      const rect = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
-      marqueeRef.current = rect;
-      setMarquee(rect);
-      return;
-    }
-    setSelectedIds(new Set());
-  };
-  const onSvgPointerMove = (e) => {
-    const d = dragRef.current;
-    if (d) {
-      const p = toSvgPoint(e.clientX, e.clientY);
-      if (d.mode === 'single') {
-        const nx = clamp(((p.x - d.offX) / WORLD_W) * 100, 0, 100);
-        const ny = clamp(((p.y - d.offY) / WORLD_H) * 100, 0, 100);
-        setOverrides((prev) => ({ ...prev, [d.id]: { x: nx, y: ny } }));
-      } else if (d.mode === 'group') {
-        const dxPct = ((p.x - d.startP.x) / WORLD_W) * 100;
-        const dyPct = ((p.y - d.startP.y) / WORLD_H) * 100;
-        setOverrides((prev) => {
-          const next = { ...prev };
-          d.ids.forEach((id) => {
-            const o = d.origins[id];
-            if (!o) return;
-            next[id] = { x: clamp(o.x + dxPct, 0, 100), y: clamp(o.y + dyPct, 0, 100) };
-          });
-          return next;
-        });
-      }
-      return;
-    }
-    if (marqueeRef.current) {
-      const p = toSvgPoint(e.clientX, e.clientY);
-      const next = { ...marqueeRef.current, x1: p.x, y1: p.y };
-      marqueeRef.current = next;
-      setMarquee(next);
-    }
-  };
-  const endDrag = () => {
-    dragRef.current = null;
-    setDragging(false);
-    const m = marqueeRef.current;
-    if (m) {
-      marqueeRef.current = null;
-      setMarquee(null);
-      const left = Math.min(m.x0, m.x1), right = Math.max(m.x0, m.x1);
-      const top = Math.min(m.y0, m.y1), bottom = Math.max(m.y0, m.y1);
-      // A tap with no real drag shouldn't clear a selection being built.
-      if (right - left < 4 && bottom - top < 4) return;
-      const hits = (elementsRef.current || []).filter((el) => {
-        // Through elBox with this printout's dragged position applied, so the
-        // rubber band matches where the element is actually drawn right now.
-        const p = posOf(el.id);
-        const b = elBox({ ...el, position_x: p.x, position_y: p.y });
-        return b.x < right && b.right > left && b.y < bottom && b.bottom > top;
-      }).map((el) => el.id);
-      if (hits.length > 0) setSelectedIds(new Set(hits));
-    }
-  };
-
-  // Rendered into <body> rather than in place. The print stylesheet keeps a
-  // single top-level node alive (`body > *:not(.ppm-overlay)` is display:none
-  // — see globals.css) and that only works if this overlay actually IS a
-  // direct child of body; nested inside the dashboard tree, its ancestors
-  // would either be hidden with it or keep emitting their own page boxes,
-  // which is what produced the extra sheets. Safe without a mounted guard:
-  // the parent only renders this once the organizer clicks Print / Export,
-  // so it never executes during SSR.
-  return createPortal(
-    <div className="ppm-overlay" role="dialog" aria-modal="true" aria-label="Print preview">
-      <div className="ppm-toolbar">
-        <div className="ppm-toolbar-copy">
-          <h2 style={{ margin: 0, fontFamily: 'var(--font-serif)', fontSize: 17, fontWeight: 600, color: '#fff' }}>Print Preview</h2>
-          <p style={{ margin: '3px 0 0', fontSize: 11.5, color: 'rgba(255,255,255,0.7)' }}>
-            {selectedIds.size > 1
-              ? `${selectedIds.size} elements selected — drag any one of them to move the whole group.`
-              : 'Drag a table or zone to move it, Shift/Ctrl-click or drag a box to select several at once — your live seating map is unaffected.'}
-          </p>
-        </div>
-        <div className="ppm-toolbar-actions">
-          {selectedIds.size > 0 && (
-            <button type="button" onClick={() => setSelectedIds(new Set())} className="ppm-btn ppm-btn-ghost">Deselect</button>
-          )}
-          {hasOverrides && (
-            <button type="button" onClick={() => { setOverrides({}); setSelectedIds(new Set()); }} className="ppm-btn ppm-btn-ghost">Reset Layout</button>
-          )}
-          <button type="button" onClick={() => window.print()} disabled={isEmpty} className="ppm-btn ppm-btn-primary">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9V2h12v7" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><rect x="6" y="14" width="12" height="8" /></svg>
-            Print
-          </button>
-          <button type="button" onClick={onClose} className="ppm-btn ppm-btn-ghost">Close</button>
-        </div>
-      </div>
-
-      <div className="ppm-sheet-wrap">
-        {isEmpty ? (
-          <div style={{ padding: 60, textAlign: 'center', color: C.stone, fontFamily: 'var(--font-sans, sans-serif)' }}>
-            Add at least one table or zone to the seating map before printing.
-          </div>
-        ) : (
-          <div className="print-seating-chart">
-            <div className="print-page" style={{ display: 'flex', flexDirection: 'column', height: '95vh' }}>
-              <PrintLetterhead eventTitle={eventTitle} eventTimezone={eventTimezone} organizerName={organizerName} formattedDate={formattedDate} stats={stats} />
-
-              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexWrap: 'wrap', gap: 20, margin: '14px 0' }}>
-                {/* ── Floor plan — the visual centerpiece, ~60% of the sheet width ── */}
-                {/* The frame and the legend rule are INK too — C.border is a warm
-                    beige that prints as an off-grey next to true-black geometry,
-                    which is exactly the kind of near-miss that makes a mono
-                    printout look accidental rather than designed. */}
-                <div className="print-diagram-frame" style={{ flex: roster.length > 0 ? '1.45 1 0' : '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0, borderRadius: 12, border: `1px solid ${INK}33`, overflow: 'hidden', background: '#FFFFFF' }}>
-                  <svg
-                    ref={svgRef}
-                    viewBox={`${minX} ${minY} ${boxW} ${boxH}`}
-                    preserveAspectRatio="xMidYMid meet"
-                    style={{ width: '100%', flex: 1, minHeight: 0, display: 'block', touchAction: 'none' }}
-                    onPointerDown={onSvgBackgroundPointerDown}
-                    onPointerMove={onSvgPointerMove}
-                    onPointerUp={endDrag}
-                    onPointerCancel={endDrag}
-                  >
-                    {/* Paper. Plain white, and nothing else is ever painted
-                        behind an element — see the INK note above. */}
-                    <rect x={minX} y={minY} width={boxW} height={boxH} fill="#FFFFFF" />
-                    {displayElements.map((el) => {
-                      const zone = isZone(el);
-                      const meta = shapeMeta(el.shape);
-                      const w = elWidth(el);
-                      const h = elHeight(el);
-                      const cx = elCenterX(el);
-                      const cy = elCenterY(el);
-                      const rot = Number(el.rotation) || 0;
-                      const moved = !!overrides[el.id];
-                      const selected = selectedIds.has(el.id);
-
-                      // Zone glyph — sized to the shape but bounded, so a huge
-                      // hall outline doesn't get a comically large icon and a
-                      // small DJ booth still gets a legible one.
-                      const glyph = zone ? ICON_PATHS[meta.icon] : null;
-                      const gs = Math.max(34, Math.min(72, Math.min(w, h) * 0.42));
-                      // Number size tracks the table, bounded so a 96px round
-                      // table and a 250px head table both stay readable.
-                      const numSize = Math.max(26, Math.min(38, Math.min(w, h) * 0.42));
-
-                      return (
-                        <g key={el.id} onPointerDown={(e) => onElPointerDown(e, el)} style={{ cursor: dragging ? 'grabbing' : 'grab' }}>
-                          {/* Selection halo and the "moved on this printout" mark
-                              are PREVIEW affordances, not part of the document —
-                              .ppm-screen-only hides both at print time (globals.css),
-                              so a sheet printed with something still selected comes
-                              out identical to one printed with nothing selected. */}
-                          {selected && (
-                            <g className="ppm-screen-only" transform={`translate(${cx} ${cy}) rotate(${rot})`}>
-                              {meta.round ? (
-                                <ellipse rx={w / 2 + 7} ry={h / 2 + 7} fill="none" stroke={C.gold} strokeWidth={2.5} strokeOpacity={0.45} />
-                              ) : (
-                                <rect x={-w / 2 - 7} y={-h / 2 - 7} width={w + 14} height={h + 14} rx={zone ? 16 : 18} fill="none" stroke={C.gold} strokeWidth={2.5} strokeOpacity={0.45} />
-                              )}
-                            </g>
-                          )}
-                          {moved && (
-                            <g className="ppm-screen-only" transform={`translate(${cx} ${cy}) rotate(${rot})`}>
-                              {meta.round ? (
-                                <ellipse rx={w / 2 + 3} ry={h / 2 + 3} fill="none" stroke={C.gold} strokeWidth={2} strokeDasharray="10 6" />
-                              ) : (
-                                <rect x={-w / 2 - 3} y={-h / 2 - 3} width={w + 6} height={h + 6} rx={zone ? 14 : 16} fill="none" stroke={C.gold} strokeWidth={2} strokeDasharray="10 6" />
-                              )}
-                            </g>
-                          )}
-
-                          {/* THE SHAPE. Ink outline, white fill, nothing else.
-                              A table is a solid rule; a zone is a dashed one, which
-                              is how every real floor plan distinguishes "furniture
-                              you sit at" from "an area of the room" without needing
-                              a single drop of colour. */}
-                          <g transform={`translate(${cx} ${cy}) rotate(${rot})`}>
-                            {meta.round ? (
-                              <ellipse rx={w / 2} ry={h / 2} fill="#FFFFFF" stroke={INK} strokeWidth={zone ? 1.6 : 2.6} strokeOpacity={zone ? 0.55 : 1} strokeDasharray={zone ? '11 8' : undefined} />
-                            ) : (
-                              <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={zone ? 12 : 14} fill="#FFFFFF" stroke={INK} strokeWidth={zone ? 1.6 : 2.6} strokeOpacity={zone ? 0.55 : 1} strokeDasharray={zone ? '11 8' : undefined} />
-                            )}
-                          </g>
-
-                          {/* THE ONE THING ON EACH ELEMENT.
-                              A table carries its number and nothing else — no
-                              occupancy count, no guest name, no fill. A zone
-                              carries its glyph and nothing else; the legend under
-                              the diagram is what names it. Both stay upright
-                              regardless of the shape's rotation. */}
-                          <g transform={`translate(${cx} ${cy})`} style={{ pointerEvents: 'none' }}>
-                            {zone ? (
-                              glyph && (
-                                <g
-                                  transform={`translate(${-gs / 2} ${-gs / 2}) scale(${gs / 24})`}
-                                  fill="none" stroke={INK} strokeOpacity={0.72}
-                                  strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"
-                                >
-                                  {glyph}
-                                </g>
-                              )
-                            ) : (
-                              <text
-                                // SVG text sits on its baseline, so optically
-                                // centring means dropping it by roughly a third
-                                // of the cap height. A fixed offset would float
-                                // high on a big head table and sit low on a small
-                                // round one; scaling with the type keeps every
-                                // number centred in its own shape.
-                                y={numSize * 0.35}
-                                textAnchor="middle"
-                                fontFamily="var(--font-sans, sans-serif)"
-                                fontSize={numSize}
-                                fontWeight={800}
-                                fill={INK}
-                              >
-                                {el.table_name}
-                              </text>
-                            )}
-                          </g>
-                        </g>
-                      );
-                    })}
-                    {/* Shift-drag rubber-band select — same world-space coordinates
-                        everything else here uses, so no separate screen<->world
-                        conversion is needed to draw it. */}
-                    {marquee && (
-                      <rect
-                        x={Math.min(marquee.x0, marquee.x1)} y={Math.min(marquee.y0, marquee.y1)}
-                        width={Math.abs(marquee.x1 - marquee.x0)} height={Math.abs(marquee.y1 - marquee.y0)}
-                        fill="rgba(184,148,79,0.12)" stroke={C.gold} strokeWidth={1.5} strokeDasharray="6 4"
-                        style={{ pointerEvents: 'none' }}
-                      />
-                    )}
-                  </svg>
-
-                  {/* ── Key to the glyphs. Only rendered when there are zones. ──
-                      Sits inside the framed diagram rather than under it, so the
-                      plan and its key read as one figure and the key can never be
-                      separated from the drawing it explains by a page break. */}
-                  {zoneLegend.length > 0 && (
-                    <div style={{
-                      flexShrink: 0, borderTop: `1px solid ${INK}26`, padding: '8px 12px',
-                      display: 'flex', flexWrap: 'wrap', gap: '6px 18px', justifyContent: 'center',
-                      fontFamily: 'var(--font-sans, sans-serif)',
-                    }}>
-                      {zoneLegend.map((z) => (
-                        <span key={z.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10, color: INK, letterSpacing: '0.04em' }}>
-                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={INK} strokeOpacity={0.72} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                            {ICON_PATHS[z.icon]}
-                          </svg>
-                          <span style={{ textTransform: 'uppercase', fontWeight: 700 }}>{z.name}</span>
-                          {z.count > 1 && <span style={{ opacity: 0.55, fontWeight: 600 }}>×{z.count}</span>}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* ── Table Assignments — same sheet, right-hand column. Column
-                    count/type size adapt to guest volume so this never needs
-                    its own page. ── */}
-                {roster.length > 0 && (
-                  <div style={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-                    <h2 style={{ fontFamily: 'var(--font-serif, serif)', fontSize: 15, fontWeight: 600, margin: '0 0 10px', color: INK, textAlign: 'center', fontStyle: 'italic', flexShrink: 0 }}>
-                      Table Assignments
-                    </h2>
-                    <div style={{
-                      flex: 1, minHeight: 0, overflow: 'hidden', display: 'grid',
-                      gridTemplateColumns: `repeat(${rosterCols}, 1fr)`, gap: '6px 12px', alignContent: 'start',
-                    }}>
-                      {roster.map((t) => (
-                        /* No card fill and no rounded box — a hairline rule under
-                           each table name. Fifty tinted cards on one sheet is the
-                           other half of "شيل اي خلفيات": on paper they read as
-                           fifty grey rectangles, and the guest names inside them
-                           are the thing anybody is trying to read. */
-                        <div key={t.id} style={{ breakInside: 'avoid', padding: rosterPad, paddingLeft: 0, paddingRight: 0 }}>
-                          <div style={{ fontWeight: 800, fontSize: rosterFontSize + 1, color: INK, marginBottom: 3, paddingBottom: 2, borderBottom: `1px solid ${INK}`, display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: 8 }}>
-                            <span>{t.name}</span> <span style={{ fontWeight: 600, opacity: 0.55 }}>{t.guests.length}</span>
-                          </div>
-                          <div style={{ fontSize: rosterFontSize, lineHeight: 1.5, color: INK, opacity: 0.85 }}>{t.guests.join(', ')}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <PrintFooter />
-            </div>
-          </div>
-        )}
-      </div>
-    </div>,
-    document.body,
-  );
-}
 
 /* ════════════════════════════════════════════════════════════════
    Add element modal — pick a shape (table) or a zone, then details

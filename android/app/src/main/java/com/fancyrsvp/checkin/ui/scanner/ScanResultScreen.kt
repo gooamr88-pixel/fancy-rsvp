@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -63,6 +64,7 @@ import com.fancyrsvp.checkin.ui.theme.Motion
 import com.fancyrsvp.checkin.ui.theme.StateAlready
 import com.fancyrsvp.checkin.ui.theme.StateAttention
 import com.fancyrsvp.checkin.ui.theme.displayFamilyFor
+import com.fancyrsvp.checkin.ui.theme.safeChrome
 import java.text.DateFormat
 import java.util.Date
 
@@ -146,99 +148,148 @@ fun ScanResultScreen(
         }
 
         /*
-         * ── Two columns, not one ──
+         * ── Two panels, split along whichever axis the window is longer on ──
          *
-         * WHO on the left, WHERE on the right, with a hairline seam between.
+         * WHO first, WHERE second, with a hairline seam between: side by side in
+         * landscape, stacked in portrait.
          *
-         * This screen has two readers at once and they want different things.
-         * The usher needs the table number — it is the thing they say out loud —
-         * and the guest, standing in front of the tablet, is looking for their own
-         * name. Stacked in one column those two compete for the same vertical
-         * space on a screen that has none to spare, and the table ends up either
-         * shrunk or pushed under the fold.
+         * This screen has two readers at once and they want different things. The
+         * usher needs the table number — it is the thing they say out loud — and
+         * the guest, standing in front of the tablet, is looking for their own
+         * name. Give them one shared column on the SHORT axis and they compete:
+         * the table ends up either shrunk or pushed under the fold.
          *
-         * Side by side, each reader has a half. It also puts the largest element
-         * on the screen — the table — nearest the usher's thumb rather than in
-         * the middle of the guest's sightline.
+         * So the split always runs along the long axis, and each reader gets a
+         * half of the dimension there is most of. That also keeps the largest
+         * element on the screen — the table — nearest the usher's thumb in both
+         * shapes, rather than in the middle of the guest's sightline: at the right
+         * hand in landscape, at the bottom in portrait.
          */
-        Row(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
+                // The ground above stays full-bleed — a result screen that stopped
+                // short of the edges would read as a card floating on the camera.
+                // Only the content is pushed clear of the system bars.
+                .safeChrome()
                 .padding(
                     start = dimens.screenPadding,
                     end = dimens.screenPadding,
                     top = dimens.screenPadding * 0.5f,
                     bottom = dimens.screenPadding * 0.45f,
                 ),
-            horizontalArrangement = Arrangement.spacedBy(dimens.sectionGap),
         ) {
-            Column(
-                // 1.15 against 1: the identity side carries more words, the table
-                // side carries one very large glyph. Equal halves would crowd the
-                // name and strand the number in whitespace.
-                modifier = Modifier.weight(1.15f).fillMaxHeight(),
-                verticalArrangement = Arrangement.Center,
-            ) {
-                // The content region is weighted and the action is NOT. If a very
-                // long name and a long fact list ever exceed the height, this
-                // region clips — the button never moves off the bottom of the
-                // screen. Losing a descender is survivable; losing the button is
-                // not.
+            /*
+             * Measured, not assumed. This was an unconditional Row, written when
+             * the manifest locked the app to landscape; unlocking rotation turned
+             * that assumption into a portrait layout with two half-width columns.
+             */
+            val sideBySide = maxWidth >= maxHeight
+
+            val identity: @Composable (Modifier) -> Unit = { slot ->
                 Column(
-                    modifier = Modifier.weight(1f, fill = false).fillMaxWidth(),
+                    modifier = slot,
                     verticalArrangement = Arrangement.Center,
                 ) {
-                    when (visual) {
-                        ResultVisual.Welcome, ResultVisual.Vip ->
-                            WelcomeContent(
-                                party = party,
-                                visual = visual,
-                                noKidsAllowed = noKidsAllowed,
-                                wasExpired = outcome is CheckInRepository.ScanOutcome.Expired,
-                            )
+                    // The content region is weighted and the action is NOT. If a very
+                    // long name and a long fact list ever exceed the height, this
+                    // region clips — the button never moves off the bottom of the
+                    // screen. Losing a descender is survivable; losing the button is
+                    // not.
+                    Column(
+                        modifier = Modifier.weight(1f, fill = false).fillMaxWidth(),
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        when (visual) {
+                            ResultVisual.Welcome, ResultVisual.Vip ->
+                                WelcomeContent(
+                                    party = party,
+                                    visual = visual,
+                                    noKidsAllowed = noKidsAllowed,
+                                    wasExpired = outcome is CheckInRepository.ScanOutcome.Expired,
+                                )
 
-                        ResultVisual.Already -> AlreadyContent(party = party, visual = visual)
+                            ResultVisual.Already -> AlreadyContent(party = party, visual = visual)
 
-                        ResultVisual.NotFound -> NotFoundContent(visual = visual)
+                            ResultVisual.NotFound -> NotFoundContent(visual = visual)
 
-                        ResultVisual.Foreign -> ForeignCodeContent(visual = visual)
+                            ResultVisual.Foreign -> ForeignCodeContent(visual = visual)
+                        }
+                    }
+
+                    Spacer(Modifier.height(dimens.sectionGap))
+
+                    Reveal(order = 4) {
+                        ResultActions(
+                            visual = visual,
+                            party = party,
+                            isSupervisor = isSupervisor,
+                            onAdmit = onAdmit,
+                            onOverride = onOverride,
+                            onSearch = onSearch,
+                            onDismiss = onDismiss,
+                            onPickMembers = { picking = true },
+                        )
                     }
                 }
+            }
 
-                Spacer(Modifier.height(dimens.sectionGap))
-
-                Reveal(order = 4) {
-                    ResultActions(
-                        visual = visual,
-                        party = party,
-                        isSupervisor = isSupervisor,
-                        onAdmit = onAdmit,
-                        onOverride = onOverride,
-                        onSearch = onSearch,
-                        onDismiss = onDismiss,
-                        onPickMembers = { picking = true },
-                    )
+            val destination: @Composable (Modifier) -> Unit = { slot ->
+                Column(
+                    modifier = slot,
+                    verticalArrangement = Arrangement.Center,
+                    // Pushed to the outer edge beside the seam in landscape; centred
+                    // under it when the seam runs across the screen instead.
+                    horizontalAlignment =
+                        if (sideBySide) Alignment.End else Alignment.CenterHorizontally,
+                ) {
+                    Reveal(order = 3) {
+                        ResultDestination(visual = visual, party = party)
+                    }
                 }
             }
 
             // The engraved seam. A hairline at 28% opacity, inset from both ends —
             // it reads as a fold in card stock rather than as a divider between
-            // two panels of a form.
-            Box(
-                Modifier
-                    .padding(vertical = dimens.sectionGap)
-                    .width(1.dp)
-                    .fillMaxHeight()
-                    .background(visual.onGround.copy(alpha = 0.28f)),
-            )
+            // two panels of a form. It turns with the layout.
+            val seam = visual.onGround.copy(alpha = 0.28f)
 
-            Column(
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.End,
-            ) {
-                Reveal(order = 3) {
-                    ResultDestination(visual = visual, party = party)
+            if (sideBySide) {
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(dimens.sectionGap),
+                ) {
+                    // 1.15 against 1: the identity side carries more words, the table
+                    // side carries one very large glyph. Equal halves would crowd the
+                    // name and strand the number in whitespace.
+                    identity(Modifier.weight(1.15f).fillMaxHeight())
+
+                    Box(
+                        Modifier
+                            .padding(vertical = dimens.sectionGap)
+                            .width(1.dp)
+                            .fillMaxHeight()
+                            .background(seam),
+                    )
+
+                    destination(Modifier.weight(1f).fillMaxHeight())
+                }
+            } else {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(dimens.sectionGap),
+                ) {
+                    identity(Modifier.weight(1.15f).fillMaxWidth())
+
+                    Box(
+                        Modifier
+                            .padding(horizontal = dimens.sectionGap)
+                            .height(1.dp)
+                            .fillMaxWidth()
+                            .background(seam),
+                    )
+
+                    destination(Modifier.weight(1f).fillMaxWidth())
                 }
             }
         }

@@ -158,12 +158,18 @@ class HardwareScanSource @Inject constructor(
         }
     }
 
-    /** Best-effort teardown. Every step is optional; none may throw. */
+    /**
+     * Best-effort teardown. Every step is optional; none may throw.
+     *
+     * Only calls the two the vendor's own sample calls. `ts_scan_deinit` exists in
+     * the SDK's constant pool, but nothing in their demo invokes it, so its
+     * parameter list is a guess — and a wrong guess here is a COMPILE error, which
+     * runCatching cannot save us from. Closing the port is what actually matters.
+     */
     private fun releaseEngine() {
         val scan = engine ?: return
         runCatching { scan.ts_scan_decode_stop() }
         runCatching { scan.ts_scan_uart_close() }
-        runCatching { scan.ts_scan_deinit() }
         engine = null
     }
 

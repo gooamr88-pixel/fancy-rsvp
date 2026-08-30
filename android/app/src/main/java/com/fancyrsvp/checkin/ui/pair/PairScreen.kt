@@ -40,6 +40,7 @@ import com.fancyrsvp.checkin.ui.components.SecondaryAction
 import com.fancyrsvp.checkin.ui.components.SetupHeader
 import com.fancyrsvp.checkin.ui.components.SetupStep
 import com.fancyrsvp.checkin.ui.theme.LocalDimens
+import com.fancyrsvp.checkin.ui.theme.safeChrome
 
 /**
  * Device pairing (spec §18.3).
@@ -81,6 +82,10 @@ fun PairScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                // Clear of the system bars and any cutout, before the design's own
+                // padding is added inside that. The Surface above still paints the
+                // full window, so the bars sit on the app's colour.
+                .safeChrome()
                 .padding(
                     horizontal = dimens.screenPadding,
                     vertical = dimens.screenPadding * 0.5f,

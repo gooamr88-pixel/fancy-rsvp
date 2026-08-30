@@ -55,6 +55,20 @@ describe('the guest plan is numbered, not labelled', () => {
     const src = read('dashboard/seating-map/page.js');
     expect(src).not.toMatch(/seatingPlanStyle/);
   });
+
+  it('the PRINTED plan is bound by it, and that is the point of the split', () => {
+    // The editor and the export used to be the same file, which made "is this
+    // surface a work surface or a finished artefact" unanswerable. It is
+    // answerable now: the canvas is a work surface, the printed pack is an
+    // artefact read at arm's length in a room, and it takes the same numeral
+    // rule the guest maps take. Before this, the export drew {el.table_name}
+    // raw at 38px inside a 96px table, so an organizer who named their tables
+    // "Table 12" printed eight characters spilling out of every one of them.
+    const src = read('dashboard/seating-map/SeatingChartPrint.js');
+    expect(src).toMatch(/from '\.\.\/\.\.\/utils\/seatingPlanStyle'/);
+    expect(src).toMatch(/planNumeral\(el\.table_name\)/);
+    expect(src).not.toMatch(/\{\s*el\.table_name\s*\}/);
+  });
 });
 
 describe('planNumeral', () => {

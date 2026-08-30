@@ -30,6 +30,7 @@ import com.fancyrsvp.checkin.ui.components.SecondaryAction
 import com.fancyrsvp.checkin.ui.components.SetupRail
 import com.fancyrsvp.checkin.ui.components.Wordmark
 import com.fancyrsvp.checkin.ui.theme.LocalDimens
+import com.fancyrsvp.checkin.ui.theme.safeChrome
 
 /**
  * The first thing an unpaired tablet shows.
@@ -88,9 +89,9 @@ fun WelcomeScreen(
         /*
          * ScrollableCenteredColumn, not a plain Column with weighted spacers.
          *
-         * It was the latter, and that clips. This app is locked to landscape and
-         * its own layout comments are written against a 390dp-tall landscape
-         * phone; this screen stacks a large script wordmark, a headline, a
+         * It was the latter, and that clips. The tightest case this has to survive
+         * is a 390dp-tall landscape phone; this screen stacks a large script
+         * wordmark, a headline, a
          * tagline, an 88dp hero, a secondary action, a notice and the step rail,
          * which is more than that height holds. Weighted spacers collapse to
          * zero and then the overflow is simply cut off — taking the step rail
@@ -101,10 +102,15 @@ fun WelcomeScreen(
          * not. Same component PrepareScreen uses for the same reason.
          */
         ScrollableCenteredColumn(
-            modifier = Modifier.padding(
-                horizontal = dimens.screenPadding,
-                vertical = dimens.screenPadding * 0.5f,
-            ),
+            // Insets before the design padding: the Surface above keeps the full
+            // window so its colour runs under the system bars, and the content is
+            // pushed clear of them.
+            modifier = Modifier
+                .safeChrome()
+                .padding(
+                    horizontal = dimens.screenPadding,
+                    vertical = dimens.screenPadding * 0.5f,
+                ),
         ) {
             // The mark is the content here, not a header on top of it, so it is
             // set large and centred rather than tucked into a corner. Every

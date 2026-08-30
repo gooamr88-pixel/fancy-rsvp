@@ -204,9 +204,16 @@ fun MenuScreen(
             // the one nobody has thought about.
             //
             // Two columns is kept even on a phone rather than collapsing to one.
-            // The app is locked to landscape, so width is the ABUNDANT axis on
-            // every device — a landscape phone is around 870dp wide. Stacking
-            // would spend the axis there is plenty of to make the shortage worse.
+            // In landscape width is the abundant axis — a landscape phone is
+            // around 870dp wide — and stacking would spend the axis there is
+            // plenty of to make the shortage worse.
+            //
+            // Rotation is unlocked now, so this is no longer true everywhere. On a
+            // tablet in portrait (~800dp) two columns still sit comfortably; on a
+            // PORTRAIT PHONE (~390dp) they are about 180dp each, which is tight.
+            // Left as-is deliberately: it degrades rather than breaks, and this is
+            // a secondary screen. Worth a look if the app is ever run on a phone
+            // in portrait for real.
             Column(
                 modifier = Modifier
                     .weight(1f)

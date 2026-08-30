@@ -1,0 +1,252 @@
+@echo off
+REM  NOT EnableDelayedExpansion. It makes '!' a metacharacter, and cmd then eats
+REM  it out of any string on the line - including the '!' in a remote
+REM  `if [ ! -d /var/www/apk ]`, which reached bash as an unbalanced command and
+REM  failed the publish step with "unexpected EOF while looking for matching '".
+REM  Nothing here needs !var! expansion.
+setlocal
+
+REM ============================================================================
+REM  Fancy check-in app  —  upload to the build VPS and build a release APK
+REM ============================================================================
+REM
+REM  Usage, from anywhere:
+REM      deploy-android.bat            upload everything, verify, build, install
+REM      deploy-android.bat src        upload app/src only, verify, build, install
+REM      deploy-android.bat check      verify what is on the server, no upload
+REM      deploy-android.bat install    pull the built APK and install it, no build
+REM      deploy-android.bat publish    republish the last built APK, no rebuild
+REM
+REM  Full mode PUBLISHES to https://fancyrsvp.com/download/fancy-checkin.apk —
+REM  the file customers get from the /checkin-app page. Every successful build
+REM  goes live. The previous APK is kept as fancy-checkin.previous.apk and the
+REM  rollback command is printed at the end of every publish.
+REM
+REM  ── Why this script exists ──
+REM
+REM  Three separate build failures came from the SAME cause: a file that lives
+REM  OUTSIDE app/src was edited locally and never uploaded, so the VPS built
+REM  stale sources and the APK looked fine.
+REM
+REM      app/libs/uart_scan_pro.jar    missing  -> mergeReleaseNativeLibs failed
+REM      app/proguard-rules.pro        stale    -> R8 renames the JNI callbacks,
+REM                                               build goes green, scanner dead
+REM      app/build.gradle.kts          stale    -> orientation never changed
+REM
+REM  So this uploads all four paths and then VERIFIES each one landed before it
+REM  spends two minutes on a build. A silent scp failure is caught here, not
+REM  after the APK is on a tablet.
+REM
+REM  ── Tip: stop typing the password six times ──
+REM
+REM      ssh-keygen -t ed25519
+REM      type %USERPROFILE%\.ssh\id_ed25519.pub | ssh root@HOST "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
+REM ============================================================================
+
+set HOST=root@187.77.1.72
+set REMOTE=/root/fancy-android
+set MODE=%~1
+if "%MODE%"=="" set MODE=full
+
+REM  adb is installed with the Android SDK but is NOT on PATH on this machine,
+REM  so `adb install` fails with "not recognized" — which is exactly how a build
+REM  got verified as correct on the server and then never reached the tablet.
+REM  Two hours of rotation testing ran against a stale APK because of it.
+set ADB=%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe
+
+cd /d "%~dp0"
+if not exist "android\app\build.gradle.kts" (
+    echo [X] Run this from the repo root - android\app\build.gradle.kts not found.
+    exit /b 1
+)
+
+echo.
+echo ============================================================
+echo  Fancy check-in  -  deploy  [mode: %MODE%]
+echo  Host   : %HOST%
+echo  Remote : %REMOTE%
+echo ============================================================
+
+if "%MODE%"=="check" goto :verify
+if "%MODE%"=="install" goto :install
+if "%MODE%"=="publish" goto :publish
+
+REM ── 1. Sources ──────────────────────────────────────────────
+REM  app/src carries the Kotlin, the resources, AndroidManifest.xml AND the
+REM  native .so files (they live in src/main/jniLibs on purpose, so they ride
+REM  along with this one copy instead of being forgotten).
+echo.
+echo [1/4] app\src  (code, resources, manifest, jniLibs)
+ssh %HOST% "rm -rf %REMOTE%/app/src"
+if errorlevel 1 goto :sshfail
+scp -r "android\app\src" %HOST%:%REMOTE%/app/
+if errorlevel 1 goto :scpfail
+
+if "%MODE%"=="src" goto :gradleonly
+
+REM ── 2. Scanner SDK ──────────────────────────────────────────
+echo.
+echo [2/4] app\libs  (uart_scan_pro.jar - the scanner SDK)
+ssh %HOST% "rm -rf %REMOTE%/app/libs"
+if errorlevel 1 goto :sshfail
+scp -r "android\app\libs" %HOST%:%REMOTE%/app/
+if errorlevel 1 goto :scpfail
+
+:gradleonly
+REM ── 3 and 4. The two files that live outside app/src ────────
+REM  Full destination FILENAMES, not a directory with a trailing slash:
+REM  OpenSSH 9's SFTP-backed scp rejects some directory destinations.
+echo.
+echo [3/4] app\build.gradle.kts
+scp "android\app\build.gradle.kts" %HOST%:%REMOTE%/app/build.gradle.kts
+if errorlevel 1 goto :scpfail
+
+echo.
+echo [4/4] app\proguard-rules.pro
+scp "android\app\proguard-rules.pro" %HOST%:%REMOTE%/app/proguard-rules.pro
+if errorlevel 1 goto :scpfail
+
+REM ── Verify before building ──────────────────────────────────
+:verify
+echo.
+echo ------------------------------------------------------------
+echo  Verifying what is actually on the server
+echo ------------------------------------------------------------
+REM  Separated by ';' and closed with 'true', NOT chained with '&&'.
+REM  grep -c exits 1 when the count is zero, which would abort an && chain and
+REM  report it as an SSH failure - hiding the one number that actually told you
+REM  the R8 keep rules never arrived.
+ssh %HOST% "cd %REMOTE%; echo -n 'scanner jar (bytes): '; stat -c %%s app/libs/uart_scan_pro.jar 2>/dev/null || echo MISSING; echo -n 'native .so count   : '; find app/src/main/jniLibs -name '*.so' 2>/dev/null | wc -l; echo -n 'R8 keep rules      : '; grep -c com.tool app/proguard-rules.pro; echo -n 'orientation        : '; grep -o 'fullSensor\|fullUser\|userLandscape\|userPortrait\|sensorLandscape' app/build.gradle.kts | tail -1; echo -n 'kotlin files       : '; find app/src -name '*.kt' | wc -l; true"
+if errorlevel 1 goto :sshfail
+
+echo.
+echo  Expected: jar 61336 . so count 4 . keep rules 6 . kotlin 84
+echo.
+if "%MODE%"=="check" goto :done
+
+choice /c YN /n /m "Numbers look right? Build now? [Y/N] "
+if errorlevel 2 goto :aborted
+
+REM ── Build ───────────────────────────────────────────────────
+echo.
+echo ------------------------------------------------------------
+echo  Building release APK
+echo ------------------------------------------------------------
+REM  VERSION_CODE is computed ON THE SERVER, as minutes since the epoch.
+REM  Windows' `date` output is locale-dependent and unparseable as a portable
+REM  number; the Linux side gives one that always increases. build.gradle.kts
+REM  reads it through the same prop() helper as every other injected setting.
+ssh %HOST% "cd %REMOTE% && VERSION_CODE=$(( $(date +%%s) / 60 )) ./gradlew :app:testReleaseUnitTest :app:assembleRelease"
+if errorlevel 1 (
+    echo.
+    echo [X] BUILD FAILED - the compiler output above is the real answer.
+    echo     Send it verbatim rather than summarising it.
+    exit /b 1
+)
+
+REM ── Publish to the public download URL ──────────────────────
+REM  This is the file customers get from /checkin-app. It is replaced ATOMICALLY:
+REM  copy to a temp name on the same filesystem, then mv. A plain cp over a live
+REM  file can be served half-written to whoever downloads during the copy.
+REM
+REM  The previous APK is kept beside it, so a bad publish is one command to undo.
+echo.
+echo ------------------------------------------------------------
+echo  Publishing to the public download URL
+echo ------------------------------------------------------------
+ssh %HOST% "set -e; cd %REMOTE%; APK=app/build/outputs/apk/release/app-release.apk; test -d /var/www/apk || { echo 'SKIPPED: /var/www/apk not on this host - build server and web server are different machines'; exit 0; }; if [ -f /var/www/apk/fancy-checkin.apk ]; then cp /var/www/apk/fancy-checkin.apk /var/www/apk/fancy-checkin.previous.apk; fi; cp $APK /var/www/apk/.publish.tmp; mv /var/www/apk/.publish.tmp /var/www/apk/fancy-checkin.apk; echo -n 'built  : '; md5sum $APK | cut -d' ' -f1; echo -n 'live   : '; md5sum /var/www/apk/fancy-checkin.apk | cut -d' ' -f1; ls -l /var/www/apk/"
+if errorlevel 1 (
+    echo.
+    echo [X] PUBLISH FAILED. The build is fine; the public URL still has the old APK.
+    exit /b 1
+)
+echo.
+echo  The two checksums above MUST match. Roll back with:
+echo    ssh %HOST% "mv /var/www/apk/fancy-checkin.previous.apk /var/www/apk/fancy-checkin.apk"
+
+REM ── Confirm the APK is what we think it is ──────────────────
+echo.
+echo ------------------------------------------------------------
+echo  What actually got built
+echo ------------------------------------------------------------
+ssh %HOST% "cd %REMOTE% && echo -n 'orientation in APK : ' && grep -rho 'screenOrientation=[^ ]*' app/build/intermediates --include=AndroidManifest.xml | sort -u | tr '\n' ' ' && echo '' && ls -l app/build/outputs/apk/release/app-release.apk"
+
+REM ── Pull it down and put it on the tablet ───────────────────
+REM  Not optional, and not a convenience step. A build that is verified correct
+REM  on the server and never installed is indistinguishable, from the outside,
+REM  from a change that did not work — which is precisely how a whole afternoon
+REM  went into diagnosing an orientation setting that was already right.
+:install
+echo.
+echo ------------------------------------------------------------
+echo  Fetching the APK
+echo ------------------------------------------------------------
+if exist app-release.apk del /q app-release.apk
+scp %HOST%:%REMOTE%/app/build/outputs/apk/release/app-release.apk .
+if errorlevel 1 goto :scpfail
+for %%F in (app-release.apk) do echo  Downloaded: %%~tF  (%%~zF bytes)
+
+if not exist "%ADB%" (
+    echo.
+    echo [!] adb not found at %ADB%
+    echo     Install app-release.apk on the tablet by hand, then test rotation.
+    goto :done
+)
+
+echo.
+echo ------------------------------------------------------------
+echo  Installing
+echo ------------------------------------------------------------
+"%ADB%" devices
+"%ADB%" install -r app-release.apk
+if errorlevel 1 (
+    REM  Not a failure of the deploy. By this point the build succeeded and the
+    REM  APK is already live on the public URL - a tablet simply is not plugged
+    REM  into THIS machine, which is the normal case when someone else has it.
+    echo.
+    echo [!] Not installed over USB - no device attached to this machine.
+    echo     The build is published, so it can be fetched on the tablet from:
+    echo       https://fancyrsvp.com/download/fancy-checkin.apk
+    echo     Or plug it in, enable USB debugging, and run: deploy-android.bat install
+    goto :done
+)
+
+echo.
+echo ============================================================
+echo  Installed. The timestamp above is the build you are testing.
+echo ============================================================
+goto :done
+
+REM ── Publish only, without rebuilding ────────────────────────
+:publish
+echo.
+echo ------------------------------------------------------------
+echo  Publishing the LAST BUILT APK to the public download URL
+echo ------------------------------------------------------------
+ssh %HOST% "set -e; cd %REMOTE%; APK=app/build/outputs/apk/release/app-release.apk; test -f $APK || { echo 'No APK built yet - run deploy-android.bat first'; exit 1; }; test -d /var/www/apk || { echo 'SKIPPED: /var/www/apk not on this host'; exit 1; }; if [ -f /var/www/apk/fancy-checkin.apk ]; then cp /var/www/apk/fancy-checkin.apk /var/www/apk/fancy-checkin.previous.apk; fi; cp $APK /var/www/apk/.publish.tmp; mv /var/www/apk/.publish.tmp /var/www/apk/fancy-checkin.apk; echo -n 'built  : '; md5sum $APK | cut -d' ' -f1; echo -n 'live   : '; md5sum /var/www/apk/fancy-checkin.apk | cut -d' ' -f1; ls -l /var/www/apk/"
+if errorlevel 1 goto :sshfail
+echo.
+echo  Roll back with:
+echo    ssh %HOST% "mv /var/www/apk/fancy-checkin.previous.apk /var/www/apk/fancy-checkin.apk"
+goto :done
+
+REM ── Failure paths ───────────────────────────────────────────
+:scpfail
+echo.
+echo [X] UPLOAD FAILED. Nothing was built, so the server still has the old code.
+echo     If the error was 'dest open ... No such file or directory', retry with
+echo     the legacy protocol:  scp -O ^<file^> %HOST%:^<full-remote-path^>
+exit /b 1
+
+:sshfail
+echo.
+echo [X] SSH FAILED - wrong password, or the host is unreachable.
+exit /b 1
+
+:aborted
+echo.
+echo Aborted before building. Nothing was changed on the server beyond the upload.
+exit /b 1
+
+:done
+endlocal

@@ -52,6 +52,7 @@ import com.fancyrsvp.checkin.ui.components.pressableSurface
 import com.fancyrsvp.checkin.ui.components.rememberEventCover
 import com.fancyrsvp.checkin.ui.theme.EventBranding
 import com.fancyrsvp.checkin.ui.theme.LocalDimens
+import com.fancyrsvp.checkin.ui.theme.safeChromeTop
 
 /**
  * Entrance display mode (spec §8.8).
@@ -247,6 +248,10 @@ fun EntranceDisplayScreen(
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
+                    // The photograph behind this stays full-bleed — it is the point
+                    // of the screen — but the one control on it must not sit under
+                    // the status bar or a cutout, or staff cannot find the way out.
+                    .safeChromeTop()
                     .padding(16.dp)
                     .heightIn(min = 72.dp)
                     .pressableSurface(

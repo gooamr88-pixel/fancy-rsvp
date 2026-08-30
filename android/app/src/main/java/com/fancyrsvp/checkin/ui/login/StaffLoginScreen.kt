@@ -47,6 +47,7 @@ import com.fancyrsvp.checkin.ui.components.pressableSurface
 import com.fancyrsvp.checkin.ui.components.rememberEventCover
 import com.fancyrsvp.checkin.ui.theme.LocalDimens
 import com.fancyrsvp.checkin.ui.theme.StateAttention
+import com.fancyrsvp.checkin.ui.theme.safeChrome
 import java.text.DateFormat
 import java.util.Date
 
@@ -94,6 +95,9 @@ fun StaffLoginScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                // Clear of the system bars and any cutout first; the design's own
+                // padding then applies inside that.
+                .safeChrome()
                 // Vertical padding is halved against the horizontal. On a phone in
                 // landscape the full 24dp top and bottom is 12% of the whole
                 // window, and there is nothing beside the content competing for

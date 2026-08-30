@@ -75,14 +75,20 @@
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation"
             android:theme="@style/Theme.FancyCheckin">
             <!--
-              Orientation is locked (§21.9). An unexpected rotation mid-scan
-              disrupts the CameraX pipeline and confuses staff at the door.
+              Orientation follows the sensor (fullSensor), and §21.9's lock is
+              retired. It existed because an unexpected rotation was thought to
+              disrupt the CameraX pipeline — but that only happens when the
+              Activity is RECREATED, and the configChanges below have always
+              prevented exactly that. Compose re-measures and the camera keeps
+              running.
 
-              It is a build placeholder rather than a literal because one APK now
-              runs on two shapes of hardware: staff hold tablets in landscape, and
-              the self-service kiosk is a wall-mounted PORTRAIT panel that cannot
-              be turned. It defaults to userLandscape, so nothing about a tablet
-              build changes — see SCREEN_ORIENTATION in build.gradle.kts.
+              fullSensor, not fullUser: fullUser obeys the device's auto-rotate
+              lock, which is off by default on most tablets, and then the app
+              never rotates at all. See build.gradle.kts.
+
+              It stays a build placeholder so a single venue can still pin one
+              unit — SCREEN_ORIENTATION=userPortrait — without a new variant.
+              See build.gradle.kts.
 
               keyboard|navigation were added to configChanges for the kiosk
               scanner. Android treats attaching or detaching an input device as a

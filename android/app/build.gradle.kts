@@ -25,36 +25,61 @@ android {
     namespace = "com.fancyrsvp.checkin"
     compileSdk = 35
 
-    /**
-     * The kiosk scanner SDK ships as a plain JAR plus a native library, not as a
-     * Maven artifact, so both live in `app/libs/` and are wired up by hand.
+    /*
+     * The kiosk scanner SDK is a plain JAR plus a native library, not a Maven
+     * artifact, so the two are wired up by hand — and they live in DIFFERENT
+     * places on purpose:
      *
-     * `libts_serial_port.so` is what actually opens the serial device — the JAR
-     * is only a thin JNI wrapper over it. Four ABIs are shipped; the vendor also
-     * supplies mips/mips64/armeabi, which the current NDK no longer supports and
-     * which no device made this decade uses.
+     *   app/src/main/jniLibs/<abi>/libts_serial_port.so   the native library
+     *   app/libs/uart_scan_pro.jar                        the JNI wrapper
+     *
+     * jniLibs is AGP's default location, so it needs no sourceSets override at
+     * all. An earlier version pointed jniLibs at `app/libs` to keep both in one
+     * folder; that is worth avoiding twice over. It is custom configuration for
+     * no gain, and it puts the .so files outside `app/src`, which is the tree the
+     * deploy script actually copies — so the build failed on a machine where the
+     * natives had silently never arrived.
+     *
+     * Four ABIs. The vendor also ships mips/mips64/armeabi, which the current NDK
+     * has dropped and no device made this decade uses.
      *
      * If the .so for the running device's ABI is missing, `System.loadLibrary`
-     * throws at class-init time inside the vendor code. HardwareScanSource
-     * treats that as "no scanner attached" rather than letting it escape — see
-     * the note there.
+     * throws at class-init time inside the vendor code. HardwareScanSource treats
+     * that as "no scanner attached" rather than letting it escape.
      */
-    sourceSets {
-        getByName("main") {
-            jniLibs.srcDirs("libs")
-        }
-    }
 
     defaultConfig {
         applicationId = "com.fancyrsvp.checkin"
         // API 26 covers effectively every tablet in the market (spec §4).
         minSdk = 26
         targetSdk = 35
-        // Bump both on every build you put on a device. versionCode is what
-        // Android uses to decide an upgrade is an upgrade; versionName is what
-        // the crash report prints, and without it a bug report cannot say which
-        // build actually failed.
-        versionCode = 15
+        /**
+         * versionCode is generated; versionName is written by hand.
+         *
+         * ── Why it had to become automatic ──
+         *
+         * The public APK at fancyrsvp.com/download is now republished by
+         * deploy-android.bat on every build. Android decides "is this an
+         * upgrade?" purely on versionCode, and REFUSES an install whose code is
+         * not greater than the one already on the device. Publishing a new APK
+         * under a code that was already shipped means every tablet that has it
+         * silently ignores the update — the file changes, nothing else does.
+         * A hand-bumped constant cannot survive that; it will be forgotten, and
+         * the failure is invisible until someone at a venue is on an old build.
+         *
+         * The deploy script passes VERSION_CODE as MINUTES SINCE THE EPOCH, so
+         * it always increases, changes at most once a minute, and stays a long
+         * way under Android's 2,100,000,000 ceiling for roughly four thousand
+         * years. It jumps from 15 to about 29,800,000, which is a one-way door —
+         * as every versionCode is.
+         *
+         * The fallback keeps a local or manual build working unchanged.
+         *
+         * versionName stays hand-written because it is the human label: it is
+         * what a crash report prints, and "1.6.1" tells a support conversation
+         * something that a minute count never could.
+         */
+        versionCode = prop("VERSION_CODE", "15").toInt()
         versionName = "1.6.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -68,23 +93,37 @@ android {
         resourceConfigurations += listOf("en")
 
         /**
-         * Screen orientation, because one APK now runs on two shapes of hardware.
+         * Screen orientation.
          *
-         * Staff tablets are held in landscape and that is what every screen was
-         * laid out for. The self-service kiosk is a wall-mounted PORTRAIT panel —
-         * forcing landscape on it rotates the whole interface ninety degrees on a
-         * screen that cannot be turned, which is not a cosmetic problem but an
-         * unusable one.
+         * `fullSensor` — the app follows the physical sensor in all four
+         * orientations, and does so REGARDLESS of the device's auto-rotate lock.
+         * It replaces `userLandscape`, which was written when a staff tablet held
+         * in two hands was the only hardware this ran on. It no longer is: the
+         * self-service kiosk is a wall-mounted PORTRAIT panel, and forcing
+         * landscape on a screen that cannot be turned is not a cosmetic problem
+         * but an unusable one.
          *
-         * It stays a manifest placeholder rather than a product flavour: a flavour
-         * doubles every build variant and the signing config with it, for what is
-         * one attribute. It reads from local.properties exactly like API_BASE_URL
-         * already does, so a kiosk build is a one-line change on the machine that
-         * makes it and nothing to remember anywhere else.
+         * NOT `fullUser`, which was tried first and did nothing. `fullUser` means
+         * "respect the user's rotation preference" — and when auto-rotate is off,
+         * which is the default on most tablets and on anything set up as a kiosk,
+         * it degrades to `nosensor` and the app never turns at all. Deferring to a
+         * device setting is the wrong call for a tool whose whole requirement is
+         * that it works in either hand position, on hardware an usher does not
+         * configure.
          *
-         * The default is the existing value, so no tablet build changes.
+         * Unlocking rotation is safe here for a reason that was already true:
+         * `configChanges` in the manifest lists `orientation|screenSize|
+         * screenLayout`, so the Activity is NOT recreated when the device turns.
+         * The camera pipeline survives; Compose re-measures. The old comment
+         * warning that rotation "disrupts the CameraX pipeline" described a
+         * recreation that this manifest has always prevented.
+         *
+         * Still a placeholder rather than a hard-coded value, so a venue that
+         * wants a fixed orientation on a particular unit can pin it from
+         * local.properties — `SCREEN_ORIENTATION=userPortrait` — without a new
+         * build variant.
          */
-        manifestPlaceholders["screenOrientation"] = prop("SCREEN_ORIENTATION", "userLandscape")
+        manifestPlaceholders["screenOrientation"] = prop("SCREEN_ORIENTATION", "fullSensor")
 
         /**
          * The kiosk's hardware QR scanner.

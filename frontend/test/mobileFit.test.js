@@ -253,6 +253,26 @@ describe('the organizer dashboard fits a 320px phone', () => {
       'components/RsvpTrendChart.js',
       'components/ResponsiveChartBoard.js',
       'seating-map/page.js',
+      /**
+       * The printed seating pack. Its type sizes are not screen sizes.
+       *
+       * This file lays a document out in MILLIMETRES on a fixed page box — a
+       * 297mm sheet, rendered at 1:1 and then scaled to the viewport with
+       * `zoom`. A 7.5px small-cap eyebrow on that sheet is about 5.6pt of ink
+       * on paper, which is ordinary document typography, and nobody reads it at
+       * 1 CSS pixel per pixel on a phone: they read it on paper, or in a
+       * preview that has been scaled to fit.
+       *
+       * Raising these to the 11px screen floor does not make anything more
+       * legible; it makes the guest index roughly twice as many printed pages
+       * and the title block look like a web page somebody printed. Same
+       * category as the entries above — text whose size belongs to a scale
+       * other than the viewport's.
+       *
+       * The modal's SCREEN chrome is deliberately NOT covered by this: every
+       * .ppm-* rule lives in globals.css and obeys the ordinary floor.
+       */
+      'seating-map/SeatingChartPrint.js',
     ]);
 
     for (const { rel, src } of FILES) {

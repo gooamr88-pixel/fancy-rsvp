@@ -35,6 +35,7 @@ import com.fancyrsvp.checkin.ui.components.ScrollableCenteredColumn
 import com.fancyrsvp.checkin.ui.components.SecondaryAction
 import com.fancyrsvp.checkin.ui.components.rememberEventCover
 import com.fancyrsvp.checkin.ui.theme.LocalDimens
+import com.fancyrsvp.checkin.ui.theme.safeChrome
 
 /**
  * The lock screen shown after a session times out (spec §20.4).
@@ -75,7 +76,12 @@ fun SessionLockOverlay(
             .fillMaxSize()
             // Opaque, not translucent: the point is that the guest list underneath is
             // not readable by whoever picked the tablet up.
-            .background(MaterialTheme.colorScheme.background),
+            //
+            // The background covers the whole window — including behind the system
+            // bars, which is what keeps the lock opaque edge to edge — and only the
+            // content inside is inset.
+            .background(MaterialTheme.colorScheme.background)
+            .safeChrome(),
         contentAlignment = Alignment.Center,
     ) {
         /*
