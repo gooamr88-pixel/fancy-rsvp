@@ -418,7 +418,13 @@ class BundleRepository @Inject constructor(
                         method = it.method ?: "qr_scan",
                         scanToken = null,
                         syncState = "synced",
-                        serverId = null,
+                        // The server's own id for this arrival. Kept because it
+                        // is the ONLY reference a supervisor can undo it by: the
+                        // clientCheckinId above is invented here and the server
+                        // has never seen it. Null from a server too old to send
+                        // it, which leaves the arrival un-reversible from the
+                        // door exactly as it was before.
+                        serverId = it.serverId,
                         serverSeq = it.serverSeq,
                         isRemote = true,
                     )

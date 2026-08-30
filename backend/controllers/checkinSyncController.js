@@ -243,6 +243,21 @@ const deleteCheckIn = async (req, res, next) => {
       actorStaffId: actorStaff?.staffId || null,
       actorStaffName: actorStaff?.displayName || null,
       reason: String(reason).trim(),
+      /*
+       * The check-in's own server id, when the device knows it.
+       *
+       * A tablet can only name a `client_checkin_id` for check-ins IT created.
+       * Everything else it holds — an arrival seeded when it was prepared, or
+       * one that arrived from another gate in the delta — carries an id the
+       * device invented locally, and the server has never seen it. Sending the
+       * server id is what makes those reversible at all; without it the request
+       * 404s and the guest stays counted as present.
+       *
+       * Not a security concern: it names WHICH check-in, and the row is still
+       * scoped to `eventId` inside the function. Who is allowed to reverse it
+       * has already been settled above, from the session or the roster.
+       */
+      serverId: req.body?.serverId || null,
     });
 
     if (result.ok === false) {

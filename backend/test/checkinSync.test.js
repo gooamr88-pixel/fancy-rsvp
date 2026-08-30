@@ -27,6 +27,108 @@ const CID   = '44444444-4444-4444-8444-444444444444';
 t.beforeEach(() => { mock.reset(); broadcasts.length = 0; });
 
 // ══════════════════════════════════════════════════════════════════
+// Undo — which id the server is asked to resolve
+//
+// A device holds identifiers that are NOT uuids for every arrival it did not
+// create itself: `seed:<eventId>:<guestId>` for those already recorded when it
+// was prepared, `remote:<serverId>` for another gate's. It sends its local key
+// in the URL. Both RPC parameters are declared `uuid`, and Postgres casts the
+// argument BEFORE the function body runs — so passing one of those through
+// raises 22P02, reaches the device as a 500, and is retried forever.
+// ══════════════════════════════════════════════════════════════════
+
+const SERVER_ID = '55555555-5555-4555-8555-555555555555';
+const rpcCalls = [];
+const captureRpc = (result = { ok: true, server_id: SERVER_ID }) => (s) => {
+  if (s.op === 'rpc') { rpcCalls.push({ fn: s.fn, params: s.params }); return { data: result }; }
+  return {};
+};
+
+test('a non-uuid client id NEVER reaches Postgres — it would raise 22P02 before the function runs', async () => {
+  rpcCalls.length = 0;
+  mock.setResolver(captureRpc());
+
+  const result = await svc.undoCheckIn(EVENT, `seed:${EVENT}:${GUEST}`, {
+    actorId: null, reason: 'wrong guest', serverId: SERVER_ID,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(rpcCalls.length, 1);
+  assert.equal(rpcCalls[0].fn, 'checkin_undo_by_ref');
+  // The invented key is dropped, and the server id carries the request.
+  assert.equal(rpcCalls[0].params.p_client_checkin_id, null);
+  assert.equal(rpcCalls[0].params.p_server_id, SERVER_ID);
+});
+
+test('with no server id and an unresolvable client id, it answers NOT_FOUND without touching the database', async () => {
+  rpcCalls.length = 0;
+  mock.setResolver(captureRpc());
+
+  const result = await svc.undoCheckIn(EVENT, `remote:${SERVER_ID}`, {
+    actorId: null, reason: 'wrong guest',
+  });
+
+  // 404 rather than 500: the device takes its local mark back and drops the
+  // entry, instead of retrying a request that can never succeed.
+  assert.deepEqual(result, { ok: false, error: 'NOT_FOUND' });
+  assert.equal(rpcCalls.length, 0, 'must not call the database at all');
+});
+
+/**
+ * The device sends the server id whenever it has one — including for its OWN
+ * check-ins once they have synced. So between an app update and this migration
+ * being applied, EVERY undo would land on a function that does not exist. This
+ * repository has shipped unapplied migrations more than once, so the fallback is
+ * not hypothetical.
+ */
+test('an unapplied migration falls back to the original function instead of 500ing', async () => {
+  rpcCalls.length = 0;
+  mock.setResolver((s) => {
+    if (s.op !== 'rpc') return {};
+    rpcCalls.push({ fn: s.fn, params: s.params });
+    if (s.fn === 'checkin_undo_by_ref') {
+      return { data: null, error: { code: 'PGRST202', message: 'Could not find the function' } };
+    }
+    return { data: { ok: true, server_id: SERVER_ID } };
+  });
+
+  const result = await svc.undoCheckIn(EVENT, CID, {
+    actorId: null, reason: 'wrong guest', serverId: SERVER_ID,
+  });
+
+  assert.equal(result.ok, true, 'an undo that worked before must keep working');
+  assert.deepEqual(rpcCalls.map((c) => c.fn), ['checkin_undo_by_ref', 'checkin_undo']);
+});
+
+test('with no usable client id, an unapplied migration answers NOT_FOUND rather than retrying forever', async () => {
+  rpcCalls.length = 0;
+  mock.setResolver((s) => {
+    if (s.op !== 'rpc') return {};
+    rpcCalls.push({ fn: s.fn });
+    return { data: null, error: { code: 'PGRST202', message: 'Could not find the function' } };
+  });
+
+  const result = await svc.undoCheckIn(EVENT, `seed:${EVENT}:${GUEST}`, {
+    actorId: null, reason: 'wrong guest', serverId: SERVER_ID,
+  });
+
+  assert.deepEqual(result, { ok: false, error: 'NOT_FOUND' });
+  assert.deepEqual(rpcCalls.map((c) => c.fn), ['checkin_undo_by_ref']);
+});
+
+test('a real client id with no server id still uses the original function', async () => {
+  rpcCalls.length = 0;
+  mock.setResolver(captureRpc());
+
+  await svc.undoCheckIn(EVENT, CID, { actorId: null, reason: 'wrong guest' });
+
+  // Unchanged for every existing caller, so an unapplied migration cannot break
+  // undos that already worked.
+  assert.equal(rpcCalls[0].fn, 'checkin_undo');
+  assert.equal(rpcCalls[0].params.p_client_checkin_id, CID);
+});
+
+// ══════════════════════════════════════════════════════════════════
 // Scanned-token handling — the ONLY place a forged scan can be caught
 // (decision D-20 removed on-device verification; amendment A-11)
 // ══════════════════════════════════════════════════════════════════

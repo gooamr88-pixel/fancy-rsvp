@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -34,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -145,10 +147,17 @@ fun GuestListScreen(
                 items(rows, key = { it.guestId }) { row ->
                     GuestRow(
                         row = row,
-                        // The undo affordance appears only for a supervisor AND
-                        // only on a guest who has actually arrived. Showing it
-                        // otherwise would invite taps that can do nothing.
-                        canUndo = isSupervisor && row.arrived && row.clientCheckinId != null,
+                        // The undo affordance appears only for a supervisor, only
+                        // on a guest who has actually arrived, and only when THIS
+                        // DEVICE can actually reverse it — see Row.reversibleHere.
+                        // An arrival recorded at another gate or before this
+                        // tablet was prepared has no server-resolvable id here;
+                        // the control used to be offered for those too and
+                        // reported success while the server kept counting the
+                        // guest as present.
+                        canUndo = isSupervisor && row.arrived &&
+                            row.clientCheckinId != null && row.reversibleHere,
+                        explainElsewhere = isSupervisor && row.arrived && !row.reversibleHere,
                         onUndo = { undoTarget = row },
                     )
                 }
@@ -219,6 +228,15 @@ private fun Chip(
 private fun GuestRow(
     row: GuestListViewModel.Row,
     canUndo: Boolean,
+    /**
+     * Say where the reversal lives, for an arrival this device cannot reverse.
+     *
+     * Computed at the call site because only that scope knows the operator's
+     * role — and it is deliberately shown to a SUPERVISOR only. An usher never
+     * had the control, so telling them it moved would be answering a question
+     * they never asked.
+     */
+    explainElsewhere: Boolean,
     onUndo: () -> Unit,
 ) {
     val dimens = LocalDimens.current
@@ -305,6 +323,25 @@ private fun GuestRow(
             SecondaryAction(
                 text = stringResource(R.string.guests_undo),
                 onClick = onUndo,
+            )
+        } else if (explainElsewhere) {
+            /*
+             * A supervisor looking for the control they had yesterday needs to be
+             * told where it went, not left to conclude the app is broken.
+             *
+             * This guest was admitted somewhere else — another gate, or before
+             * this tablet was prepared — so this device holds no id the server can
+             * resolve, and the undo it used to offer here could never be applied.
+             * The dashboard's console reverses by PARTY and works regardless of
+             * who admitted them, so that is where this points.
+             */
+            Spacer(Modifier.width(20.dp))
+            Text(
+                text = stringResource(R.string.guests_undo_elsewhere),
+                style = MaterialTheme.typography.labelMedium,
+                color = StateNeutral,
+                textAlign = TextAlign.End,
+                modifier = Modifier.widthIn(max = 180.dp),
             )
         }
     }

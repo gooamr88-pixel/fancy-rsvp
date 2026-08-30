@@ -260,6 +260,21 @@ class CheckInRepository @Inject constructor(
         val row = db.checkInDao().byClientId(clientCheckinId) ?: return@withContext false
         if (row.undoneAt != null) return@withContext true // idempotent
 
+        /*
+         * WHICH check-in, in terms the SERVER can resolve.
+         *
+         * `clientCheckinId` only means something to the server for a check-in
+         * this device created. Anything else — an arrival seeded when the tablet
+         * was prepared, or one that came from another gate in the delta — was
+         * rebuilt locally under an invented `seed:`/`remote:` key, and sending
+         * that alone gets a 404 while the guest stays counted as present.
+         *
+         * `serverId` is the row's real primary key and is present on both of
+         * those. Queued alongside so the drain can name the row either way; the
+         * server prefers the server id when it has one.
+         */
+        val serverId = row.serverId
+
         val now = System.currentTimeMillis()
         db.withTransaction {
             db.checkInDao().markUndone(clientCheckinId, now, reason)
@@ -280,6 +295,11 @@ class CheckInRepository @Inject constructor(
                                 // decision, not looked up at send time.
                                 "staff_id" to (
                                     staffId?.let { JsonPrimitive(it) } ?: JsonNull
+                                ),
+                                // See above: the only reference that resolves
+                                // for an arrival this device did not create.
+                                "server_id" to (
+                                    serverId?.let { JsonPrimitive(it) } ?: JsonNull
                                 ),
                             ),
                         ),

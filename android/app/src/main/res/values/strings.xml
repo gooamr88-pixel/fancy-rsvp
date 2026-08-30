@@ -375,6 +375,21 @@
     <string name="guests_undo_body">The arrival stays in the record, marked as reversed. A reason is required.</string>
     <string name="guests_undo_reason">Reason</string>
     <string name="guests_undo_failed">Could not undo. Check the reason and try again.</string>
+    <!--
+      Shown to a SUPERVISOR in place of the undo control, on the one arrival this
+      tablet still cannot reverse.
+
+      An arrival recorded at another gate IS reversible now — it carries the
+      server's own id, which the server resolves. What remains is a row prepared
+      or synced by a server too old to send that id: there is no reference the
+      undo can name, and offering the control would report success while the
+      server went on counting the guest as present.
+
+      Deliberately does not explain WHY. "Arrived at another gate" was the old
+      wording and is now simply untrue, and a supervisor at a door needs the next
+      step rather than a description of an id scheme.
+    -->
+    <string name="guests_undo_elsewhere">Reverse this one from the dashboard</string>
 
     <!-- Entrance display (§8.8). Guest-facing: no names, no operational state. -->
     <string name="entrance_waiting">Preparing…</string>

@@ -596,6 +596,8 @@ real event.
 | 2 | Same guest at A and B, **both offline**, then both reconnect | Exactly one live check-in. The other becomes a **conflict**, surfaced on the dashboard — not silently dropped. Layers 3 + 4. |
 | 3 | Airplane mode, 50 scans, force-stop the app, reopen, reconnect | All 50 arrive. WorkManager survives process death. |
 | 4 | Supervisor undo on a device | Server accepts. Other device reflects it. Report names **who** reversed it and why. |
+| 4a | Undo on B a guest that **A** admitted | Reversed on the server, and **A stops showing them as arrived** within a poll. Both halves were broken — see §13.1. |
+| 4b | Undo a guest who was already in when the tablet was **prepared** | Same. Was impossible before: the arrival had no id the server could resolve. |
 | 5 | **Usher** attempts an undo | Refused with `SUPERVISOR_REQUIRED`. Nothing is reversed. |
 | 6 | Undo with a forged `staffId` from another event | Refused with `UNKNOWN_STAFF`. |
 | 7 | Batch claiming `staff_display_name` of someone else | Stored name comes from the **roster**, not the payload. |
@@ -606,6 +608,52 @@ real event.
 Scenarios 5–7 are the 2026-07-31 authorization fixes. They have unit tests but
 have never run against a real device token — and they are the difference between
 an audit trail and a suggestion.
+
+### 13.1 The undo was broken in BOTH directions across two devices, 2026-08-30
+
+Found from the field: *"undo works on the tablet but the dashboard still counts
+them."* Two independent defects, and both only appear with more than one device
+— which is why a single-tablet rehearsal would never have caught either.
+
+**Outbound — the reversal never reached the server.** `checkin_undo` resolves its
+target by `client_checkin_id` alone, so a tablet could only reverse a check-in it
+created itself. Everything else it holds is rebuilt locally under an invented key
+(`seed:<eventId>:<guestId>` for arrivals already recorded at preparation,
+`remote:<serverId>` for another gate's) which the server has never held and which
+is not even a uuid. The tablet marked the row reversed locally and reported
+success; the request 404'd; and the drain then treated that 404 as SUCCESS and
+discarded the entry. The guest stayed counted as present, permanently, with
+nothing on either screen admitting it.
+
+Fixed by carrying the check-in's **server id** — added to the bundle manifest for
+seeded arrivals, already present on delta rows — and resolving with it
+(`checkin_undo_by_ref`, migration `20260830000004`, additive: a NEW function
+name, so none of the PGRST203 overload risk that §9.2 records). A 404 now takes
+the local mark back rather than discarding it, so the tablet stops asserting a
+reversal that only exists on that device.
+
+**Inbound — the other device never learned.** `applyChanges` looked the reversed
+row up as `remote:<serverId>` and nothing else, which matches only an admission
+made on ANOTHER device. When gate B reversed one of gate A's check-ins, A's own
+row was stored under a real client id, the lookup missed, and A went on showing
+the guest as arrived — then refused to re-admit them on the Layer 1 duplicate
+guard. Now resolved by server id first, which matches both shapes.
+
+**On the tablet, test in this order.** Two devices, both prepared before anyone
+arrives:
+
+- [ ] A admits a guest. B shows them as arrived within ~10s (the poll; there is
+      no realtime channel — `ConnectionMonitor` deliberately reports `DEGRADED`).
+- [ ] **B reverses that guest.** The dashboard's arrival count drops, and **A
+      stops showing them as arrived** within a poll. This is the one that was
+      broken in both directions.
+- [ ] The reversed guest can now be admitted again, at either gate.
+- [ ] Check someone in from the DASHBOARD, then reverse them from a tablet. This
+      is the seeded/`client_checkin_id IS NULL` path — a web-created check-in has
+      no client id at all, which is why the lookup had to move to the server id.
+- [ ] Undo with the tablet offline: it queues, and applies when the link returns.
+- [ ] `Menu → Stalled` stays at 0 throughout. Anything above 0 means a queued
+      item cannot be sent, and closing the event will be blocked until it clears.
 
 ---
 

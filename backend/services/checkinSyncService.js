@@ -82,6 +82,27 @@ function numOrNull(value) {
 }
 
 /**
+ * A uuid, or null — for anything that reaches a `uuid` RPC parameter.
+ *
+ * Postgres casts the argument BEFORE the function body runs, so a non-uuid does
+ * not return an error the function chose: it raises `22P02 invalid input syntax
+ * for type uuid`, which reaches the device as a 500 and is retried forever.
+ *
+ * The check-in device routinely holds identifiers that are not uuids at all. It
+ * rebuilds arrivals it did not create under invented keys —
+ * `seed:<eventId>:<guestId>` for those already recorded when it was prepared,
+ * `remote:<serverId>` for another gate's — and it sends its local key in the
+ * URL. Filtering here means a request naming something the server cannot
+ * resolve gets an honest NOT_FOUND rather than a crash.
+ */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function asUuid(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return UUID_PATTERN.test(trimmed) ? trimmed : null;
+}
+
+/**
  * Extracts the bare JWT from a scanned value.
  *
  * The QR image encodes `<origin>/ticket/<urlencoded-token>` so an ordinary
@@ -274,18 +295,103 @@ async function submitCheckInBatch(eventId, records, { sinceSeq = null, deviceId 
  * retried undo reports success rather than 404-ing.
  */
 async function undoCheckIn(eventId, clientCheckinId, {
-  actorId, actorStaffId, actorStaffName, reason,
+  actorId, actorStaffId, actorStaffName, reason, serverId = null,
 }) {
-  const { data, error } = await supabase.rpc('checkin_undo', {
+  const common = {
     p_event_id: eventId,
-    p_client_checkin_id: clientCheckinId,
     p_actor: actorId || null,
     p_reason: reason || null,
     // Server-resolved by the controller from this event's roster — never taken
     // from the request body, or the audit trail would be a client assertion.
     p_staff_id: actorStaffId || null,
     p_staff_name: actorStaffName || null,
+  };
+
+  /*
+   * ── EVERY id REACHING POSTGRES MUST BE A UUID, OR THE CALL DIES BEFORE THE
+   *    FUNCTION RUNS ──
+   *
+   * Both parameters are declared `uuid`. The device puts its LOCAL key in the
+   * URL, and for anything it did not create itself that key is invented —
+   * `seed:<eventId>:<guestId>` or `remote:<serverId>`. Passing one through casts
+   * to uuid at call time and fails with `22P02 invalid input syntax`, which
+   * surfaces as a 500 the device retries forever. That happens BEFORE the body
+   * executes, so it would defeat the server-id path too — exactly the case this
+   * whole change exists to fix.
+   */
+  const clientId = asUuid(clientCheckinId);
+  const serverRef = asUuid(serverId);
+
+  /*
+   * Nothing resolvable. Answered here rather than by the database: with neither
+   * a real client id nor a server id there is no row to name, and NOT_FOUND is
+   * the truthful answer. The controller turns it into a 404, and the device
+   * treats a 404 as "this reversal cannot be applied", takes its local mark back
+   * and drops the queue entry. A 500 instead would have it retry a request that
+   * can never succeed, on a tablet at a door.
+   */
+  if (!clientId && !serverRef) return { ok: false, error: 'NOT_FOUND' };
+
+  /*
+   * ── Two functions, chosen by what the caller could actually name ──
+   *
+   * `checkin_undo` resolves ONLY by client_checkin_id, so it can reverse a
+   * check-in the calling device created and nothing else. Every other arrival a
+   * tablet holds carries a locally-invented id the server has never seen — which
+   * at a two-gate event is most of the guest list.
+   *
+   * `checkin_undo_by_ref` (migration 20260830000004) takes the server id too,
+   * and prefers it. It is reached only when a server id was supplied, and that
+   * is deliberate: if the migration has not been applied yet, every existing
+   * caller keeps working exactly as before and only the new capability is
+   * missing. Calling the new function unconditionally would make an unapplied
+   * migration break ALL undos, and this ships to live events.
+   */
+  if (!serverRef) {
+    const { data, error } = await supabase.rpc('checkin_undo', {
+      ...common,
+      p_client_checkin_id: clientId,
+    });
+    if (error) throw error;
+    return data || { ok: false, error: 'UNKNOWN' };
+  }
+
+  const { data, error } = await supabase.rpc('checkin_undo_by_ref', {
+    ...common,
+    p_client_checkin_id: clientId,
+    p_server_id: serverRef,
   });
+
+  /*
+   * ── The migration may not be applied yet, and that must not break undos ──
+   *
+   * The device sends the server id whenever it HAS one, which includes its own
+   * check-ins once they have synced — so after an app update and before this
+   * migration, every undo would land on a function that does not exist. That is
+   * a real ordering hazard in this repository specifically: migrations here have
+   * shipped unapplied more than once.
+   *
+   * PostgREST answers a missing function with PGRST202. Falling back to
+   * `checkin_undo` means an un-migrated server keeps doing exactly what it did
+   * before — reversing check-ins the device created — and only the NEW
+   * capability is missing until the migration lands. With no usable client id
+   * there is nothing to fall back to, so the honest answer is NOT_FOUND rather
+   * than a 500 the device retries forever.
+   */
+  if (error && (error.code === 'PGRST202' || /could not find the function/i.test(error.message || ''))) {
+    logger.warn(
+      { eventId },
+      '[checkinSync] checkin_undo_by_ref missing — migration 20260830000004 is not applied; falling back',
+    );
+    if (!clientId) return { ok: false, error: 'NOT_FOUND' };
+    const fallback = await supabase.rpc('checkin_undo', {
+      ...common,
+      p_client_checkin_id: clientId,
+    });
+    if (fallback.error) throw fallback.error;
+    return fallback.data || { ok: false, error: 'UNKNOWN' };
+  }
+
   if (error) throw error;
   return data || { ok: false, error: 'UNKNOWN' };
 }
@@ -756,7 +862,11 @@ async function getBundleManifest(eventId) {
     // already-arrived guest with no duplicate warning at all.
     supabase
       .from('check_ins')
-      .select('guest_id, party_id, checked_in_at, method, server_seq, staff_display_name, device_label')
+      // `id` is the row's SERVER id, and it is what makes these reversible from
+      // a tablet. A seeded arrival is reconstructed locally under an invented
+      // `seed:` key, so the device has no id the server can resolve unless this
+      // one travels with it — see checkin_undo_by_ref.
+      .select('id, guest_id, party_id, checked_in_at, method, server_seq, staff_display_name, device_label')
       .eq('event_id', eventId)
       .is('deleted_at', null),
     getBundleVersion(eventId),
@@ -817,6 +927,9 @@ async function getBundleManifest(eventId) {
     // Seeded into the device's local check_ins so its Layer 1 duplicate guard
     // (§5.3) is correct from the first scan, not only from the first delta.
     existingCheckIns: (existingCheckIns || []).map((c) => ({
+      // The server id. Stored by the device so an arrival it inherited rather
+      // than created can still be reversed from the door.
+      serverId: c.id,
       guestId: c.guest_id,
       partyId: c.party_id,
       checkedInAt: c.checked_in_at,

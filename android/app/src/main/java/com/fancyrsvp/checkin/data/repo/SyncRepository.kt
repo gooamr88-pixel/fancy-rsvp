@@ -224,8 +224,20 @@ class SyncRepository @Inject constructor(
         eventId: String,
         undos: List<com.fancyrsvp.checkin.data.local.SyncQueueEntity>,
     ): DrainResult {
+        /*
+         * A stalled entry is waiting on a person, not on the network.
+         *
+         * `SyncQueueWorker` loops on `Partial` with no delay between batches, so
+         * anything left in this list that cannot succeed turns the drain into a
+         * spin — one doomed HTTP request per iteration. They stay in the table
+         * (§21.3 — an entry leaves only on server confirmation) and stay visible
+         * through `observeStalledCount`; they are simply not sent again.
+         */
+        val sendable = undos.filterNot { it.isStalled }
+        if (sendable.isEmpty()) return DrainResult.Complete(0, 0, 0)
+
         val removed = mutableListOf<Long>()
-        for (entry in undos) {
+        for (entry in sendable) {
             val obj = runCatching { Json.parseToJsonElement(entry.payloadJson) as JsonObject }.getOrNull()
             val clientId = obj?.get("client_checkin_id")?.jsonPrimitive?.content
             val reason = obj?.get("reason")?.jsonPrimitive?.content
@@ -233,6 +245,9 @@ class SyncRepository @Inject constructor(
             // refuses them with 403, which lands in the non-retryable branch below
             // and surfaces on the conflicts screen rather than stalling the queue.
             val staffId = obj?.get("staff_id")?.jsonPrimitive?.contentOrNull
+            // Absent on undos queued before this field existed — those keep the
+            // old behaviour and resolve by client id alone.
+            val serverId = obj?.get("server_id")?.jsonPrimitive?.contentOrNull
             if (clientId == null || reason.isNullOrBlank()) {
                 db.syncQueueDao().recordFailure(entry.id, "malformed undo payload")
                 continue
@@ -241,18 +256,59 @@ class SyncRepository @Inject constructor(
             val response = try {
                 api.undoCheckIn(
                     eventId, clientId,
-                    com.fancyrsvp.checkin.data.remote.UndoRequest(reason, staffId),
+                    com.fancyrsvp.checkin.data.remote.UndoRequest(reason, staffId, serverId),
                 )
             } catch (e: java.io.IOException) {
                 return DrainResult.Failed(e.message ?: "network", retryable = true)
             }
 
             when {
-                // 404 means the server never received the original check-in. The
-                // undo has nothing to reverse there, and the local row is already
-                // marked — so the entry is done. Retrying forever would stall the
-                // queue behind it.
-                response.isSuccessful || response.code() == 404 -> removed.add(entry.id)
+                response.isSuccessful -> removed.add(entry.id)
+
+                /*
+                 * ── A 404 IS NOT SUCCESS, AND TREATING IT AS ONE LOST UNDOS ──
+                 *
+                 * This branch used to read `response.isSuccessful ||
+                 * response.code() == 404 -> removed.add(entry.id)`, on the
+                 * reasoning that the server never received the original
+                 * check-in, so there was nothing to reverse and the entry was
+                 * done.
+                 *
+                 * That reasoning does not hold. The undo path only runs once no
+                 * check-in entries remain in the batch, so an offline check-in
+                 * queued ahead of its own undo has already been sent by the time
+                 * we get here — the server DOES have it. What actually produces a
+                 * 404 is an arrival this device did not create: it holds a
+                 * locally-invented `seed:`/`remote:` id the server has never seen
+                 * (see GuestListViewModel.Row.reversibleHere). The server's
+                 * check-in is live and must be reversed — and discarding the
+                 * entry meant it never was, silently and permanently, while both
+                 * screens reported the guest as un-admitted.
+                 *
+                 * So the LOCAL MARK IS TAKEN BACK and the entry is dropped.
+                 *
+                 * Taking the mark back is the part that matters. The undo is
+                 * applied locally before it is queued, so the guest is showing as
+                 * reversed on this tablet; if the server never accepts it, that
+                 * display is simply wrong, and leaving it is the exact
+                 * tablet-says-one-thing-dashboard-says-another failure this path
+                 * is being repaired for. The guest goes back to arrived, which is
+                 * true, and the guest list explains that the reversal has to be
+                 * done from the dashboard.
+                 *
+                 * Dropping the entry does not violate §21.3. That rule protects
+                 * CHECK-INS — evidence of an admission that exists nowhere else.
+                 * This is a correction the server has already refused as
+                 * unresolvable; retrying cannot change the answer, and keeping it
+                 * would leave the queue permanently non-empty, which BLOCKS
+                 * closing the event (CloseEventScreen) with no control anywhere
+                 * that can clear it.
+                 */
+                response.code() == 404 -> {
+                    db.checkInDao().clearUndone(clientId)
+                    removed.add(entry.id)
+                }
+
                 response.code() in 500..599 || response.code() == 429 ->
                     return DrainResult.Failed("HTTP ${response.code()}", retryable = true)
                 else -> db.syncQueueDao().recordFailure(entry.id, "HTTP ${response.code()}")
@@ -260,7 +316,9 @@ class SyncRepository @Inject constructor(
         }
 
         if (removed.isNotEmpty()) db.syncQueueDao().confirmAndRemove(removed)
-        val remaining = db.syncQueueDao().depthForEvent(eventId)
+        // Counted WITHOUT stalled entries: `Partial` means "come straight back",
+        // and the worker obeys it with no delay.
+        val remaining = db.syncQueueDao().pendingDepthForEvent(eventId)
         return if (remaining > 0) DrainResult.Partial(remaining) else DrainResult.Complete(0, 0, 0)
     }
 
@@ -344,10 +402,37 @@ class SyncRepository @Inject constructor(
                 }
 
                 "check_in_undone" -> {
-                    // Another device's supervisor reversed an admission. Applied so
-                    // this device stops reporting the guest as arrived — and so the
-                    // guest can be admitted again here if they really are present.
-                    db.checkInDao().byClientId("remote:${change.serverId}")?.let {
+                    /*
+                     * Another device's supervisor reversed an admission. Applied so
+                     * this device stops reporting the guest as arrived — and so the
+                     * guest can be admitted again here if they really are present.
+                     *
+                     * ── Resolved by SERVER ID first, and that is the fix ──
+                     *
+                     * This looked the row up as `remote:<serverId>` and nothing
+                     * else, which only ever matches an admission made on ANOTHER
+                     * device. A check-in this tablet made itself is stored under
+                     * its own client id, so when the other gate reversed one of
+                     * OURS the lookup missed, the row stayed live here, and the
+                     * tablet went on showing the guest as arrived — then refused
+                     * to re-admit them on the Layer 1 duplicate guard (§5.3).
+                     *
+                     * The server id is written back onto our own rows when they
+                     * sync (`markSynced`) and onto remote rows when they arrive,
+                     * so it matches both. The `remote:` lookup stays as a fallback
+                     * for rows stored before the id was recorded.
+                     */
+                    val row = change.serverId?.let { db.checkInDao().byServerId(eventId, it) }
+                        // The fallback key is derived EXACTLY as the insert above
+                        // derives it, including the no-server-id branch. Writing
+                        // `"remote:$serverId"` here instead produced the literal
+                        // string "remote:null" for a change with no server id —
+                        // a key nothing is ever stored under, so the fallback
+                        // silently matched nothing in the one case it exists for.
+                        ?: db.checkInDao().byClientId(
+                            "remote:${change.serverId ?: "${change.guestId}:${change.serverSeq}"}",
+                        )
+                    row?.let {
                         db.checkInDao().markUndone(
                             it.clientCheckinId,
                             System.currentTimeMillis(),

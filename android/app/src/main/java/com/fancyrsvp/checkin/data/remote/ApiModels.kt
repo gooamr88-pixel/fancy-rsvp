@@ -126,6 +126,16 @@ data class BundleManifestDto(
 
 @Serializable
 data class ExistingCheckInDto(
+    /**
+     * The check-in's SERVER id, and the only handle the device has for it.
+     *
+     * A seeded arrival is rebuilt locally under an invented `seed:` key, so
+     * without this the device holds nothing the server can resolve and the
+     * arrival can never be reversed from the door — it 404s and the guest stays
+     * counted as present. Nullable because a server that predates this field
+     * simply does not send it, and a tablet in the field must still arm.
+     */
+    val serverId: String? = null,
     val guestId: String,
     val partyId: String? = null,
     val checkedInAt: String? = null,
@@ -420,6 +430,17 @@ data class SyncControlsDto(
 data class UndoRequest(
     val reason: String,
     val staffId: String?,
+    /**
+     * Which check-in, by the server's own id — sent whenever the device knows it.
+     *
+     * The URL still carries the `client_checkin_id`, and for a check-in this
+     * device created that is enough. For every other arrival it holds — seeded
+     * at preparation, or received from another gate — the id in the URL is one
+     * the device invented and the server has never held, so this is the only
+     * reference that can resolve. The server prefers it when present
+     * (`checkin_undo_by_ref`).
+     */
+    val serverId: String? = null,
 )
 
 @Serializable

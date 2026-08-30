@@ -45,6 +45,37 @@ export default function CheckInPage() {
   const [showConfirmOverlay, setShowConfirmOverlay] = useState(false);
   const [overlayData, setOverlayData] = useState(null);
 
+  /**
+   * Reversing an arrival.
+   *
+   * ── Why this needed its own dialog rather than a confirm ──
+   *
+   * The server REQUIRES a reason (400 REASON_REQUIRED without one) and writes it
+   * to the audit trail beside who did it, because an undo erases the evidence
+   * that someone was admitted. So the UI has to collect free text, and the
+   * result overlay above is a report with no input in it.
+   *
+   * Until now this console had no way to reverse anything at all: the only
+   * action button was hidden behind `!isCheckedIn`, so once a guest was marked
+   * arrived the panel became read-only and a mis-tap was permanent from here.
+   * The endpoint has existed and been tested the whole time — nothing called it.
+   */
+  const [undoTarget, setUndoTarget] = useState(null);
+  const [undoReason, setUndoReason] = useState('');
+  const [undoBusy, setUndoBusy] = useState(false);
+
+  // Escape closes it, like every dialog anyone has ever met. Not while a request
+  // is in flight: dismissing then would hide an action that is still going to
+  // land, and the operator would have no idea whether it did.
+  useEffect(() => {
+    if (!undoTarget) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape' && !undoBusy) { setUndoTarget(null); setUndoReason(''); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undoTarget, undoBusy]);
+
   const [events, setEvents] = useState([]);
   const [eventId, setEventId] = useState('');
   const [eventIdSeeded, setEventIdSeeded] = useState(false);
@@ -73,6 +104,7 @@ export default function CheckInPage() {
   // pattern on the guest-facing RSVP flow, which this kiosk page lacked.
   const manualCheckInInFlight = useRef(false);
   const qrCheckInInFlight = useRef(false);
+  const undoInFlight = useRef(false);
   const [manualCheckInBusy, setManualCheckInBusy] = useState(false);
   const [qrCheckInBusy, setQrCheckInBusy] = useState(false);
 
@@ -236,6 +268,71 @@ export default function CheckInPage() {
     } finally {
       manualCheckInInFlight.current = false;
       setManualCheckInBusy(false);
+    }
+  };
+
+  /**
+   * Reverses a party's arrival (spec §9.6).
+   *
+   * ── It is scoped to the PARTY, and that is the point ──
+   *
+   * `POST /checkin/undo` takes a partyId, not the id of one check-in record, so
+   * it reverses every live row for that party in one statement. That is what
+   * makes it work here regardless of HOW the guest was admitted — the web
+   * kiosk, a tablet at another gate, or a tablet that has since been re-paired.
+   * The device endpoint cannot do that: it addresses a single check-in by the
+   * client id that created it, which this console never had.
+   *
+   * It is a SOFT delete. The row stays as evidence with the reason, the actor
+   * and the timestamp on it; the dashboard's counters exclude it because every
+   * one of them filters `deleted_at`. Nothing is erased.
+   */
+  const handleUndo = async (partyId, reason) => {
+    if (!authReady) return;
+    if (!isOnline) { setOverlayData({ type: 'error', message: 'No internet connection. Reconnect and try again.' }); setShowConfirmOverlay(true); return; }
+    if (undoInFlight.current) return;
+    undoInFlight.current = true;
+    setUndoBusy(true);
+    try {
+      const res = await fetchWithRetry(`${API_URL}/events/${eventId}/checkin/undo`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify({ partyId, reason }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        // 404 is not a fault here: someone else may have already reversed it, or
+        // the guest was never actually admitted. Say which, rather than showing
+        // a raw failure for a state that is arguably what the operator wanted.
+        throw new Error(res.status === 404
+          ? 'There is no live check-in for this guest. They may have been reversed already.'
+          : (data.message || 'Could not reverse the check-in.'));
+      }
+      playAccept(); buzz([12, 24, 12]);
+      setSelectedGuest(prev => (prev ? { ...prev, isCheckedIn: false, checkedInAt: null } : null));
+      // Drop them from the arrivals feed too. Leaving a reversed guest sitting in
+      // a list headed "Arrivals" is the same disagreement between the screen and
+      // the record that this whole control exists to fix.
+      setCheckInLogs(logs => logs.filter(l => l.partyId !== partyId));
+      fetchCheckInSummary();
+      setUndoTarget(null);
+      setUndoReason('');
+      setOverlayData({
+        type: 'success',
+        eyebrow: 'Check-in reversed',
+        guestName: selectedGuest?.guestName,
+        message: 'They are no longer counted as arrived. The record is kept with your reason on it.',
+      });
+      setShowConfirmOverlay(true);
+    } catch (err) {
+      const message = err.message === 'Failed to fetch' || !navigator.onLine
+        ? 'Connection lost. Re-search this guest to see whether the reversal landed.'
+        : err.message;
+      playError(); buzz([40, 30, 40]);
+      setOverlayData({ type: 'error', eyebrow: 'Reversal failed', heading: 'Not reversed', message });
+      setShowConfirmOverlay(true);
+    } finally {
+      undoInFlight.current = false;
+      setUndoBusy(false);
     }
   };
 
@@ -592,6 +689,32 @@ export default function CheckInPage() {
                   </FeatureGate>
                 </>
               )}
+              {/*
+                The correction path, and deliberately the quieter object on the
+                panel. A check-in is the routine action and owns the solid gold
+                block; reversing one is rare, privileged and audited, so it is an
+                outlined control in the warning colour — findable when it is
+                wanted, never the thing a tired thumb lands on at a door.
+
+                Gated on EITHER entitlement, matching the server's
+                requireAnyFeature('qr_checkin','manual_checkin'). Asking for only
+                one would draw a padlock over an endpoint that answers.
+              */}
+              {selectedGuest.isCheckedIn && (
+                <FeatureGate tierFeatures={tierFeatures} isPaid={eventIsPaid} feature={['qr_checkin', 'manual_checkin']} onUpgrade={() => router.push('/dashboard')} wrapperStyle={{ display: 'flex', width: '100%' }}>
+                  <button
+                    onClick={() => { setUndoReason(''); setUndoTarget(selectedGuest); }}
+                    disabled={!isOnline}
+                    title={!isOnline ? 'No internet connection' : undefined}
+                    style={{ width: '100%', padding: '14px', background: 'transparent', borderRadius: '10px', fontWeight: 600, fontSize: '14px', border: `1px solid ${isOnline ? 'rgba(196,94,94,0.35)' : C.border}`, cursor: isOnline ? 'pointer' : 'not-allowed', color: isOnline ? '#C45E5E' : C.stone, fontFamily: 'var(--font-sans)', transition: 'all 0.25s', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                    onMouseEnter={e => { if (isOnline) e.currentTarget.style.background = 'rgba(196,94,94,0.06)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                  >
+                    <Icon name="cross" size={14} strokeWidth={1.8} />
+                    {isOnline ? 'Undo check-in' : 'Offline — cannot undo'}
+                  </button>
+                </FeatureGate>
+              )}
             </div>
           )}
         </div>
@@ -620,6 +743,74 @@ export default function CheckInPage() {
         </div>
       </div>
 
+      {/*
+        Undo — the reason dialog.
+
+        The reason is not a formality: the server refuses the request without one
+        (400 REASON_REQUIRED) and stores it on the row beside who did it, because
+        the check-in it reverses is the evidence that a guest was admitted. So
+        the confirm button stays disabled until something has been typed, and the
+        300-character ceiling is the server's, enforced here so a long note is
+        trimmed while it is still being written rather than rejected after.
+      */}
+      {undoTarget && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Undo check-in for ${undoTarget.guestName}`}
+          style={{ position: 'fixed', inset: 0, zIndex: 110, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px', background: 'rgba(25,27,30,0.8)', backdropFilter: 'blur(8px)' }}
+          onClick={() => { if (!undoBusy) { setUndoTarget(null); setUndoReason(''); } }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: '100%', maxWidth: '440px', background: C.white, border: `1px solid ${C.border}`, borderRadius: '20px', padding: '32px', boxShadow: '0 24px 60px rgba(0,0,0,0.15)', display: 'flex', flexDirection: 'column', gap: '18px' }}
+          >
+            <div>
+              <span style={{ fontSize: '10px', letterSpacing: '0.2em', textTransform: 'uppercase', color: '#C45E5E', fontWeight: 800, display: 'block' }}>Undo check-in</span>
+              <h3 style={{ fontSize: '22px', fontWeight: 900, color: C.charcoal, marginTop: '8px', fontFamily: 'var(--font-serif)' }}>{undoTarget.guestName}</h3>
+              <p style={{ color: C.stone, fontSize: '13px', marginTop: '6px', lineHeight: 1.6 }}>
+                This reverses the arrival for the whole party ({undoTarget.partySize} {undoTarget.partySize === 1 ? 'guest' : 'guests'}) and removes them from the arrival count. The record is kept, with your reason on it.
+              </p>
+            </div>
+
+            <div>
+              <label htmlFor="undo-reason" style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.1em', color: C.stone, fontWeight: 700, display: 'block', marginBottom: '8px' }}>
+                Reason (required)
+              </label>
+              <input
+                id="undo-reason"
+                autoFocus
+                value={undoReason}
+                onChange={(e) => setUndoReason(e.target.value.slice(0, 300))}
+                onKeyDown={(e) => { if (e.key === 'Enter' && undoReason.trim() && !undoBusy) handleUndo(undoTarget.id, undoReason.trim()); }}
+                placeholder="e.g. Checked in the wrong guest"
+                style={inputStyle}
+              />
+              <span style={{ fontSize: '11px', color: C.stone, display: 'block', marginTop: '6px' }}>
+                Recorded in the audit trail. {300 - undoReason.length} characters left.
+              </span>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <button
+                onClick={() => { setUndoTarget(null); setUndoReason(''); }}
+                disabled={undoBusy}
+                style={{ padding: '14px', borderRadius: '10px', border: `1px solid ${C.border}`, background: C.white, color: C.charcoal, fontWeight: 700, fontSize: '14px', cursor: undoBusy ? 'not-allowed' : 'pointer', fontFamily: 'var(--font-sans)' }}
+              >
+                Keep them in
+              </button>
+              <button
+                onClick={() => handleUndo(undoTarget.id, undoReason.trim())}
+                disabled={!undoReason.trim() || undoBusy}
+                style={{ padding: '14px', borderRadius: '10px', border: 'none', background: (!undoReason.trim() || undoBusy) ? C.border : '#C45E5E', color: C.white, fontWeight: 700, fontSize: '14px', cursor: (!undoReason.trim() || undoBusy) ? 'not-allowed' : 'pointer', fontFamily: 'var(--font-sans)' }}
+              >
+                {undoBusy ? 'Reversing…' : 'Undo check-in'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Confirmation Overlay */}
       {showConfirmOverlay && overlayData && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px', background: 'rgba(25,27,30,0.8)', backdropFilter: 'blur(8px)' }}>
@@ -630,20 +821,25 @@ export default function CheckInPage() {
                   <svg width="36" height="36" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
                 </div>
                 <div>
-                  <span style={{ fontSize: '10px', letterSpacing: '0.2em', textTransform: 'uppercase', color: C.gold, fontWeight: 800, display: 'block' }}>Verification Success</span>
+                  <span style={{ fontSize: '10px', letterSpacing: '0.2em', textTransform: 'uppercase', color: C.gold, fontWeight: 800, display: 'block' }}>{overlayData.eyebrow || 'Verification Success'}</span>
                   <h3 style={{ fontSize: '24px', fontWeight: 900, color: C.charcoal, marginTop: '8px', fontFamily: 'var(--font-serif)' }}>{overlayData.guestName}</h3>
                   <p style={{ color: C.stone, fontSize: '13px', marginTop: '4px' }}>{overlayData.message}</p>
                 </div>
-                <div style={{ width: '100%', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`, padding: '16px 0' }}>
-                  <div style={{ background: C.ivory, padding: '12px', borderRadius: '10px', border: `1px solid ${C.border}` }}>
-                    <span style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '0.1em', color: C.stone, display: 'block', fontWeight: 700 }}>Party Size</span>
-                    <span style={{ fontSize: '18px', fontWeight: 700, color: C.gold, marginTop: '4px', display: 'block' }}>{overlayData.partySize} Guests</span>
+                {/* Only an admission has a party size and a seat to report. A
+                    reversal has neither, and the grid rendered "undefined Guests"
+                    at "undefined" when it was shown one. */}
+                {overlayData.partySize != null && (
+                  <div style={{ width: '100%', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`, padding: '16px 0' }}>
+                    <div style={{ background: C.ivory, padding: '12px', borderRadius: '10px', border: `1px solid ${C.border}` }}>
+                      <span style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '0.1em', color: C.stone, display: 'block', fontWeight: 700 }}>Party Size</span>
+                      <span style={{ fontSize: '18px', fontWeight: 700, color: C.gold, marginTop: '4px', display: 'block' }}>{overlayData.partySize} Guests</span>
+                    </div>
+                    <div style={{ background: C.ivory, padding: '12px', borderRadius: '10px', border: `1px solid ${C.border}` }}>
+                      <span style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '0.1em', color: C.stone, display: 'block', fontWeight: 700 }}>Assigned Seat</span>
+                      <span style={{ fontSize: '18px', fontWeight: 700, color: C.charcoal, marginTop: '4px', display: 'block' }}>{overlayData.tableName}</span>
+                    </div>
                   </div>
-                  <div style={{ background: C.ivory, padding: '12px', borderRadius: '10px', border: `1px solid ${C.border}` }}>
-                    <span style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '0.1em', color: C.stone, display: 'block', fontWeight: 700 }}>Assigned Seat</span>
-                    <span style={{ fontSize: '18px', fontWeight: 700, color: C.charcoal, marginTop: '4px', display: 'block' }}>{overlayData.tableName}</span>
-                  </div>
-                </div>
+                )}
               </>
             ) : (
               <>
@@ -651,8 +847,11 @@ export default function CheckInPage() {
                   <svg width="36" height="36" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
                 </div>
                 <div>
-                  <span style={{ fontSize: '10px', letterSpacing: '0.2em', textTransform: 'uppercase', color: '#C45E5E', fontWeight: 800, display: 'block' }}>Verification Failure</span>
-                  <h3 style={{ fontSize: '20px', fontWeight: 700, color: '#C45E5E', marginTop: '8px' }}>Access Denied</h3>
+                  <span style={{ fontSize: '10px', letterSpacing: '0.2em', textTransform: 'uppercase', color: '#C45E5E', fontWeight: 800, display: 'block' }}>{overlayData.eyebrow || 'Verification Failure'}</span>
+                  {/* "Access Denied" is the right words for a refused admission
+                      and the wrong words for a reversal that could not be sent,
+                      so the caller may name its own failure. */}
+                  <h3 style={{ fontSize: '20px', fontWeight: 700, color: '#C45E5E', marginTop: '8px' }}>{overlayData.heading || 'Access Denied'}</h3>
                   <p style={{ color: C.stone, fontSize: '13px', marginTop: '8px', lineHeight: 1.6, maxWidth: '300px' }}>{overlayData.message}</p>
                 </div>
               </>

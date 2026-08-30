@@ -1,0 +1,34 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Line endings, per file type. This file exists because of one real failure.
+#
+# `deploy-android.bat` was written with LF-only endings — by a tool, not by a
+# checkout — and cmd.exe cannot run such a file. It does not report a syntax
+# error either: it reads a batch file by BYTE OFFSET, so LF-only endings leave
+# it a byte behind on every line and it executes the tail ends of lines as if
+# they were commands. What that looks like from the outside is:
+#
+#     'ncy' is not recognized as an internal or external command
+#     'loy-android.bat' is not recognized as an internal or external command
+#     'cho' is not recognized as an internal or external command
+#
+# — fragments of "fancy", "deploy-android.bat" and "echo". Nothing in that
+# output points at line endings, which is what makes it worth writing down.
+#
+# `core.autocrlf` is `true` on this machine, so a fresh CHECKOUT would have been
+# fine. It only bites files written straight to the working tree, and it will
+# bite again the next time one is. These attributes make the answer part of the
+# repository instead of part of one machine's config.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Read by cmd.exe, which needs CRLF. Never let autocrlf or a tool decide.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# The mirror-image failure: these run on the Ubuntu build/deploy VPS, and a CR
+# at the end of a line reaches bash as part of the command. `deployment/
+# redeploy.sh` would fail with `$'\r': command not found` on every single line.
+*.sh text eol=lf
+
+# Gradle's own wrapper scripts, same split, same reasons.
+gradlew text eol=lf
+gradlew.bat text eol=crlf

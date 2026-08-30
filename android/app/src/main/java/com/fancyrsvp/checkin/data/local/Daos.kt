@@ -320,6 +320,39 @@ interface CheckInDao {
     @Query("UPDATE check_ins SET undoneAt = :at, undoReason = :reason WHERE clientCheckinId = :clientCheckinId")
     suspend fun markUndone(clientCheckinId: String, at: Long, reason: String)
 
+    /**
+     * One check-in by the SERVER's id — the only key both devices agree on.
+     *
+     * A delta says "this check-in was reversed" and names it by server id. The
+     * row it refers to may be stored here either way round: as `remote:<id>` if
+     * another device made it, or under a real client id if THIS device did and
+     * has since synced (`markSynced` writes the server id back). Looking it up
+     * by the `remote:` key alone therefore finds only half of them — and the
+     * half it misses is a device's own admissions, so a tablet went on showing a
+     * guest as arrived after the other gate had reversed them, and refused to
+     * re-admit them on the Layer 1 duplicate guard.
+     */
+    @Query("SELECT * FROM check_ins WHERE eventId = :eventId AND serverId = :serverId LIMIT 1")
+    suspend fun byServerId(eventId: String, serverId: String): CheckInEntity?
+
+    /**
+     * Takes back a local undo the server would not accept.
+     *
+     * The undo is marked here first and queued second, so the operator sees the
+     * reversal immediately — right, and the whole point of an offline-first
+     * door. But when the server answers 404 the reversal did NOT happen and
+     * cannot: the id names a check-in it has never held (see
+     * SyncRepository.drainUndos). Leaving the local mark makes the tablet insist
+     * on a reversal that exists only on this device, which is the disagreement
+     * with the dashboard that the whole undo path is being fixed for.
+     *
+     * So the guest goes back to arrived, because that is what is true. The guest
+     * list then shows them as arrived with the note that the reversal has to be
+     * done from the dashboard, which is the accurate account of what happened.
+     */
+    @Query("UPDATE check_ins SET undoneAt = NULL, undoReason = NULL WHERE clientCheckinId = :clientCheckinId")
+    suspend fun clearUndone(clientCheckinId: String)
+
     @Query("DELETE FROM check_ins WHERE eventId = :eventId")
     suspend fun deleteForEvent(eventId: String)
 
@@ -415,6 +448,17 @@ interface SyncQueueDao {
 
     @Query("SELECT COUNT(*) FROM sync_queue WHERE eventId = :eventId")
     suspend fun depthForEvent(eventId: String): Int
+
+    /**
+     * Depth EXCLUDING stalled entries — what is still worth sending.
+     *
+     * The drain reports `Partial` to mean "there is more to send, come straight
+     * back", and `SyncQueueWorker` honours that by looping with no delay. Counted
+     * with `depthForEvent`, a single permanently-stalled entry makes that true
+     * forever and spins the worker against something that can never move.
+     */
+    @Query("SELECT COUNT(*) FROM sync_queue WHERE eventId = :eventId AND isStalled = 0")
+    suspend fun pendingDepthForEvent(eventId: String): Int
 
     /** Total across every event — what the device-health header reports (§21.7). */
     @Query("SELECT COUNT(*) FROM sync_queue")

@@ -44,6 +44,35 @@ class GuestListViewModel @Inject constructor(
         val arrivedByStaff: String?,
         /** Present only when arrived — the key the undo needs. */
         val clientCheckinId: String?,
+        /**
+         * Whether THIS DEVICE can reverse this arrival.
+         *
+         * ── What has to be true for the server to find the row ──
+         *
+         * The undo names ONE check-in, and the server resolves it two ways:
+         *
+         *   • `client_checkin_id` — works only for a check-in this device
+         *     created. Anything else it holds was reconstructed locally under an
+         *     invented key (`seed:<eventId>:<guestId>` when the arrival was
+         *     already recorded at preparation, `remote:<serverId>` when it came
+         *     from another gate) and the server has never held that value. It is
+         *     not even a uuid.
+         *   • `serverId` — the row's own primary key, carried on both of those,
+         *     and preferred by the server when present (`checkin_undo_by_ref`).
+         *
+         * So an arrival is reversible from here if EITHER applies. In practice
+         * that is now everything, which is the point: at a two-gate event most of
+         * the list was admitted somewhere else.
+         *
+         * The one case that stays false is a tablet prepared by a server too old
+         * to send the server id. That is honest rather than unfortunate — the
+         * undo genuinely cannot be applied, and the control is hidden with the
+         * screen saying where it CAN be done. It used to be offered anyway: the
+         * local row was marked reversed and the supervisor was shown success
+         * while the request could never land, so the guest stayed counted as
+         * arrived on the dashboard, permanently, with nothing admitting it.
+         */
+        val reversibleHere: Boolean,
     ) {
         val isVip: Boolean get() = category.equals("vip", ignoreCase = true)
     }
@@ -114,6 +143,10 @@ class GuestListViewModel @Inject constructor(
                     arrivedAt = record?.checkedInAt,
                     arrivedByStaff = record?.staffDisplayName,
                     clientCheckinId = record?.clientCheckinId,
+                    // Either reference will do: a check-in this device created
+                    // (resolvable by its client id) or any arrival that arrived
+                    // with a server id. See Row.reversibleHere.
+                    reversibleHere = record != null && (!record.isRemote || record.serverId != null),
                 )
             }
         }

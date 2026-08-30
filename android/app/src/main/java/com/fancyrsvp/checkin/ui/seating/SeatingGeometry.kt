@@ -28,8 +28,9 @@ import com.fancyrsvp.checkin.data.local.VenueTableEntity
  *     element's TOP-LEFT corner as a percentage of the world. One consumer read
  *     them as the CENTRE, shifting every element by half its OWN size — and
  *     because sizes differ per shape, the layout did not move, it SCRAMBLED,
- *     with elements landing on top of each other. Never re-derive a centre;
- *     always go through [centerX] / [centerY] / [boxOf].
+ *     with elements landing on top of each other. Never re-derive a position
+ *     by hand; always go through [boxOf], which is the only place the
+ *     percentage-to-world conversion happens.
  *
  * Adding a shape means editing this file AND the four places named in the
  * JavaScript header. Anything else and one surface stops drawing it.
@@ -149,8 +150,6 @@ fun pctToWorld(pct: Double?, total: Double): Double = (pct ?: 0.0) / 100.0 * tot
 data class WorldBox(val x: Double, val y: Double, val w: Double, val h: Double) {
     val right: Double get() = x + w
     val bottom: Double get() = y + h
-    val centerX: Double get() = x + w / 2
-    val centerY: Double get() = y + h / 2
 }
 
 fun VenueTableEntity.boxOf(): WorldBox = WorldBox(
@@ -159,9 +158,6 @@ fun VenueTableEntity.boxOf(): WorldBox = WorldBox(
     w = worldWidth(),
     h = worldHeight(),
 )
-
-fun VenueTableEntity.centerX(): Double = boxOf().centerX
-fun VenueTableEntity.centerY(): Double = boxOf().centerY
 
 /** Degrees, defaulted rather than nullable — every drawing site needs a number. */
 fun VenueTableEntity.rotationDegrees(): Float = (rotation ?: 0.0).toFloat()

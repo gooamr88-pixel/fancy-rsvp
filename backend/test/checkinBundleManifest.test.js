@@ -110,6 +110,7 @@ test('arrivals already recorded are included, so a fresh device knows who is ins
   mock.setResolver(manifestResolver({
     guests: [guestRow('g1', 'Alice')],
     checkIns: [{
+      id: 'chk-1',
       guest_id: 'g1', party_id: 'p-g1', checked_in_at: '2026-08-01T19:00:00Z',
       method: 'manual_search', server_seq: 3, staff_display_name: 'Amina', device_label: 'Web kiosk',
     }],
@@ -120,6 +121,25 @@ test('arrivals already recorded are included, so a fresh device knows who is ins
   assert.equal(m.existingCheckIns[0].guestId, 'g1');
   assert.equal(m.existingCheckIns[0].serverSeq, 3);
   assert.equal(m.existingCheckIns[0].staffName, 'Amina');
+});
+
+/**
+ * A seeded arrival is rebuilt on the device under an invented `seed:` key, so
+ * the server id is the ONLY handle a supervisor can reverse it by. Without it
+ * the undo 404s and the guest stays counted as present — which at a two-gate
+ * event is most of the guest list.
+ */
+test('a seeded arrival carries its server id, or it can never be reversed from a tablet', async () => {
+  mock.setResolver(manifestResolver({
+    guests: [guestRow('g1', 'Alice')],
+    checkIns: [{
+      id: 'chk-1', guest_id: 'g1', party_id: 'p-g1',
+      checked_in_at: '2026-08-01T19:00:00Z', method: 'manual_search', server_seq: 3,
+    }],
+  }));
+
+  const m = await svc.getBundleManifest(EVENT);
+  assert.equal(m.existingCheckIns[0].serverId, 'chk-1');
 });
 
 test('the existing-check-ins query excludes undone rows', async () => {
