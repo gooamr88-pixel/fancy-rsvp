@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef } from 'react';
+import { useEffect, useEffectEvent, useRef } from 'react';
 
 const FOCUSABLE_SELECTOR = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -32,19 +32,20 @@ const FOCUSABLE_SELECTOR = 'a[href], button:not([disabled]), textarea:not([disab
  * constant", on the shop's product form, and it was never a shop bug — all 16
  * modals that use this hook had it, including Edit guest and Import guests.
  *
- * The callback lives in a ref instead. The effect keeps the LATEST `onClose`
- * without depending on its identity, so it runs exactly twice per modal: once
- * when it opens, once when it closes.
+ * The callback is read through an Effect Event instead. `requestClose` has a
+ * stable identity but always sees the LATEST `onClose`, so the effect can keep
+ * `[isOpen]` as its whole dependency list and runs exactly twice per modal:
+ * once when it opens, once when it closes.
+ *
+ * This used to be a `useRef` assigned during render, which is the same idea
+ * written by hand — and writing a ref during render is exactly what
+ * `useEffectEvent` (React 19.2) exists to replace.
  */
 export function useModalA11y(isOpen, { onClose } = {}) {
   const dialogRef = useRef(null);
   const triggerRef = useRef(null);
 
-  /* Updated on every render, read only from inside the effect. Assigned during
-     render rather than in its own effect so that an Escape keypress in the
-     same tick as a re-render still calls the current handler. */
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
+  const requestClose = useEffectEvent(() => { onClose?.(); });
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -63,7 +64,7 @@ export function useModalA11y(isOpen, { onClose } = {}) {
     });
 
     const handleKeyDown = (e) => {
-      if (e.key === 'Escape') { onCloseRef.current?.(); return; }
+      if (e.key === 'Escape') { requestClose(); return; }
       if (e.key !== 'Tab') return;
       const container = dialogRef.current;
       if (!container) return;

@@ -50,6 +50,20 @@ function computeSmsSegments(text) {
  * (e.g. "$5", "A$&B") can never be misread as `String.replace` special patterns.
  * Unknown tags are left intact rather than blanked, so typos are visible.
  *
+ * ── This function had no callers for a while, and was kept ──
+ *
+ * It was written for the free-text campaign blaster, which the four-type rebuild
+ * deleted. From then until the organizer-authored bodies shipped it was reachable
+ * from nowhere — the kind of orphan a dead-code sweep removes on sight.
+ *
+ * Deleting it would have been the wrong call, and the `$` note above is why. The
+ * obvious re-implementation is `template.replace(/\{(\w+)\}/g, values[key])` with
+ * a STRING replacement, and that version is silently wrong: a guest called
+ * "A$&B", or a table named "$5 Room", makes `$&` expand to the matched text and
+ * corrupts the message. It is a bug that appears only for the handful of guests
+ * whose data contains a dollar sign, which is to say it appears in production and
+ * never in a test.
+ *
  * @param {string} template
  * @param {Record<string, string|number|null|undefined>} values  keys should be lowercase
  */
@@ -65,7 +79,20 @@ function renderTemplate(template, values = {}) {
   });
 }
 
-/** The tags the composer advertises and the renderer understands. */
-const SUPPORTED_TAGS = ['name', 'url', 'rsvp_link', 'table_number', 'table', 'event', 'event_name'];
+/* `SUPPORTED_TAGS` lived here and has moved to config/smsMergeTags.js.
+ *
+ * It was a flat array of seven strings — ['name', 'url', 'rsvp_link',
+ * 'table_number', 'table', 'event', 'event_name'] — with no callers, and by the
+ * time anything wanted to use it three of those tags named nothing any template
+ * produces, two were duplicate names for one value, and none could reach a
+ * guest's table, companions, meals or entry pass.
+ *
+ * A tag list also cannot be flat: which tags are offered depends on the message
+ * type (`{table}` is meaningless in an invitation, where nobody is seated yet),
+ * and each tag needs a clip ceiling so the composer can price a body at its
+ * worst case rather than at whatever sample the organizer happened to preview.
+ * That is a table, not an array, and it belongs next to the type registry it
+ * mirrors.
+ */
 
-module.exports = { computeSmsSegments, renderTemplate, SUPPORTED_TAGS };
+module.exports = { computeSmsSegments, renderTemplate };

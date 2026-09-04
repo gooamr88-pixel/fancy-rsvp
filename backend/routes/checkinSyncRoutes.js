@@ -47,10 +47,54 @@ const uuidParam = (name) => (req, res, next, value) => {
   next();
 };
 
+/**
+ * A check-in reference, which is NOT a uuid and must not be guarded as one.
+ *
+ * ── WHY THIS PARAMETER IS THE ODD ONE OUT ──
+ *
+ * `:clientCheckinId` carried `uuidParam` for most of its life, and that single
+ * line silently disabled two-device undo for every event on the platform.
+ *
+ * A tablet can only produce a real uuid for a check-in IT created. Every other
+ * arrival it holds was rebuilt locally under an invented key — `seed:<eventId>:
+ * <guestId>` for arrivals already recorded when the device was prepared
+ * (BundleRepository), `remote:<serverId>` for another gate's (SyncRepository).
+ * Those are what it puts in this path segment, and a uuid guard answers all of
+ * them with 400 before any handler runs.
+ *
+ * The damage was not one failed request. `checkinSyncService.undoCheckIn` was
+ * deliberately rewritten to accept exactly these keys and resolve the row by
+ * `serverId` instead — code the guard made unreachable. Meanwhile the device
+ * marks the guest reversed locally BEFORE queueing, and only takes that mark
+ * back on a 404, so a 400 left the tablet insisting on a reversal the server
+ * had refused, permanently, while its queue entry stalled and blocked closing
+ * the event.
+ *
+ * Nothing downstream needs the guard. `asUuid()` (checkinSyncService.js) is the
+ * real validator: it returns null for anything that is not a uuid, so a
+ * malformed reference reaches Postgres as NULL rather than as a cast that
+ * raises `22P02` — and with neither a usable client id nor a server id the
+ * service answers NOT_FOUND, which the device is built to handle.
+ *
+ * So all this needs to do is refuse input too large to be any legitimate key.
+ * The longest real one is `seed:` + two uuids + two colons = 79 characters.
+ */
+const MAX_CHECKIN_REF_LENGTH = 200;
+const checkinRefParam = (req, res, next, value) => {
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_CHECKIN_REF_LENGTH) {
+    return res.status(400).json({
+      success: false,
+      error: 'INVALID_PARAM',
+      message: `clientCheckinId must be 1–${MAX_CHECKIN_REF_LENGTH} characters.`,
+    });
+  }
+  next();
+};
+
 // app.js registers an app.param('eventId') guard, but this router is mounted on
 // a path that carries no :eventId at mount time, so the guards are declared here.
 router.param('eventId', uuidParam('eventId'));
-router.param('clientCheckinId', uuidParam('clientCheckinId'));
+router.param('clientCheckinId', checkinRefParam);
 router.param('deviceId', uuidParam('deviceId'));
 router.param('staffId', uuidParam('staffId'));
 

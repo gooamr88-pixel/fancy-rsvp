@@ -2,13 +2,20 @@ const crypto = require('crypto');
 const {
   SMS_MESSAGE_TYPES, sanitizeSmsSettings, isRetiredSmsType, labelForKind,
 } = require('../config/smsMessageTypes');
+const { tagsForType, sampleContext, maxContext } = require('../config/smsMergeTags');
+const { renderSmsBody } = require('../utils/smsTemplates');
+const {
+  measureTemplate, sanitizeSmsTemplates, MAX_TEMPLATE_SEGMENTS, MAX_TEMPLATE_CHARS,
+} = require('../utils/smsTemplateValidation');
 const { resolveProvider, resolveWebhookProvider } = require('../services/smsProviders');
 const { normalizeSmsPricing, maxPerSendFor } = require('../config/smsPricing');
 const { getPlatformConfig } = require('../utils/configCache');
 const { selectEventWithTier } = require('../utils/tierResolver');
 const { summarizeBalance, coverageForGuests, explainSkip, isResendable } = require('../utils/smsUsage');
 const { normalizeToE164 } = require('../utils/phone');
-const { SMS_CONSENT_TEXT_VERSION, logSmsConsentDecision } = require('../utils/smsConsent');
+const {
+  SMS_CONSENT_TEXT_VERSION, ORGANIZER_SMS_CONSENT_TEXT_VERSION, logSmsConsentDecision,
+} = require('../utils/smsConsent');
 const { describeSmsCharge, volumeDiscountsFromConfig } = require('../utils/pricing');
 const { getPublicBaseUrl } = require('../utils/publicUrl');
 // Module scope, deliberately. buildResendContext needs this partway through its
@@ -555,7 +562,11 @@ const updateOrganizerSmsConsent = async (req, res, next) => {
       sms_consent: consent,
       sms_consent_at: nowISO,
       sms_phone: phone,
-      sms_consent_text_version: consent ? SMS_CONSENT_TEXT_VERSION : null,
+      // The ORGANIZER's version, not the guest one. What they agreed to is a
+      // headcount summary about their own event; the guest sentence describes
+      // invitation links and RSVP confirmations they will never receive, and
+      // stamping it here recorded consent to the wrong document.
+      sms_consent_text_version: consent ? ORGANIZER_SMS_CONSENT_TEXT_VERSION : null,
       sms_consent_ip: consent ? (req.ip || null) : null,
     };
 
@@ -877,6 +888,160 @@ const updateSmsSettings = async (req, res, next) => {
   }
 };
 
+/* ═══════════════════════════════════════════════════════════════════════════
+ * ORGANIZER-AUTHORED MESSAGE BODIES
+ *
+ * Everything the composer needs to open, in one request: the types, the tags
+ * each type allows, what OUR body says, what THEIRS says, and what either one
+ * costs at worst case.
+ *
+ * The default bodies are rendered here rather than shipped to the client as
+ * strings, and that is the only way this can be right. The built-in templates
+ * are JavaScript functions with branches in them — `seating_reminder` has four
+ * shapes depending on whether a table and a date are known — so there is no
+ * string to send. Rendering them server-side through the same `renderSmsBody`
+ * the dispatcher calls means the "this is what we send" preview cannot drift
+ * from what actually goes out.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+const getSmsTemplates = async (req, res, next) => {
+  const { eventId } = req.params;
+  try {
+    const { data: event, error } = await supabase
+      .from('events').select('id, sms_templates').eq('id', eventId).maybeSingle();
+    if (error || !event) {
+      return res.status(404).json({ success: false, error: 'EVENT_NOT_FOUND', message: 'Event not found.' });
+    }
+
+    const stored = (event.sms_templates && typeof event.sms_templates === 'object') ? event.sms_templates : {};
+
+    const types = SMS_MESSAGE_TYPES.map((type) => {
+      const tags = tagsForType(type.key).map(({ tag, label, sample, max }) => ({ tag, label, sample, max }));
+      const context = sampleContext(type.key);
+
+      const languages = {};
+      for (const lang of ['en', 'ar']) {
+        // No `override` — this is deliberately OUR body, so the composer can
+        // show it beside theirs and offer "start from this".
+        const body = renderSmsBody(type.key, lang, context) || '';
+        const custom = stored?.[type.key]?.[lang] || null;
+        languages[lang] = {
+          default: body,
+          /**
+           * MEASURED AGAINST maxContext, NOT AGAINST THE BODY SHOWN.
+           *
+           * `body` is rendered from sampleContext because it has to be READABLE
+           * — it is the copy displayed in the editor. Measuring that string
+           * quotes a typical case: the Arabic confirmation reports 7 segments
+           * where it can actually bill 8. So the price comes from a second
+           * render at the true ceiling, and the two deliberately differ.
+           *
+           * `measureTemplate` cannot fix this on its own here: the built-in body
+           * arrives with its values already substituted, so there are no {tags}
+           * left for its worst-case map to expand.
+           */
+          defaultMeasured: measureTemplate(type.key, renderSmsBody(type.key, lang, maxContext(type.key)) || ''),
+          custom,
+          // Null when they have not written one — the client renders the
+          // default's figures in that case rather than a zero.
+          customMeasured: custom ? measureTemplate(type.key, custom) : null,
+        };
+      }
+
+      return {
+        key: type.key,
+        label: type.label,
+        description: type.description,
+        audience: type.audience,
+        trigger: type.trigger,
+        tags,
+        languages,
+      };
+    });
+
+    return res.json({
+      success: true,
+      types,
+      // The footer is appended to every body and counts against every segment,
+      // so the composer has to render it inside the preview bubble. Sent rather
+      // than duplicated client-side: a mirrored copy has already drifted once
+      // (see the note on COMPLIANCE_FOOTER in services/smsDispatch.js).
+      complianceFooter: COMPLIANCE_FOOTER,
+      limits: { maxSegments: MAX_TEMPLATE_SEGMENTS, maxChars: MAX_TEMPLATE_CHARS },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Save message bodies.
+ *
+ * A MERGE, not a replace. The composer edits one type in one language at a time
+ * and PATCHes just that; replacing the column would wipe every other body the
+ * organizer has written the moment they touch a second one.
+ *
+ * A `null` value is how the UI says "reset this one to yours" — the key is
+ * deleted rather than stored as null, so `sms_templates` never accumulates
+ * tombstones and `renderSmsBody`'s optional chain finds nothing, which is
+ * exactly the built-in path.
+ */
+const updateSmsTemplates = async (req, res, next) => {
+  const { eventId } = req.params;
+  try {
+    const result = sanitizeSmsTemplates(req.body?.templates);
+    if (!result.ok) {
+      return res.status(400).json({
+        success: false,
+        error: result.error,
+        message: result.message,
+        // Which box to put the error under. Without these the composer can only
+        // show the sentence at the top of the page and let the organizer hunt
+        // for which of ten editors it refers to.
+        type: result.type || null,
+        lang: result.lang || null,
+        measured: result.measured || null,
+      });
+    }
+
+    const { data: current, error: readErr } = await supabase
+      .from('events').select('id, sms_templates').eq('id', eventId).maybeSingle();
+    if (readErr) throw readErr;
+    if (!current) {
+      return res.status(404).json({ success: false, error: 'EVENT_NOT_FOUND', message: 'Event not found.' });
+    }
+
+    const merged = { ...(current.sms_templates && typeof current.sms_templates === 'object' ? current.sms_templates : {}) };
+    for (const [type, byLang] of Object.entries(result.templates)) {
+      const next = { ...(merged[type] || {}) };
+      for (const [lang, value] of Object.entries(byLang)) {
+        if (value === null) delete next[lang];
+        else next[lang] = value;
+      }
+      // An empty object left behind reads as "this type has overrides" to
+      // anything scanning keys. Drop it.
+      if (Object.keys(next).length === 0) delete merged[type];
+      else merged[type] = next;
+    }
+
+    const { data, error } = await supabase
+      .from('events')
+      .update({ sms_templates: merged, updated_at: new Date().toISOString() })
+      .eq('id', eventId)
+      .select('id, sms_templates')
+      .maybeSingle();
+    if (error) throw error;
+
+    return res.json({
+      success: true,
+      templates: data?.sms_templates || {},
+      measured: result.measured,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 /**
  * Recent send attempts, skips included.
  * GET /api/v1/events/:eventId/campaigns/log
@@ -945,6 +1110,8 @@ module.exports = {
   getCampaignHistory,
   getSmsSettings,
   updateSmsSettings,
+  getSmsTemplates,
+  updateSmsTemplates,
   getSmsLog,
   getTopUpQuote,
   resendSmsMessage,

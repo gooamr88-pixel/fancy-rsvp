@@ -54,7 +54,16 @@ const C = {
 
 export default function GuestSendMenu({
   guestName,
-  /** ({ channel }) => void — 'email' | 'qr' | 'sms' | 'detail-sms' */
+  /**
+   * ({ channel, smsType }) => void
+   *   channel: 'email' | 'qr' | 'sms' | 'detail-sms'  — HOW it travels
+   *   smsType: null | 'seating_reminder' | 'event_update'  — WHICH text
+   *
+   * Two fields rather than one, because several items are channel 'sms' and
+   * differ only by which message they send. The JSDoc here always said
+   * "{ channel }" while the implementation passed a bare string; it passes the
+   * object now, and the string form is still tolerated by the caller.
+   */
   onSend,
   /** Truthy while any send for this guest is in flight. */
   busy = false,
@@ -277,6 +286,41 @@ export default function GuestSendMenu({
             : 'Only for guests who accepted — there are no details to send yet.',
           disabled: textBlocked || (attending ? null : 'This guest has not accepted yet'),
         },
+        /**
+         * The two types that were only ever sent on a schedule, now sendable by
+         * hand as well.
+         *
+         * Both carry `smsType` rather than a new `channel` string, and that
+         * distinction is deliberate: `channel` says HOW the message travels and
+         * the parent keys its per-button spinner off it, while `smsType` says
+         * WHICH message. Minting a fresh channel per type would mean every
+         * caller of onSend has to learn a new string, and the API would grow a
+         * branch per message type — exactly the split the unified endpoint
+         * exists to close.
+         *
+         * `detail-sms` above keeps its own channel only because it predates
+         * `smsType` and clients in flight still post it.
+         */
+        {
+          channel: 'sms',
+          smsType: 'seating_reminder',
+          label: 'Table & entry pass',
+          hint: attending
+            ? 'Sends automatically 2 hours before the event — use this to send it now.'
+            : 'Only for guests who accepted — they have no seat yet.',
+          disabled: textBlocked || (attending ? null : 'This guest has not accepted yet'),
+        },
+        {
+          channel: 'sms',
+          smsType: 'event_update',
+          label: 'Something has changed',
+          // Says what it does NOT do. The cancellation wording is reachable only
+          // by actually cancelling the event, and an organizer looking for a way
+          // to tell people it is off needs to be sent to the right place rather
+          // than left thinking this button did it.
+          hint: 'Tells them the date or place has changed and links to the new details. To call the event off, cancel it instead.',
+          disabled: textBlocked,
+        },
       ],
     },
   ];
@@ -412,7 +456,11 @@ export default function GuestSendMenu({
                 const actionable = upgradeInstead || buyInstead;
                 return (
                   <button
-                    key={item.channel}
+                    /* `channel` alone is no longer unique — three items in this
+                       group are channel 'sms' and differ only by smsType, so a
+                       bare channel key would collide and React would reuse the
+                       wrong node between them. */
+                    key={item.smsType ? `${item.channel}:${item.smsType}` : item.channel}
                     type="button"
                     role="menuitem"
                     disabled={locked && !actionable}
@@ -421,7 +469,9 @@ export default function GuestSendMenu({
                       setOpen(false);
                       if (upgradeInstead) { onUpgradePlan?.(); return; }
                       if (buyInstead) { onBuySms?.(); return; }
-                      if (!locked) onSend?.(item.channel);
+                      // The whole descriptor, not just the channel: the caller
+                      // needs smsType to know WHICH text was asked for.
+                      if (!locked) onSend?.({ channel: item.channel, smsType: item.smsType || null });
                     }}
                     style={{
                       display: 'block', width: '100%', textAlign: 'left',

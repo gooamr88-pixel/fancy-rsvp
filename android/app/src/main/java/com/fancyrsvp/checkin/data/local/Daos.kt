@@ -46,9 +46,45 @@ interface EventDao {
      * practice. Prefers a prepared one and falls back to the most imminent, for
      * the window between pairing and the first successful bundle download —
      * during which the row exists but `isReadyOffline` is still false.
+     *
+     * ── WHY THE ORDER IS NOT JUST `startsAt ASC` ──
+     *
+     * It was, and combined with event rows that were never deleted (see
+     * [deleteById]) that resolved to the OLDEST event the tablet had ever held,
+     * forever. A device reused across a season would answer this with a wedding
+     * from months ago.
+     *
+     * "Imminent" has to mean nearest in the FUTURE, with past events as a
+     * fallback ordered most-recent-first — a tablet still being tidied up the
+     * morning after belongs to last night's event, not to the first one it ever
+     * ran.
      */
-    @Query("SELECT * FROM events ORDER BY isReadyOffline DESC, startsAt ASC LIMIT 1")
-    suspend fun readyEvent(): EventEntity?
+    @Query(
+        """
+        SELECT * FROM events
+         ORDER BY isReadyOffline DESC,
+                  CASE WHEN startsAt >= :now THEN 0 ELSE 1 END ASC,
+                  CASE WHEN startsAt >= :now THEN startsAt ELSE -startsAt END ASC
+         LIMIT 1
+        """,
+    )
+    suspend fun readyEvent(now: Long): EventEntity?
+
+    /**
+     * Removes an event outright, after its guest data has been purged.
+     *
+     * Nothing deleted these. `purgeGuestData` clears parties, guests, tables and
+     * staff; `markNotReady` only flipped a flag — so every event a tablet had
+     * ever been armed for stayed in the picker on the Prepare screen for the
+     * life of the device, and skewed [readyEvent] as described above.
+     *
+     * Called ONLY from DeviceRepository.purgeEventData, which refuses while the
+     * queue still holds unsent check-ins. The row carries `lastAppliedSeq`, so
+     * removing it while anything is outstanding would lose the device's place in
+     * the change stream.
+     */
+    @Query("DELETE FROM events WHERE id = :eventId")
+    suspend fun deleteById(eventId: String)
 
     @Query("UPDATE events SET bundleVersion = :version WHERE id = :eventId")
     suspend fun setBundleVersion(eventId: String, version: Long)
@@ -89,8 +125,12 @@ interface EventDao {
         pollingOnly: Boolean,
     )
 
-    @Query("UPDATE events SET isReadyOffline = 0, lastFullSyncAt = NULL WHERE id = :eventId")
-    suspend fun markNotReady(eventId: String)
+    /*
+     * `markNotReady` was here and is gone. Its only caller was
+     * DeviceRepository.purgeEventData, which now deletes the row outright — a
+     * purged event should leave the Prepare picker, not sit in it forever with
+     * a flag turned off. See [deleteById].
+     */
 
     /**
      * Highest bundle version this device holds, across all armed events.
@@ -111,6 +151,18 @@ interface PartyDao {
     /** The scan path: one primary-key lookup, no parsing, no computation. */
     @Query("SELECT * FROM parties WHERE id = :partyId")
     suspend fun byId(partyId: String): PartyEntity?
+
+    /**
+     * Every party for the event, for a screen that needs the label and table of
+     * many guests at once.
+     *
+     * Exists so GuestListViewModel can stop calling [byId] once per row: 500
+     * guests meant 500 of those plus 500 live-check-in lookups — 1,001 queries
+     * against an SQLCipher database on every filter change, which is a visible
+     * freeze on a tablet.
+     */
+    @Query("SELECT * FROM parties WHERE eventId = :eventId")
+    suspend fun forEvent(eventId: String): List<PartyEntity>
 
     @Query("DELETE FROM parties WHERE eventId = :eventId")
     suspend fun deleteForEvent(eventId: String)
@@ -172,6 +224,7 @@ interface GuestDao {
          WHERE g.eventId = :eventId
            AND (:category IS NULL OR g.category = :category)
            AND (:tableName IS NULL OR p.tableName = :tableName)
+           AND (:needle IS NULL OR g.nameNormalized LIKE '%' || :needle || '%')
            AND (
                 :arrivedFilter IS NULL
              OR (:arrivedFilter = 1 AND EXISTS (
@@ -190,9 +243,60 @@ interface GuestDao {
         category: String?,
         tableName: String?,
         arrivedFilter: Int?,
+        /**
+         * Normalised name fragment, or null for no name filter.
+         *
+         * ── WHY THE LIST NEEDED A SEARCH AT ALL ──
+         *
+         * The caller asks for 500 rows at offset 0 and the screen has no paging.
+         * On a 2,000-guest event that put 1,500 people beyond reach — not merely
+         * hard to find, unreachable: the guest list is the ONLY surface in the
+         * app that offers undo, so a supervisor could not reverse anyone whose
+         * name sorted past the cap.
+         *
+         * Matches the NORMALISED column, so the caller must normalise with the
+         * same NameNormalizer the scanner's manual search uses. That is what
+         * makes أحمد findable by typing احمد, and it keeps the two search
+         * surfaces answering identically.
+         */
+        needle: String?,
         limit: Int,
         offset: Int,
     ): List<GuestEntity>
+
+    /**
+     * How many guests match the same filters, ignoring the page.
+     *
+     * The screen needs this to say "showing 500 of 2,100" rather than presenting
+     * a truncated list as if it were the whole one.
+     */
+    @Query(
+        """
+        SELECT COUNT(*) FROM guests g
+          LEFT JOIN parties p ON p.id = g.partyId
+         WHERE g.eventId = :eventId
+           AND (:category IS NULL OR g.category = :category)
+           AND (:tableName IS NULL OR p.tableName = :tableName)
+           AND (:needle IS NULL OR g.nameNormalized LIKE '%' || :needle || '%')
+           AND (
+                :arrivedFilter IS NULL
+             OR (:arrivedFilter = 1 AND EXISTS (
+                   SELECT 1 FROM check_ins c
+                    WHERE c.guestId = g.id AND c.eventId = :eventId AND c.undoneAt IS NULL))
+             OR (:arrivedFilter = 0 AND NOT EXISTS (
+                   SELECT 1 FROM check_ins c
+                    WHERE c.guestId = g.id AND c.eventId = :eventId AND c.undoneAt IS NULL))
+           )
+        """,
+    )
+    suspend fun countFilteredGuests(
+        eventId: String,
+        category: String?,
+        tableName: String?,
+        arrivedFilter: Int?,
+        needle: String?,
+    ): Int
+
 
     /** Category breakdown for the dashboard (§8.6), arrived vs total. */
     @Query(
@@ -419,6 +523,16 @@ interface CheckInDao {
         """,
     )
     suspend fun liveRecordFor(eventId: String, guestId: String): CheckInEntity?
+
+    /**
+     * Every live check-in for the event, in one read.
+     *
+     * The guest list needs one of these per row it renders. Asking per guest
+     * meant 500 round trips to an encrypted database on every filter change; the
+     * whole set is at most a few thousand small rows and is one query.
+     */
+    @Query("SELECT * FROM check_ins WHERE eventId = :eventId AND undoneAt IS NULL")
+    suspend fun liveForEvent(eventId: String): List<CheckInEntity>
 }
 
 @Dao
@@ -474,6 +588,62 @@ interface SyncQueueDao {
      */
     @Query("SELECT COUNT(*) FROM sync_queue WHERE eventId = :eventId AND isStalled = 1")
     suspend fun stalledCountForEvent(eventId: String): Int
+
+    /**
+     * Entries that hold EVIDENCE EXISTING NOWHERE ELSE — the only thing worth
+     * refusing to close, unpair or purge over.
+     *
+     * ── THE BUG THIS EXISTS FOR ──
+     *
+     * Three guards (close event, unpair, purge) counted `depthForEvent`, which
+     * is every row in the queue. That is right for a check-in: it is the record
+     * of somebody admitted at a door on a tablet that may have been offline, and
+     * destroying it is the worst outcome in the system.
+     *
+     * It is wrong for a REVERSAL the server has permanently refused. That entry
+     * holds no evidence — the check-in it refers to is already on the server,
+     * safe, and what could not be applied is the correction. Yet a single one
+     * blocked all three exits at once, and no control anywhere in the app could
+     * clear it. The Prepare screen is only reachable through Close Event, so a
+     * tablet in that state could not even be re-prepared: the only way out was
+     * clearing the app's data, which destroys the very check-ins the guard was
+     * protecting. The guard ate what it was guarding.
+     *
+     * So: every `check_in` entry counts, stalled or not. An `undo` counts only
+     * while it can still be sent.
+     *
+     * Written with an explicit type check rather than `payloadType != 'undo'` so
+     * a future payload type is BLOCKING by default. Getting that wrong in the
+     * other direction discards data.
+     */
+    @Query(
+        """
+        SELECT COUNT(*) FROM sync_queue
+         WHERE eventId = :eventId
+           AND (payloadType = 'check_in' OR isStalled = 0)
+        """,
+    )
+    suspend fun unsentEvidenceForEvent(eventId: String): Int
+
+    /** The same count across every event, for the unpair guard. */
+    @Query("SELECT COUNT(*) FROM sync_queue WHERE payloadType = 'check_in' OR isStalled = 0")
+    suspend fun totalUnsentEvidence(): Int
+
+    /*
+     * A `discardStalledUndos` delete was drafted here and deliberately dropped.
+     *
+     * It would have given a supervisor a way to clear a reversal the server had
+     * refused. Once SyncRepository.drainUndos takes the local mark back on ANY
+     * non-retryable 4xx, there is almost nothing left for it to clear: the only
+     * remaining route to a stalled undo is a payload this app itself wrote and
+     * can no longer parse.
+     *
+     * Shipping an unreachable control — especially one whose whole job is to
+     * delete queue rows — is worse than not having it. If a stalled undo is ever
+     * actually observed in the field, this is the shape the fix takes, and it
+     * must stay scoped to `payloadType = 'undo'` in SQL rather than by the
+     * caller: §21.3 should not be enforced by whoever writes the next call site.
+     */
 }
 
 @Dao

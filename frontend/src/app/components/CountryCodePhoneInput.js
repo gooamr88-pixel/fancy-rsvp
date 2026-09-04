@@ -1,86 +1,95 @@
 'use client';
 import React, { useEffect, useRef, useState } from 'react';
+import CountryFlag from './CountryFlag';
+import { lookupDialCode, countryName } from './countries';
 
-const C = { charcoal: '#191B1E', stone: '#77736A', border: '#E8E2D6', white: '#FFFFFF', error: '#ef4444', gold: '#B8944F' };
-
-// Calling code -> flag/name, resolved live as the guest types the numeric
-// code (there's still no dropdown — see the component doc below for why).
-// Weighted toward the Arab world (this platform's other primary audience)
-// plus every major global market; ambiguous codes (e.g. "1") show the most
-// common country sharing that prefix.
-const COUNTRY_BY_CODE = {
-  1: { flag: '🇺🇸', name: 'United States' }, 7: { flag: '🇷🇺', name: 'Russia' },
-  20: { flag: '🇪🇬', name: 'Egypt' }, 27: { flag: '🇿🇦', name: 'South Africa' },
-  30: { flag: '🇬🇷', name: 'Greece' }, 31: { flag: '🇳🇱', name: 'Netherlands' },
-  32: { flag: '🇧🇪', name: 'Belgium' }, 33: { flag: '🇫🇷', name: 'France' },
-  34: { flag: '🇪🇸', name: 'Spain' }, 39: { flag: '🇮🇹', name: 'Italy' },
-  40: { flag: '🇷🇴', name: 'Romania' }, 41: { flag: '🇨🇭', name: 'Switzerland' },
-  44: { flag: '🇬🇧', name: 'United Kingdom' }, 45: { flag: '🇩🇰', name: 'Denmark' },
-  46: { flag: '🇸🇪', name: 'Sweden' }, 47: { flag: '🇳🇴', name: 'Norway' },
-  48: { flag: '🇵🇱', name: 'Poland' }, 49: { flag: '🇩🇪', name: 'Germany' },
-  51: { flag: '🇵🇪', name: 'Peru' }, 52: { flag: '🇲🇽', name: 'Mexico' },
-  54: { flag: '🇦🇷', name: 'Argentina' }, 55: { flag: '🇧🇷', name: 'Brazil' },
-  56: { flag: '🇨🇱', name: 'Chile' }, 57: { flag: '🇨🇴', name: 'Colombia' },
-  60: { flag: '🇲🇾', name: 'Malaysia' }, 61: { flag: '🇦🇺', name: 'Australia' },
-  62: { flag: '🇮🇩', name: 'Indonesia' }, 63: { flag: '🇵🇭', name: 'Philippines' },
-  64: { flag: '🇳🇿', name: 'New Zealand' }, 65: { flag: '🇸🇬', name: 'Singapore' },
-  66: { flag: '🇹🇭', name: 'Thailand' }, 81: { flag: '🇯🇵', name: 'Japan' },
-  82: { flag: '🇰🇷', name: 'South Korea' }, 86: { flag: '🇨🇳', name: 'China' },
-  90: { flag: '🇹🇷', name: 'Turkey' }, 91: { flag: '🇮🇳', name: 'India' },
-  92: { flag: '🇵🇰', name: 'Pakistan' }, 93: { flag: '🇦🇫', name: 'Afghanistan' },
-  94: { flag: '🇱🇰', name: 'Sri Lanka' }, 95: { flag: '🇲🇲', name: 'Myanmar' },
-  98: { flag: '🇮🇷', name: 'Iran' },
-  211: { flag: '🇸🇸', name: 'South Sudan' }, 212: { flag: '🇲🇦', name: 'Morocco' },
-  213: { flag: '🇩🇿', name: 'Algeria' }, 216: { flag: '🇹🇳', name: 'Tunisia' },
-  218: { flag: '🇱🇾', name: 'Libya' }, 220: { flag: '🇬🇲', name: 'Gambia' },
-  221: { flag: '🇸🇳', name: 'Senegal' }, 234: { flag: '🇳🇬', name: 'Nigeria' },
-  254: { flag: '🇰🇪', name: 'Kenya' }, 351: { flag: '🇵🇹', name: 'Portugal' },
-  352: { flag: '🇱🇺', name: 'Luxembourg' }, 353: { flag: '🇮🇪', name: 'Ireland' },
-  358: { flag: '🇫🇮', name: 'Finland' }, 359: { flag: '🇧🇬', name: 'Bulgaria' },
-  370: { flag: '🇱🇹', name: 'Lithuania' }, 371: { flag: '🇱🇻', name: 'Latvia' },
-  372: { flag: '🇪🇪', name: 'Estonia' }, 380: { flag: '🇺🇦', name: 'Ukraine' },
-  385: { flag: '🇭🇷', name: 'Croatia' }, 386: { flag: '🇸🇮', name: 'Slovenia' },
-  420: { flag: '🇨🇿', name: 'Czech Republic' }, 421: { flag: '🇸🇰', name: 'Slovakia' },
-  960: { flag: '🇲🇻', name: 'Maldives' }, 961: { flag: '🇱🇧', name: 'Lebanon' },
-  962: { flag: '🇯🇴', name: 'Jordan' }, 963: { flag: '🇸🇾', name: 'Syria' },
-  964: { flag: '🇮🇶', name: 'Iraq' }, 965: { flag: '🇰🇼', name: 'Kuwait' },
-  966: { flag: '🇸🇦', name: 'Saudi Arabia' }, 967: { flag: '🇾🇪', name: 'Yemen' },
-  968: { flag: '🇴🇲', name: 'Oman' }, 970: { flag: '🇵🇸', name: 'Palestine' },
-  971: { flag: '🇦🇪', name: 'United Arab Emirates' }, 972: { flag: '🇮🇱', name: 'Israel' },
-  973: { flag: '🇧🇭', name: 'Bahrain' }, 974: { flag: '🇶🇦', name: 'Qatar' },
-  975: { flag: '🇧🇹', name: 'Bhutan' }, 976: { flag: '🇲🇳', name: 'Mongolia' },
-  977: { flag: '🇳🇵', name: 'Nepal' },
+const C = {
+  charcoal: '#191B1E', stone: '#77736A', ink: '#4A4742',
+  border: '#E8E2D6', white: '#FFFFFF', error: '#ef4444', gold: '#B8944F',
 };
 
-// Splits an existing "+<code><number>" value back into its two boxes once,
-// at mount — after that the boxes are the source of truth, so a parent
-// re-render doesn't fight the guest's typing.
+/* The dialling-code table used to be inline here as `COUNTRY_BY_CODE`, with an
+   emoji flag per entry. It lives in ./countries.js now: replacing the emoji
+   with drawn SVG gave it a second consumer that needs an ISO code rather than a
+   glyph, and the Arabic surface gave it a fourth column. */
+
+/**
+ * Splits an existing "+<code><number>" value back into its two boxes.
+ *
+ * ── IT RESOLVES THE CODE, IT DOES NOT ASSUME IT ──
+ *
+ * This used to keep the code only when the digits happened to start with the
+ * caller's `defaultCode`, and otherwise put the ENTIRE number — country code
+ * included — in the local-number box with the code box left blank. So a Saudi
+ * guest returning to a form defaulted to "1" saw an empty code box and
+ * "966512345678" as their local number: no flag, and a number that re-submits
+ * as "+966512345678" only by accident of the two boxes being concatenated.
+ *
+ * Longest-prefix lookup against the real table fixes it for every country in
+ * the table, not just the default one.
+ */
 function splitInitialValue(value, defaultCode) {
   if (value && value.startsWith('+')) {
     const digits = value.slice(1);
     if (defaultCode && digits.startsWith(defaultCode)) {
       return { code: defaultCode, number: digits.slice(defaultCode.length) };
     }
-    if (digits) return { code: '', number: digits };
+    // Try the longest dialling code that this number actually starts with.
+    for (let len = Math.min(4, digits.length); len >= 1; len -= 1) {
+      const head = digits.slice(0, len);
+      if (lookupDialCode(head)) return { code: head, number: digits.slice(len) };
+    }
+    /**
+     * NOTHING MATCHED — still split, rather than dumping it all in one box.
+     *
+     * The fallback used to be `{ code: '', number: <everything> }`. The value
+     * round-tripped correctly, but the field rendered an empty code box beside
+     * a globe and one long undifferentiated number, and — worse — the
+     * "unrecognised country code" hint is driven by `code`, so the one state
+     * that most needs explaining was the one state that explained nothing.
+     *
+     * Three digits, because after the second pass over countries.js every
+     * ASSIGNED one- and two-digit code is in the table. Reaching here at all
+     * means the number is already outside the known set, and three is the modal
+     * length. The emitted value is identical either way — the two boxes are
+     * concatenated — so this is presentation, not data.
+     */
+    if (digits) return { code: digits.slice(0, 3), number: digits.slice(3) };
   }
   return { code: defaultCode, number: '' };
 }
 
 /**
- * Plain-number phone input — a numeric country-code box (defaults to "1",
- * USA) next to a numeric local-number box, with a live flag indicator that
- * resolves from COUNTRY_BY_CODE as the guest types. Still no dropdown/
- * select, by original request — the flag is a read-only confirmation of
- * what was typed, not a picker.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * PHONE NUMBER — a numeric country-code box beside a numeric local-number box,
+ * with a live flag and the country's NAME resolving as the guest types.
  *
- * Composes both boxes into a single "+<code><number>" string via onChange —
- * the same E.164-ish contract PhoneNumberInput's callers already expect
- * (empty string when untouched, so an unfilled optional phone field never
- * gets flagged as invalid just because a default code is pre-filled).
+ * Still no dropdown, by the original request: the flag is a read-only
+ * confirmation of what was typed, not a picker. Composes both boxes into a
+ * single "+<code><number>" string via onChange.
+ *
+ * ── WHAT CHANGED, AND WHY THE FLAG IS DRAWN NOW ──
+ *
+ * The flag was an emoji, and **Windows has no glyphs for regional-indicator
+ * pairs** — every guest on Chrome, Edge or Firefox on Windows saw two boxed
+ * letters where a flag belonged. It was not a rendering nicety that degraded;
+ * the feature was absent for most desktop guests, invisibly, because it looks
+ * perfect on a Mac. See components/CountryFlag.js.
+ *
+ * ── AND WHY THE COUNTRY IS NAMED IN WORDS ──
+ *
+ * A flag alone cannot confirm a match. Twenty-two countries share "+1", several
+ * flags are near-identical at 22px (Ireland and Côte d'Ivoire, Chad and
+ * Romania, Monaco and Indonesia), and a guest who mistypes "+21" for "+212"
+ * gets a plausible-looking flag for a country they have never heard of. The
+ * name under the field is what turns the flag from decoration into a
+ * confirmation the guest can actually check — and it is what the request for
+ * "a flag AND the country" was really asking for.
+ * ─────────────────────────────────────────────────────────────────────────────
  */
 export default function CountryCodePhoneInput({
   value, onChange, placeholder, hasError = false, disabled = false, required = false,
-  defaultCountryCode = '1', name, id,
+  defaultCountryCode = '1', name, id, isRTL = false,
   'aria-invalid': ariaInvalid, 'aria-describedby': ariaDescribedBy,
 }) {
   const [{ code, number }, setParts] = useState(() => splitInitialValue(value, defaultCountryCode));
@@ -106,7 +115,7 @@ export default function CountryCodePhoneInput({
   };
 
   const handleCodeChange = (raw) => {
-    const digits = raw.replace(/\D/g, '').slice(0, 3);
+    const digits = raw.replace(/\D/g, '').slice(0, 4);
     setParts({ code: digits, number });
     emit(digits, number);
   };
@@ -117,54 +126,84 @@ export default function CountryCodePhoneInput({
     emit(code, digits);
   };
 
-  const country = COUNTRY_BY_CODE[code];
+  const country = lookupDialCode(code);
+  const label = countryName(country, isRTL);
+  const statusId = id ? `${id}-country` : undefined;
 
   return (
-    <div className={`cc-phone${hasError ? ' cc-phone--error' : ''}`}>
-      <span className="cc-phone-prefix" aria-hidden="true">
-        <span className="cc-phone-flag">{country ? country.flag : '🌐'}</span>
-        <span className="cc-phone-plus">+</span>
-      </span>
-      <input
-        type="text"
-        inputMode="numeric"
-        autoComplete="tel-country-code"
-        className="cc-phone-code"
-        aria-label={country ? `Country code (${country.name})` : 'Country code'}
-        value={code}
-        disabled={disabled}
-        onChange={(e) => handleCodeChange(e.target.value)}
-      />
-      <input
-        id={id}
-        name={name}
-        type="text"
-        inputMode="numeric"
-        autoComplete="tel-national"
-        className="cc-phone-number"
-        placeholder={placeholder || 'Phone number'}
-        value={number}
-        disabled={disabled}
-        required={required}
-        aria-invalid={ariaInvalid}
-        aria-describedby={ariaDescribedBy}
-        onChange={(e) => handleNumberChange(e.target.value)}
-      />
+    <div className="cc-wrap">
+      <div className={`cc-phone${hasError ? ' cc-phone--error' : ''}`}>
+        <span className="cc-phone-prefix">
+          {/* Decorative: the country is named in words below, and repeating it
+              here would make a screen reader say it twice per keystroke. */}
+          <CountryFlag code={country?.iso2} size={22} />
+          <span className="cc-phone-plus" aria-hidden="true">+</span>
+        </span>
+        <input
+          type="text"
+          inputMode="numeric"
+          autoComplete="tel-country-code"
+          className="cc-phone-code"
+          aria-label={country ? `Country code (${country.name})` : 'Country code'}
+          aria-describedby={statusId}
+          value={code}
+          disabled={disabled}
+          onChange={(e) => handleCodeChange(e.target.value)}
+        />
+        <input
+          id={id}
+          name={name}
+          type="text"
+          inputMode="numeric"
+          autoComplete="tel-national"
+          className="cc-phone-number"
+          placeholder={placeholder || 'Phone number'}
+          value={number}
+          disabled={disabled}
+          required={required}
+          aria-invalid={ariaInvalid}
+          aria-describedby={[ariaDescribedBy, statusId].filter(Boolean).join(' ') || undefined}
+          onChange={(e) => handleNumberChange(e.target.value)}
+        />
+      </div>
+
+      {/**
+        * THE CONFIRMATION LINE.
+        *
+        * `aria-live="polite"` and not "assertive": it updates on a keystroke,
+        * and an assertive region would interrupt the guest mid-word every time
+        * they typed a digit. Polite queues it for the next pause, which is when
+        * the information is actually wanted.
+        *
+        * The row is always in the DOM at a fixed height, even when empty. A line
+        * that appears and disappears reflows the form under the guest's thumb
+        * while they are typing into it — on the field the whole RSVP depends on.
+        */}
+      <div className="cc-phone-status" id={statusId} aria-live="polite">
+        {code ? (
+          label ? (
+            <span className="cc-phone-country">{label}</span>
+          ) : (
+            <span className="cc-phone-unknown">
+              {isRTL ? 'رمز دولة غير معروف' : 'Unrecognised country code'}
+            </span>
+          )
+        ) : null}
+      </div>
+
       <style jsx>{`
+        .cc-wrap { width: 100%; }
         .cc-phone { display: flex; align-items: stretch; width: 100%; }
         .cc-phone-prefix {
-          display: flex; align-items: center; gap: 6px; justify-content: center;
-          padding: 0 8px 0 14px; background: ${C.white}; border: 1px solid ${C.border}; border-right: none;
+          display: flex; align-items: center; gap: 7px; justify-content: center;
+          padding: 0 8px 0 12px; background: ${C.white}; border: 1px solid ${C.border}; border-right: none;
           border-radius: 12px 0 0 12px;
-        }
-        .cc-phone-flag {
-          font-size: 17px; line-height: 1; transition: opacity 0.15s ease;
         }
         .cc-phone-plus {
           color: ${C.stone}; font-size: 16px; font-family: var(--font-sans);
         }
         .cc-phone-code {
-          width: 48px; flex-shrink: 0; text-align: center; box-sizing: border-box;
+          width: 52px; flex-shrink: 0; text-align: center; box-sizing: border-box;
           padding: 14px 4px; background: ${C.white}; border: 1px solid ${C.border}; border-left: none; border-right: none;
           /* 16px, not 14px — below that iOS Safari auto-zooms on focus, and
              this is the phone number field, the single most-tapped input on
@@ -184,6 +223,13 @@ export default function CountryCodePhoneInput({
         .cc-phone--error .cc-phone-prefix, .cc-phone--error .cc-phone-code, .cc-phone--error .cc-phone-number {
           border-color: ${C.error};
         }
+        /* Reserved whether or not it has content — see the note above. */
+        .cc-phone-status {
+          min-height: 17px; margin-top: 5px; padding: 0 2px;
+          font-family: var(--font-sans); font-size: 12px; line-height: 17px;
+        }
+        .cc-phone-country { color: ${C.ink}; font-weight: 600; }
+        .cc-phone-unknown { color: ${C.stone}; }
       `}</style>
     </div>
   );

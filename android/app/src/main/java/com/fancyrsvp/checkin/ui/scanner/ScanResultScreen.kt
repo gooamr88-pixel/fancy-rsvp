@@ -67,7 +67,6 @@ import com.fancyrsvp.checkin.ui.theme.BandAlready
 import com.fancyrsvp.checkin.ui.theme.LocalDimens
 import com.fancyrsvp.checkin.ui.theme.Motion
 import com.fancyrsvp.checkin.ui.theme.StateAlready
-import com.fancyrsvp.checkin.ui.theme.StateAttention
 import com.fancyrsvp.checkin.ui.theme.displayFamilyFor
 import com.fancyrsvp.checkin.ui.theme.safeChrome
 import java.text.DateFormat
@@ -115,7 +114,13 @@ import java.util.Date
 @Composable
 fun ScanResultScreen(
     outcome: CheckInRepository.ScanOutcome,
-    isSupervisor: Boolean,
+    /*
+     * `isSupervisor` and `onOverride` were parameters here and are gone. They
+     * existed only for the already-arrived screen's "Supervisor override"
+     * button, which recorded nothing — see the comment on ResultVisual.Already
+     * in ResultActions below. Keeping a role flag that no longer gates anything
+     * invites the next reader to gate something on it by accident.
+     */
     noKidsAllowed: Boolean,
     /**
      * The venue layout, or empty when this event has no plan — an organizer who
@@ -124,7 +129,6 @@ fun ScanResultScreen(
      */
     venue: List<VenueTableEntity>,
     onAdmit: (party: CheckInRepository.PartyView, guestIds: List<String>) -> Unit,
-    onOverride: (party: CheckInRepository.PartyView, guestIds: List<String>) -> Unit,
     onSearch: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -269,9 +273,7 @@ fun ScanResultScreen(
                         ResultActions(
                             visual = visual,
                             party = party,
-                            isSupervisor = isSupervisor,
                             onAdmit = onAdmit,
-                            onOverride = onOverride,
                             onSearch = onSearch,
                             onDismiss = onDismiss,
                             onPickMembers = { picking = true },
@@ -954,9 +956,7 @@ private fun QuietLine(text: String, color: Color) {
 private fun ResultActions(
     visual: ResultVisual,
     party: CheckInRepository.PartyView?,
-    isSupervisor: Boolean,
     onAdmit: (CheckInRepository.PartyView, List<String>) -> Unit,
-    onOverride: (CheckInRepository.PartyView, List<String>) -> Unit,
     onSearch: () -> Unit,
     onDismiss: () -> Unit,
     onPickMembers: () -> Unit,
@@ -998,20 +998,31 @@ private fun ResultActions(
             }
         }
 
+        /*
+         * ── THERE IS NOTHING TO DO HERE, AND SAYING SO IS THE FIX ──
+         *
+         * This offered a supervisor a "Supervisor override" button that did
+         * NOTHING. It passed `party.arrived` — the guests who already hold a
+         * live check-in — into CheckInRepository.checkIn, whose first act is to
+         * filter out exactly those guests; the list came back empty, the
+         * function returned without writing anything, and the screen dismissed.
+         * It looked like it had worked.
+         *
+         * Replacing it with an accurate sentence rather than a working button is
+         * the deliberate choice, because in every ordinary case the tablet is
+         * RIGHT and the guest is already counted: a photographed ticket, a
+         * companion admitted with the rest of their party, or a second scan at
+         * the other gate. Recording a second arrival would double-count a person
+         * who is already inside.
+         *
+         * The one case where the tablet is wrong is a reversal made on the
+         * dashboard, which no device is told about. That is a server defect
+         * (guestService.undoPartyCheckIn allocating no undo_seq) and it is fixed
+         * there, not worked around at the door.
+         */
         ResultVisual.Already -> {
             if (party == null) return
-            if (isSupervisor) {
-                // §9.5: a photographed ticket resolves here, and admitting again
-                // requires an override that is recorded in the audit trail.
-                PrimaryAction(
-                    text = stringResource(R.string.result_override),
-                    onClick = { onOverride(party, party.arrived.map { it.guestId }) },
-                    containerColor = StateAttention,
-                    contentColor = Color.White,
-                )
-            } else {
-                QuietLine(stringResource(R.string.result_override_unavailable), on)
-            }
+            QuietLine(stringResource(R.string.result_already_no_action), on)
         }
 
         ResultVisual.NotFound -> PrimaryAction(

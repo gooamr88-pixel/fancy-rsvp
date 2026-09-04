@@ -27,7 +27,9 @@ const { sendOk, sendFail } = require('../utils/responseEnvelope');
  * POST /api/v1/events/:eventId/invitations/send
  * body (channel: 'email'): { partyIds?: string[], resend?: boolean }
  * body (channel: 'qr'):    { partyIds: string[] }
- * body (channel: 'sms'):   { partyIds: string[] }
+ * body (channel: 'sms'):   { partyIds: string[], smsType?: 'invitation' | 'rsvp_confirmation'
+ *                                                        | 'seating_reminder' | 'event_update' }
+ * body (channel: 'detail-sms'): { partyIds: string[] }   // alias, see below
  */
 const sendInvitations = async (req, res, next) => {
   const { eventId } = req.params;
@@ -75,20 +77,34 @@ const sendInvitations = async (req, res, next) => {
     /**
      * channel === 'sms' | 'detail-sms'
      *
-     * Two message types down one path. 'sms' texts the invitation; 'detail-sms'
-     * texts the confirmation carrying their table, who is with them, the meals and
-     * their pass link. Same gates, same batching, same billing — the only
-     * difference is which template renders, which is why they share this branch
-     * rather than getting a second one to keep in sync.
+     * Every guest-facing message type down one path. Same gates, same batching,
+     * same billing — the only difference is which template renders, which is why
+     * they share this branch rather than each getting one to keep in sync.
+     *
+     * ── HOW THE TYPE IS CHOSEN, AND WHY `detail-sms` STILL EXISTS ──
+     *
+     * `smsType` names it directly, against the registry
+     * (invitationService.MANUAL_SMS_TYPES). That is the form to use.
+     *
+     * `channel: 'detail-sms'` predates it and is kept as an exact alias for
+     * `{ channel: 'sms', smsType: 'rsvp_confirmation' }`. Not for tidiness: the
+     * dashboard keys its per-guest spinner off the channel string it sent and
+     * the API echoes back, so a client mid-deploy that posts `detail-sms` has to
+     * keep getting `detail-sms` in the response or its button spins forever.
+     * Both forms therefore stay, and both resolve here rather than downstream.
      */
-    const { partyIds } = req.body || {};
+    const { partyIds, smsType } = req.body || {};
     if (!Array.isArray(partyIds) || partyIds.length === 0) {
       return sendFail(res, { status: 400, error: 'VALIDATION_ERROR', message: `partyIds is required for the ${channel} channel.` });
     }
 
+    const type = channel === 'detail-sms'
+      ? 'rsvp_confirmation'
+      : (smsType || 'invitation');
+
     const result = await invitationService.sendInvitationSmsBulk(eventId, partyIds, {
       user: req.user,
-      type: channel === 'detail-sms' ? 'rsvp_confirmation' : 'invitation',
+      type,
     });
     if (result.code) {
       const status = result.code === 'EVENT_NOT_FOUND' ? 404
@@ -98,11 +114,17 @@ const sendInvitations = async (req, res, next) => {
       return sendFail(res, { status, error: result.code, message: result.message });
     }
 
+    /**
+     * `smsType` is echoed alongside `channel` so a client that sent one can tell
+     * which of several in-flight sends this response belongs to. `channel` alone
+     * is now ambiguous — four types share the string 'sms'.
+     */
+
     return sendOk(res, {
       // Echo the channel the caller asked for, not a hardcoded 'sms' — the client
       // keys its per-button spinner off it, so reporting the wrong one leaves the
       // pressed button spinning forever.
-      channel, async: false,
+      channel, smsType: type, async: false,
       queued: partyIds.length,
       sent: result.sent, skipped: result.skipped, failed: result.failed,
       // Grouped and already in plain language — "3 haven't agreed to receive

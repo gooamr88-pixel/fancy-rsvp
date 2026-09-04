@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useEffectEvent, useState } from 'react';
 import { T, card } from '../../_components/theme';
 import DataTable from '../../_components/DataTable';
 import FilterBar from '../../_components/FilterBar';
@@ -48,26 +48,56 @@ export default function CheckinDevicesPage() {
   const canManage = can('security.manage');
   const { showConfirm, showToast } = useAlert();
 
-  const [rows, setRows] = useState([]);
-  const [counts, setCounts] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [staleDays, setStaleDays] = useState('');
   const [q, setQ] = useState('');
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await adminApi.get('/checkin/devices', { staleDays: staleDays || undefined });
-      setRows(res?.data?.devices || []);
-      setCounts(res?.data?.counts || null);
-    } catch (err) {
-      showToast(err.message || 'Could not load devices.', 'error');
-    } finally {
-      setLoading(false);
-    }
-  }, [staleDays, showToast]);
+  /* `staleDays` plus this tick name the request the screen currently wants;
+     revoking or wiping bumps the tick because both change what the registry
+     holds. */
+  const [reloadTick, setReloadTick] = useState(0);
+  const reload = useCallback(() => { setReloadTick((t) => t + 1); }, []);
+  const wanted = `${staleDays}|${reloadTick}`;
 
-  useEffect(() => { load(); }, [load]);
+  /* One state carrying the answer AND which request it answers. "Loading" is
+     then a comparison rather than a fourth flag raised at the top of the fetch
+     and lowered in a `finally` — and the `cancelled` guard closes a real race
+     the old shape had: switching the filter twice quickly could land the first
+     response last and leave the table showing rows for the wrong filter. */
+  const [result, setResult] = useState(null);
+  const loading = result?.key !== wanted;
+  const rows = result?.rows || [];
+  const counts = result?.counts || null;
+
+  /* Reported through an Effect Event so the load does not DEPEND on the
+     reporter. `showToast` is a plain function rebuilt on every AlertProvider
+     render, and the provider re-renders both when a toast appears and again
+     when it auto-dismisses three seconds later. With it in the dependency list
+     a failed load raised a toast, the toast re-rendered the provider, the new
+     identity re-ran the effect, and the load failed again — an endless
+     fetch-and-toast loop for as long as the endpoint was down, and two
+     redundant refetches even on a successful one. This was the only effect in
+     the app that listed it. */
+  const reportLoadFailure = useEffectEvent((message) => {
+    showToast(message || 'Could not load devices.', 'error');
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await adminApi.get('/checkin/devices', { staleDays: staleDays || undefined });
+        if (cancelled) return;
+        setResult({ key: wanted, rows: res?.data?.devices || [], counts: res?.data?.counts || null });
+      } catch (err) {
+        if (cancelled) return;
+        reportLoadFailure(err.message);
+        // Keep whatever is already on screen: a failed refresh is a worse
+        // reason to empty a stolen-tablet registry than to leave it stale.
+        setResult((prev) => ({ key: wanted, rows: prev?.rows || [], counts: prev?.counts || null }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [wanted, staleDays]);
 
   const revoke = async (device) => {
     const ok = await showConfirm(
@@ -80,7 +110,7 @@ export default function CheckinDevicesPage() {
     try {
       await adminApi.del(`/checkin/devices/${device.id}`);
       showToast('Device revoked.');
-      load();
+      reload();
     } catch (err) {
       showToast(err.message || 'Could not revoke.', 'error');
     }
@@ -97,7 +127,7 @@ export default function CheckinDevicesPage() {
     try {
       await adminApi.post(`/checkin/devices/${device.id}/wipe`);
       showToast('Erase requested.');
-      load();
+      reload();
     } catch (err) {
       showToast(err.message || 'Could not request an erase.', 'error');
     }

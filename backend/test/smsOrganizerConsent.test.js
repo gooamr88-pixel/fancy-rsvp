@@ -6,6 +6,18 @@ const { createMockSupabase } = require('./helpers/mockSupabase');
 const { mockReq, invoke } = require('./helpers/http');
 const { injectModule } = require('./helpers/inject');
 
+/*
+ * Deliberately distinct literals, and deliberately NOT the real constants.
+ *
+ * utils/smsConsent is injected below, so requiring it here would hand back this
+ * file's own double — the assertion would compare a value to itself and pass
+ * whichever constant the controller reached for. Two obviously different
+ * sentinels prove it picked the right one, and neither has to be touched when a
+ * real version is bumped.
+ */
+const GUEST_VERSION = 'guest-wording-vX';
+const ORGANIZER_VERSION = 'organizer-wording-vY';
+
 /**
  * THE ORGANIZER'S OWN OPT-IN.
  *
@@ -26,7 +38,8 @@ injectModule('../../config/supabase', { supabase: mock.supabase });
 
 const consentLogCalls = [];
 injectModule('../../utils/smsConsent', {
-  SMS_CONSENT_TEXT_VERSION: '2026-08-04',
+  SMS_CONSENT_TEXT_VERSION: GUEST_VERSION,
+  ORGANIZER_SMS_CONSENT_TEXT_VERSION: ORGANIZER_VERSION,
   logSmsConsentDecision: (row) => consentLogCalls.push(row),
 });
 
@@ -66,8 +79,25 @@ test('opting in stores the number, the flag and the wording version', async () =
   assert.equal(org.sms_consent, true);
   assert.equal(org.sms_phone, '+15551234567');
   assert.ok(org.sms_consent_at, 'the decision must be dated');
-  assert.equal(org.sms_consent_text_version, '2026-08-04',
+  /*
+   * The ORGANIZER's version, which is deliberately not the guest one.
+   *
+   * This asserted '2026-08-04' — the guest sentence — because that is what the
+   * controller stamped. The guest sentence describes invitation links, RSVP
+   * confirmations and reminders; an organizer receives none of them, only a
+   * headcount summary before their own event. So the record said they had
+   * agreed to wording that does not describe what they were signed up for, and
+   * every future edit to the guest sentence would have appeared to re-date
+   * every organizer's consent.
+   *
+   * Imported rather than hard-coded a second time: the two constants
+   * (utils/smsConsent.js and SmsConsentText.js) are already required to move
+   * together, and a third literal here would be a third thing to remember.
+   */
+  assert.equal(org.sms_consent_text_version, ORGANIZER_VERSION,
     'we must be able to prove which wording they agreed to, exactly as for a guest');
+  assert.notEqual(org.sms_consent_text_version, GUEST_VERSION,
+    'the organizer did not agree to the guest sentence');
 });
 
 test('consent without a number is refused rather than stored', async () => {

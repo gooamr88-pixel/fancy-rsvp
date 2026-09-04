@@ -164,7 +164,10 @@ class DeviceRepository @Inject constructor(
      * wrong".
      */
     suspend fun unpair(): UnpairResult = withContext(io) {
-        val pending = db.syncQueueDao().totalDepth()
+        // Counted as EVIDENCE, not as rows. A reversal the server refused holds
+        // nothing that exists only here, and blocking on one left the tablet with
+        // no exit at all — see SyncQueueDao.unsentEvidenceForEvent.
+        val pending = db.syncQueueDao().totalUnsentEvidence()
         if (pending > 0) return@withContext UnpairResult.Blocked(pending)
 
         // Guest data goes with the credentials. Leaving a decrypted-at-rest guest
@@ -190,7 +193,7 @@ class DeviceRepository @Inject constructor(
      * explicitly rather than silently doing nothing.
      */
     suspend fun purgeEventData(eventId: String): Boolean = withContext(io) {
-        val pending = db.syncQueueDao().depthForEvent(eventId)
+        val pending = db.syncQueueDao().unsentEvidenceForEvent(eventId)
         if (pending > 0) return@withContext false
 
         db.bundleDao().purgeGuestData(eventId)
@@ -202,7 +205,22 @@ class DeviceRepository @Inject constructor(
         // database, so nothing else would ever remove it.
         eventImages.delete(eventId)
         db.eventDao().clearCoverImage(eventId)
-        db.eventDao().markNotReady(eventId)
+
+        /*
+         * The event row goes too. This was `markNotReady`, which only flipped a
+         * flag — so every event a tablet had ever been armed for stayed in the
+         * Prepare screen's picker for the life of the device, and dragged
+         * `readyEvent()` back to the oldest one it had ever held.
+         *
+         * Safe here and nowhere else: the guard above has already established
+         * that nothing is outstanding, and the row carries `lastAppliedSeq` —
+         * the device's place in the change stream. Deleting it with work still
+         * queued would lose that.
+         *
+         * The paired event comes back on the next `refreshEvents()`, which
+         * rebuilds the row from the manifest.
+         */
+        db.eventDao().deleteById(eventId)
         true
     }
 

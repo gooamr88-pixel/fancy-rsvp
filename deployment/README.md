@@ -183,8 +183,32 @@ sudo apt install certbot python3-certbot-nginx -y
    > messaging off. To confirm it is on:
    > ```bash
    > pm2 logs fancy-rsvp-backend --lines 200 | grep email-scheduler
-   > # want: "[email-scheduler] enabled — sweeping every 15 min"
+   > # want: "[email-scheduler] enabled — full sweep every 15 min"
    > # bad:  "[email-scheduler] DISABLED — no automatic guest messages…"
+   > ```
+
+   > ### ⚠️ `EVENT_PURGE_ENABLED` — leave it OFF unless you mean it
+   >
+   > This one **permanently deletes customer data**. With it on, every event is
+   > wiped 24 hours after it finishes: guests, RSVPs, seating, check-in records,
+   > message history and the public guest page. There is no undo and no backup
+   > we can restore from. The organizer is emailed a warning with a spreadsheet
+   > download link first, and the 24-hour clock starts when that email goes out.
+   >
+   > It is opt-in for that reason — unlike `DRAFT_CLEANUP_ENABLED`, which only
+   > removes never-launched placeholder rows. Add it **only** when the retention
+   > policy has actually been decided:
+   > ```env
+   > EVENT_PURGE_ENABLED=true
+   > # PURGE_GRACE_HOURS=24              hours between the warning and the delete
+   > # PURGE_ASSUMED_DURATION_HOURS=6    used when an event has no end time set
+   > # PURGE_ALLOW_OPT_OUT=true          offer a "keep my data" link in the email
+   > ```
+   > To confirm which state you are in:
+   > ```bash
+   > pm2 logs fancy-rsvp-backend --lines 200 | grep event-purge
+   > # off:  "[event-purge] disabled — no event data will be deleted."
+   > # on:   "[event-purge] ENABLED — … ALL of its data is permanently deleted 24h later."
    > ```
 3. Configure your Next.js frontend environment variables:
    - Create the file `/var/www/fancy-rsvp/frontend/.env.production`:

@@ -21,6 +21,28 @@ val localProps = Properties().apply {
 fun prop(key: String, fallback: String): String =
     (localProps.getProperty(key) ?: System.getenv(key) ?: fallback)
 
+/**
+ * The two version values, held in one place because THREE things need them and
+ * they must agree: `defaultConfig` below, and the release manifest written by
+ * [writeReleaseManifest] at the bottom of this file.
+ *
+ * Reading them from a shared `val` rather than parsing AGP's output-metadata.json
+ * afterwards is not a shortcut — it is the same variable that produced the APK,
+ * so the manifest cannot describe a build that was never made. A parsed copy can
+ * drift; this cannot.
+ */
+val appVersionCode = prop("VERSION_CODE", "15").toInt()
+val appVersionName = "1.6.1"
+
+/**
+ * What changed in this build, shown on the tablet's update screen.
+ *
+ * Supplied by deploy-android.bat as an environment variable at release time.
+ * Empty is normal and the screen simply omits the note — a release note is worth
+ * having, never worth blocking a deploy over.
+ */
+val appReleaseNotes = prop("RELEASE_NOTES", "")
+
 android {
     namespace = "com.fancyrsvp.checkin"
     compileSdk = 35
@@ -79,8 +101,8 @@ android {
          * what a crash report prints, and "1.6.1" tells a support conversation
          * something that a minute count never could.
          */
-        versionCode = prop("VERSION_CODE", "15").toInt()
-        versionName = "1.6.1"
+        versionCode = appVersionCode
+        versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -313,4 +335,106 @@ dependencies {
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.androidx.test.espresso)
     androidTestImplementation(libs.androidx.room.testing)
+}
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * THE UPDATE MANIFEST — what lets an installed tablet find a newer build.
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * The app is sideloaded, so there is no store to tell a device an update
+ * exists. Instead every release publishes a small JSON file beside the APK, and
+ * installed tablets read it, compare `versionCode`, and offer to install.
+ *
+ * ── Why the BUILD writes it and not the deploy script ──
+ *
+ * The deploy script publishes the APK; it would have to parse a version back
+ * out of something to describe it. Every way of doing that in a batch-file ssh
+ * one-liner needs nested quoting through cmd, sh, and JSON at once, and a
+ * mis-escaped quote there produces a manifest that is silently wrong rather
+ * than one that fails loudly. Here the values come from the same `val`s that
+ * configured the APK, so the manifest cannot disagree with the artefact.
+ *
+ * ── Why the checksum is computed here too ──
+ *
+ * The tablet verifies this SHA-256 before it hands the file to the package
+ * installer. It is the only thing between a truncated download and an install
+ * prompt, so it is produced from the very bytes that were built, not from a
+ * copy made later somewhere else.
+ *
+ * The file is written next to the APK; deploy-android.bat publishes the two
+ * together, and rolls both back together.
+ */
+val writeReleaseManifest by tasks.registering {
+    description = "Writes fancy-checkin.json beside the release APK for in-app updates."
+    group = "publishing"
+
+    val apkFile = layout.buildDirectory.file("outputs/apk/release/app-release.apk")
+    val outFile = layout.buildDirectory.file("outputs/apk/release/fancy-checkin.json")
+    // Captured OUTSIDE doLast: the task action must not reach back into the
+    // project at execution time, or Gradle's configuration cache refuses it.
+    val code = appVersionCode
+    val name = appVersionName
+    val notes = appReleaseNotes
+    val min = 26
+
+    inputs.file(apkFile)
+    outputs.file(outFile)
+
+    doLast {
+        val apk = apkFile.get().asFile
+        if (!apk.isFile) throw GradleException("No release APK at ${apk.path} — nothing to describe.")
+
+        // Streamed, not readBytes(): the APK is ~46 MB and a release build on a
+        // 4 GB VPS has better uses for that memory.
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        apk.inputStream().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val read = input.read(buffer)
+                if (read <= 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        val sha = digest.digest().joinToString("") { "%02x".format(it) }
+
+        /*
+         * Escaped by hand rather than pulled in a JSON library: this build script
+         * has no serialisation dependency and does not need one for seven fields.
+         * Backslash first — escaping it after the quotes would double-escape the
+         * backslashes the quote escaping just introduced.
+         */
+        fun jsonString(value: String): String =
+            value.replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", " ")
+                .replace("\r", "")
+                .trim()
+
+        val released = java.time.Instant.now().toString()
+        val json = buildString {
+            append("{\n")
+            append("  \"versionCode\": ").append(code).append(",\n")
+            append("  \"versionName\": \"").append(jsonString(name)).append("\",\n")
+            append("  \"sha256\": \"").append(sha).append("\",\n")
+            append("  \"sizeBytes\": ").append(apk.length()).append(",\n")
+            append("  \"minSdk\": ").append(min).append(",\n")
+            append("  \"releasedAt\": \"").append(released).append("\",\n")
+            append("  \"notes\": \"").append(jsonString(notes)).append("\",\n")
+            append("  \"url\": \"https://fancyrsvp.com/download/fancy-checkin.apk\"\n")
+            append("}\n")
+        }
+
+        val out = outFile.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText(json, Charsets.UTF_8)
+        logger.lifecycle("Release manifest: versionCode=$code versionName=$name sha256=${sha.take(16)}…")
+    }
+}
+
+// Every release assembly produces its manifest. Not a separate step somebody has
+// to remember — a published APK without a matching manifest is a build no tablet
+// can discover, and that failure is invisible until nobody updates.
+tasks.matching { it.name == "assembleRelease" }.configureEach {
+    finalizedBy(writeReleaseManifest)
 }

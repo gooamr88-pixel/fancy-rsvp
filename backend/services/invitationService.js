@@ -462,13 +462,55 @@ function buildDetailContext(party, event) {
 }
 
 /**
+ * EVERY GUEST MESSAGE THE ORGANIZER MAY SEND BY HAND, and what each one needs.
+ *
+ * This was two `type === 'rsvp_confirmation' ? … : …` ternaries — one deriving a
+ * ref prefix, one a noun for the result sentence — plus a third condition
+ * deciding who is eligible. Three expressions, in three places, all encoding the
+ * same fact about a type. Adding a third type meant finding all three, and the
+ * one that would have been missed is `requiresAttending`: forgetting it does not
+ * break, it sends a table-and-pass text to somebody who declined.
+ *
+ * So the fact lives once, here.
+ *
+ *   refPrefix        — namespaces the idempotency ref. Must be distinct per type
+ *                      AND distinct from the automatic path's prefix for the same
+ *                      type, or a manual send collides with a scheduled one on
+ *                      sms_log's (kind, ref) unique index and is swallowed as a
+ *                      duplicate. The automatic prefixes in use are `rsvpconf:`
+ *                      and `evday:`; none of these may repeat them.
+ *   noun             — how the result sentence names what was sent.
+ *   requiresAttending— the message names a table or carries an entry pass, and
+ *                      signQrTicketForResponse mints nothing for a maybe or a no.
+ *                      Sending anyway produces a message with an empty link in it.
+ */
+const MANUAL_SMS_TYPES = {
+  invitation: { refPrefix: 'inv', noun: 'Invitation', requiresAttending: false },
+  rsvp_confirmation: { refPrefix: 'detail', noun: 'Details', requiresAttending: true },
+  seating_reminder: { refPrefix: 'seatman', noun: 'Table & entry pass', requiresAttending: true },
+  event_update: { refPrefix: 'updman', noun: 'Update', requiresAttending: false },
+};
+
+/**
  * @param {object}  [opts]
- * @param {string}  [opts.type='invitation']  'invitation' | 'rsvp_confirmation'
+ * @param {string}  [opts.type='invitation']  any key of MANUAL_SMS_TYPES
  */
 async function sendInvitationSmsBulk(eventId, partyIds, { user = null, type = 'invitation' } = {}) {
   const ids = [...new Set(partyIds || [])];
-  const refPrefix = type === 'rsvp_confirmation' ? 'detail' : 'inv';
-  const what = type === 'rsvp_confirmation' ? 'Details' : 'Invitation';
+
+  /**
+   * Rejected here as well as at the route validator, and not as belt-and-braces.
+   * `sendTransactionalSms` would accept `organizer_report` perfectly happily and
+   * resolve its recipient from `organizations.sms_phone` — so a guest-send
+   * request naming it would text the ORGANIZER once per selected guest, billing
+   * each one. The route is the first door; this is the one that closes when a
+   * future caller reaches the service directly.
+   */
+  const spec = MANUAL_SMS_TYPES[type];
+  if (!spec) {
+    return { code: 'UNSUPPORTED_TYPE', message: 'That kind of message cannot be sent by hand.' };
+  }
+  const { refPrefix, noun: what, requiresAttending } = spec;
 
   if (ids.length === 0) {
     return { code: 'NO_RECIPIENTS', message: 'Choose at least one guest to text.' };
@@ -496,7 +538,7 @@ async function sendInvitationSmsBulk(eventId, partyIds, { user = null, type = 'i
      * included them. The same button producing a different message depending on who
      * triggered it is exactly the kind of thing a template test does not catch.
      */
-    .select('id, title, slug, event_date, timezone, location_name, location_address, sms_addon_purchased_at, sms_settings')
+    .select('id, title, slug, event_date, timezone, location_name, location_address, sms_addon_purchased_at, sms_settings, sms_templates')
     .eq('id', eventId)
     .single();
   if (!event) return { code: 'EVENT_NOT_FOUND', message: 'That event could not be found.' };
@@ -561,19 +603,53 @@ async function sendInvitationSmsBulk(eventId, partyIds, { user = null, type = 'i
       if (!party) return { sent: false, reason: 'NOT_FOUND' };
 
       /**
-       * The detail text is only meaningful for a guest who accepted.
+       * A message naming a table or carrying a pass is only meaningful for a
+       * guest who accepted.
        *
-       * It names their table and links to an entry pass, and
        * signQrTicketForResponse mints nothing for a maybe or a no — so without
        * this the message would go out with an empty link slot. Refused here with
-       * a reason the organizer can read, rather than sent broken.
+       * a reason the organizer can read, rather than sent broken. Which types
+       * this covers is declared once in MANUAL_SMS_TYPES.
        */
-      if (type === 'rsvp_confirmation' && party.response !== 'yes') {
+      if (requiresAttending && party.response !== 'yes') {
         return { sent: false, reason: 'NOT_ATTENDING' };
       }
 
-      const context = type === 'rsvp_confirmation'
+      /**
+       * `seating_reminder` reuses the DETAIL context, and takes what it needs.
+       *
+       * Both messages answer "where am I sitting and how do I get in", from the
+       * same live seating assignment and the same freshly-minted pass token —
+       * the reminder simply says less of it. Building a second, narrower context
+       * would mean two places computing a table name from
+       * `seating_assignments[0].tables.table_name`, and the day one of them was
+       * updated for a schema change would be the day the other started naming
+       * the wrong table on a message sent to everyone at once.
+       *
+       * The extra fields (venue, companions, meals) are inert here: the
+       * seating_reminder template never reads them, and neither does any merge
+       * tag offered for that type.
+       */
+      const context = (type === 'rsvp_confirmation' || type === 'seating_reminder')
         ? buildDetailContext(party, event)
+        : type === 'event_update'
+        ? {
+          guestName: party.label || 'Guest',
+          eventTitle: event.title,
+          /**
+           * `cancelled` is deliberately absent, so the template renders its
+           * "the date or place has changed" branch.
+           *
+           * A cancellation is NOT sendable from here, and that is a safety
+           * property rather than a missing feature. The cancelled branch says
+           * the event is off, and the thing that makes that true is
+           * `events.status` — set by the cancel flow, which then notifies
+           * everyone itself through notifyGuestsOfEventChange. A button that
+           * could text "your wedding is cancelled" without cancelling anything
+           * is one misclick away from the worst message this product can send.
+           */
+          url: buildGuestEventUrl(event.slug, partyId),
+        }
         : {
           guestName: party.label || 'Guest',
           eventTitle: event.title,
@@ -680,4 +756,9 @@ module.exports = {
   sendEmailBulk,
   sendQrTicketEmail,
   sendInvitationSmsBulk,
+  /* The route validator and the controller both need to know which types are
+     manually sendable. Exported so neither grows its own list — a validator that
+     accepts a type this service rejects produces a 400 with the wrong sentence,
+     and one that accepts a type it should not is a billing incident. */
+  MANUAL_SMS_TYPES,
 };

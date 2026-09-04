@@ -504,11 +504,64 @@ const getEvent = async (req, res, next) => {
       return res.status(404).json({ success: false, error: 'EVENT_NOT_FOUND' });
     }
 
-    return res.json({ success: true, event: await withResolvedTier(event) });
+    return res.json({
+      success: true,
+      event: await withResolvedTier(event),
+      retention: buildRetentionBlock(event),
+    });
   } catch (err) {
     next(err);
   }
 };
+
+/**
+ * What the dashboard's data-deletion banner needs, or null when nothing is
+ * scheduled.
+ *
+ * ── WHY THE LINKS ARE MINTED HERE AND NOT BUILT BY THE CLIENT ──
+ *
+ * They are signed, purpose-scoped, expiring tokens (services/tokenService), and
+ * the signing key never leaves the server. The alternative — a client-built
+ * `/archive?event=<id>` — would make an event id sufficient to download somebody
+ * else's entire guest list from an unauthenticated endpoint.
+ *
+ * The same two links appear in the warning email. Minting a fresh pair here
+ * rather than storing the emailed ones is deliberate: the emailed tokens expire
+ * with the grace window, and an organizer who opens the dashboard on the last
+ * afternoon should not find the button dead because the mail went out yesterday.
+ *
+ * Returns null unless a deletion is actually scheduled OR the organizer has
+ * opted out — the banner has nothing to say about an event that is simply
+ * running.
+ */
+function buildRetentionBlock(event) {
+  if (!event?.purge_scheduled_at && !event?.purge_opt_out) return null;
+  try {
+    const tokenService = require('../services/tokenService');
+    const { getPublicBaseUrl } = require('../utils/publicUrl');
+    const base = getPublicBaseUrl();
+    // Sized from the deadline that actually applies, so the link dies with the
+    // thing it refers to rather than outliving it.
+    const graceMs = event.purge_scheduled_at
+      ? Math.max(0, new Date(event.purge_scheduled_at).getTime() - Date.now())
+      : 0;
+
+    return {
+      deleteAt: event.purge_scheduled_at || null,
+      warnedAt: event.purge_warning_sent_at || null,
+      optedOut: !!event.purge_opt_out,
+      archiveUrl: `${base}/api/v1/events/archive?token=${encodeURIComponent(
+        tokenService.signEventArchive({ eventId: event.id, graceMs }))}`,
+      keepUrl: event.purge_opt_out ? null : `${base}/api/v1/events/keep?token=${encodeURIComponent(
+        tokenService.signEventKeep({ eventId: event.id, graceMs }))}`,
+    };
+  } catch (err) {
+    // A token-signing failure must never turn a working event page into a 500.
+    // The banner is a warning about something the email already covered.
+    logger.warn({ err, eventId: event?.id }, 'could not mint retention links');
+    return null;
+  }
+}
 
 /**
  * The columns the public guest page reads.

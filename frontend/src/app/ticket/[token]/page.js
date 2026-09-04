@@ -22,6 +22,7 @@ import Icon from '../../components/icons/Icon';
 // sections use, so the pin a guest gets here is the pin they get everywhere.
 import { getDirectionsUrl } from '../../components/templates/heritageArch/shared';
 import { safeZone } from '../../utils/timezone';
+import SelfCheckIn from './SelfCheckIn';
 
 /**
  * Turns a failed ticket lookup into something true.
@@ -313,6 +314,18 @@ function TicketRoute({ token }) {
                       compact
                     />
                   </div>
+                )}
+
+                {/* Self-service arrival. Only once the seating embargo has
+                    lifted — before that the pass is a keepsake, not a door. */}
+                {status === 'ready' && (
+                  <SelfCheckIn
+                    slug={event?.slug}
+                    partyId={guest?.id}
+                    guestName={guest?.guest_name}
+                    isRTL={isRTL}
+                    themeColor={themeColor}
+                  />
                 )}
               </>
             )}

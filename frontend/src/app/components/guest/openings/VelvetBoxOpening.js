@@ -66,7 +66,14 @@ export default function VelvetBoxOpening({
   const [alreadySeen, remember] = useOpeningMemory(sessionKey);
 
   const [phase, setPhase] = useState('idle'); // idle | arming | playing | flash | revealed | done
-  const [hint, setHint] = useState('loading'); // loading | tap | preparing
+
+  /* loading → tap → preparing, and never backwards: once the guest has
+     committed, "loading…" reappearing would read as the tap having failed.
+     Only the last step is a decision this component makes; the first two are
+     just `ready`, so they are read from it rather than mirrored into a second
+     piece of state that an effect has to keep in step. */
+  const [preparing, setPreparing] = useState(false);
+  const hint = preparing ? 'preparing' : ready ? 'tap' : 'loading';
 
   useScrollLock(phase !== 'done');
 
@@ -79,12 +86,6 @@ export default function VelvetBoxOpening({
       onComplete?.();
     }
   }, [alreadySeen, onComplete]);
-
-  // The hint tracks readiness, but never walks backwards: once the guest has
-  // committed, "loading…" reappearing would read as the tap having failed.
-  useEffect(() => {
-    if (ready) setHint((h) => (h === 'loading' ? 'tap' : h));
-  }, [ready]);
 
   useEffect(() => {
     const layer = fxRef.current;
@@ -168,9 +169,7 @@ export default function VelvetBoxOpening({
     }
 
     setPhase('arming');
-    after(OPENING_TIMINGS.preparingHintMs, () => {
-      setHint((h) => (h === 'tap' ? 'preparing' : h));
-    });
+    after(OPENING_TIMINGS.preparingHintMs, () => { setPreparing(true); });
 
     const el = videoRef.current;
     if (!el) { runStillsPath(); return; }

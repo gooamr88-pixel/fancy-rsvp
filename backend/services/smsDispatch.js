@@ -187,17 +187,37 @@ async function hasSmsConsent(eventId, phone) {
 }
 
 /* ─── Atomic credit billing (segment-accurate, with single-credit fallback) ─── */
-let multiCreditUnavailable = false;
+
+/**
+ * When the segment-accurate RPC was last found missing, or 0 if it never was.
+ *
+ * ── WHY THIS IS A TIMESTAMP AND NOT A BOOLEAN ──
+ *
+ * It was a plain `let multiCreditUnavailable = false` latched to true on the
+ * first PGRST202. Nothing ever reset it, so once tripped the process billed
+ * every message — including a three-segment one — as a single credit until
+ * somebody restarted the API. Applying the migration did not help; the running
+ * process had already decided.
+ *
+ * That is a revenue leak that hides behind a log line nobody re-reads. Re-probing
+ * on a timer costs one failed RPC every few minutes in the un-migrated case, and
+ * the moment the migration lands billing corrects itself with no intervention.
+ */
+let multiCreditMissingAt = 0;
+const MULTI_CREDIT_REPROBE_MS = 5 * 60 * 1000;
 
 async function deductCredits(eventId, count, phone, idemKey) {
+  const multiCreditUnavailable = multiCreditMissingAt !== 0
+    && (Date.now() - multiCreditMissingAt) < MULTI_CREDIT_REPROBE_MS;
+
   if (!multiCreditUnavailable) {
     const { data, error } = await supabase.rpc('deduct_sms_credits_atomic', {
       p_event_id: eventId, p_count: count, p_phone: phone, p_idempotency_key: idemKey,
     });
     if (error) {
       if (isUndefinedFunction(error)) {
-        multiCreditUnavailable = true;
-        logger.warn('deduct_sms_credits_atomic missing — falling back to single-credit billing. Apply 20260626000000_sms_multi_credit.sql for per-segment charging.');
+        multiCreditMissingAt = Date.now();
+        logger.warn('deduct_sms_credits_atomic missing — falling back to single-credit billing for the next 5 minutes. Apply 20260626000000_sms_multi_credit.sql for per-segment charging.');
       } else {
         return { ok: false, error: error.message || 'DEDUCT_FAILED' };
       }
@@ -219,6 +239,14 @@ async function deductCredits(eventId, count, phone, idemKey) {
 
 async function refundCredits(walletId, eventId, ledgerId, count) {
   try {
+    // Re-derived rather than captured: a refund can run minutes after the
+    // deduction that created the ledger row, and the probe window may have
+    // reopened in between. The multi-credit call is tried first either way and
+    // falls through on PGRST202, so being wrong here costs one RPC, never a
+    // missed refund.
+    const multiCreditUnavailable = multiCreditMissingAt !== 0
+      && (Date.now() - multiCreditMissingAt) < MULTI_CREDIT_REPROBE_MS;
+
     if (!multiCreditUnavailable) {
       const { error } = await supabase.rpc('refund_sms_credits_atomic', {
         p_wallet_id: walletId, p_event_id: eventId, p_ledger_id: ledgerId, p_count: count,
@@ -800,7 +828,7 @@ async function sendTransactionalSms({ type, eventId, partyId = null, ref, event 
     let ev = event;
     if (!ev) {
       const { data, error } = await supabase
-        .from('events').select('id, sms_addon_purchased_at, sms_settings').eq('id', eventId).single();
+        .from('events').select('id, sms_addon_purchased_at, sms_settings, sms_templates').eq('id', eventId).single();
       if (error || !data) return skip('EVENT_NOT_FOUND');
       ev = data;
     }
@@ -835,7 +863,33 @@ async function sendTransactionalSms({ type, eventId, partyId = null, ref, event 
     //    short-link outage makes messages more expensive, never undelivered.
     const linkedContext = await shortenContextLinks(context, { eventId, partyId });
 
-    const rendered = renderSmsBody(type, normalizeLang(lang), linkedContext);
+    /**
+     * The organizer's own wording for this type and language, when they have
+     * written one. Read off the event row already loaded above, so a scheduler
+     * walking 2,000 parties does not pay a query per guest for it.
+     *
+     * ── THE MIGRATION IS NOT OPTIONAL, AND THIS LINE DOES NOT SAVE YOU ──
+     *
+     * An earlier version of this comment claimed the optional chain made an
+     * un-migrated deployment degrade gracefully. It does not, and the mistake is
+     * worth naming because it points the wrong way in an emergency: step ① above
+     * selects `sms_templates` BY NAME, and PostgREST fails the ENTIRE query when
+     * one selected column does not exist. Execution never arrives here — the
+     * select 400s, the row reads as missing, and every message on the platform
+     * skips with EVENT_NOT_FOUND.
+     *
+     * `20260901000000_sms_templates_and_event_purge.sql` must be applied BEFORE
+     * this code is deployed. See the postgrest-select-column-blast-radius note.
+     *
+     * What the optional chain DOES protect is the other case, which is real: a
+     * caller that hands in a preloaded `event` row from a select of its own that
+     * omits the column. There the value is genuinely undefined, and falling
+     * through to our built-in copy is the right answer rather than an empty
+     * message.
+     */
+    const override = ev.sms_templates?.[type]?.[normalizeLang(lang)] || null;
+
+    const rendered = renderSmsBody(type, normalizeLang(lang), linkedContext, { override });
     if (!rendered) return skip('NO_BODY');
     const body = `${rendered}${COMPLIANCE_FOOTER}`;
     const { segments } = computeSmsSegments(body);

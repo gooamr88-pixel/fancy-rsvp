@@ -1,5 +1,6 @@
 package com.fancyrsvp.checkin.data.repo
 
+import com.fancyrsvp.checkin.BuildConfig
 import com.fancyrsvp.checkin.data.local.CheckInEntity
 import com.fancyrsvp.checkin.data.local.CheckinDatabase
 import com.fancyrsvp.checkin.data.local.EventEntity
@@ -99,6 +100,47 @@ class BundleRepository @Inject constructor(
         data class NoStorage(val guestCount: Int) : Failure
         data class Server(val code: Int, val error: String?) : Failure
         data class Unknown(val message: String?) : Failure
+
+        /**
+         * This build is older than the server will support (§21.4).
+         *
+         * ── WHY THIS IS RAISED HERE AND ONLY HERE ──
+         *
+         * Every sync response carries `meta.min_supported_app_version`, and
+         * nothing read it. The single access to `meta` anywhere in the app was
+         * an empty lambda with a comment saying it was "acted on at
+         * preparation" — it was not acted on anywhere. An operator could arm a
+         * tablet the server had already declared too old and find out at a
+         * venue, which is the one thing §21.4 forbids.
+         *
+         * Preparation is the ONLY correct place to act on it: it happens in an
+         * office, with internet, hours before anyone arrives, and it is the last
+         * moment at which installing an update costs nothing. A device already
+         * at a door must keep working regardless of its version — refusing to
+         * scan because of a version number is a worse failure than any bug the
+         * new build fixes.
+         */
+        data class AppTooOld(val installed: String, val required: String) : Failure
+    }
+
+    /**
+     * Compares two dotted version strings numerically.
+     *
+     * String comparison is wrong in the way that matters: "1.10.0" < "1.9.0"
+     * lexicographically, so the first two-digit minor release would lock every
+     * tablet in the field out of preparation. Missing segments read as 0, and a
+     * non-numeric segment reads as 0 rather than throwing — a version this build
+     * cannot parse must not become a refusal to arm.
+     */
+    private fun isVersionBelow(installed: String, required: String): Boolean {
+        val a = installed.split('.').map { it.toIntOrNull() ?: 0 }
+        val b = required.split('.').map { it.toIntOrNull() ?: 0 }
+        for (i in 0 until maxOf(a.size, b.size)) {
+            val x = a.getOrElse(i) { 0 }
+            val y = b.getOrElse(i) { 0 }
+            if (x != y) return x < y
+        }
+        return false
     }
 
     fun observeEvents(): Flow<List<EventEntity>> = db.eventDao().observeAll()
@@ -215,6 +257,31 @@ class BundleRepository @Inject constructor(
             }
             val manifest = manifestResponse.body()?.data
                 ?: return@withContext failWith(Failure.Unknown("Manifest response had no data"), onProgress)
+
+            /*
+             * The version gate, acted on for the first time.
+             *
+             * `meta.min_supported_app_version` rides on every sync response and
+             * was read by nothing — see Failure.AppTooOld. Checked HERE, at
+             * preparation, and deliberately nowhere else: this is an office with
+             * internet hours before the event, and it is the last moment at
+             * which updating costs nothing. A tablet already at a door keeps
+             * working whatever its version.
+             *
+             * A missing or unparseable value is not a refusal. An older server
+             * simply does not send it, and a tablet that cannot arm because it
+             * failed to understand a version string is a worse outcome than one
+             * running a build that is merely behind.
+             */
+            val minVersion = manifestResponse.body()?.meta?.minSupportedAppVersion
+            if (!minVersion.isNullOrBlank() &&
+                isVersionBelow(BuildConfig.VERSION_NAME, minVersion)
+            ) {
+                return@withContext failWith(
+                    Failure.AppTooOld(BuildConfig.VERSION_NAME, minVersion),
+                    onProgress,
+                )
+            }
 
             val staging = db.guestStagingDao()
 

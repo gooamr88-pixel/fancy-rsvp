@@ -41,9 +41,9 @@ test('a ticket minted for another event is rejected (400 EVENT_MISMATCH)', async
 
 test('a valid first scan checks the guest in (200)', async () => {
   mock.setResolver(({ table, op }) => {
-    if (table === 'guests' && op === 'select') return { data: [{ id: 'guest-1', full_name: 'Alice' }, { id: 'guest-2', full_name: 'Bob' }] };
-    if (table === 'check_ins' && op === 'select') return { data: [] };
-    if (table === 'check_ins' && op === 'insert') return { data: [{ id: 'ci-1' }, { id: 'ci-2' }] };
+    // The arrival is recorded by checkin_web_upsert, which allocates the
+    // server_seq that makes it visible to tablets (migration 20260831000000).
+    if (op === 'rpc') return { data: { ok: true, checked_in_count: 2, total_guests: 2, already_checked_in: 0, checked_in_at: 'now' } };
     if (table === 'rsvp_parties' && op === 'select') return { data: { id: 'g1', label: 'Alice' } };
     return {};
   });
@@ -56,10 +56,10 @@ test('a valid first scan checks the guest in (200)', async () => {
 
 test('a second scan of the same ticket is rejected as ALREADY_CHECKED_IN (409)', async () => {
   mock.setResolver(({ table, op }) => {
-    if (table === 'guests' && op === 'select') return { data: [{ id: 'guest-1', full_name: 'Alice' }] };
+    // The whole party is already live, so the function admits nobody and says
+    // WHEN they arrived — the desk needs to tell the guest that, not just "no".
+    if (op === 'rpc') return { data: { ok: false, error: 'ALREADY_CHECKED_IN', total_guests: 1, checked_in_at: '2026-06-19T10:00:00Z' } };
     if (table === 'rsvp_parties' && op === 'select') return { data: { id: 'g1', label: 'Alice' } };
-    if (table === 'check_ins' && op === 'insert') return { error: { code: '23505' } };
-    if (table === 'check_ins' && op === 'select') return { data: [{ guest_id: 'guest-1', checked_in_at: '2026-06-19T10:00:00Z' }] };
     return {};
   });
   const token = signQrTicket({ partyId: 'g1', eventId: 'evt-1', tableName: 'T1', partySize: 2 });
@@ -105,8 +105,7 @@ test('self check-in success returns 200 and the assigned table', async () => {
     if (table === 'events') return { data: { id: 'evt-1', is_paid: true, status: 'active' } };
     if (table === 'guests' && op === 'select') return { data: [{ id: 'guest-1', full_name: 'Alice' }, { id: 'guest-2', full_name: 'Bob' }] };
     if (table === 'rsvp_parties') return { data: { id: 'r1', label: 'Alice', guests: [{ id: 'g1' }, { id: 'g2' }], seating_assignments: [{ tables: { table_name: 'Table 5' } }] } };
-    if (table === 'check_ins' && op === 'select') return { data: [] };
-    if (table === 'check_ins' && op === 'insert') return { data: [{ id: 'ci-1' }, { id: 'ci-2' }] };
+    if (op === 'rpc') return { data: { ok: true, checked_in_count: 2, total_guests: 2, already_checked_in: 0, checked_in_at: 'now' } };
     return {};
   });
   const { res } = await invoke(selfCheckIn, mockReq({ params: { slug: 'wedding' }, body: { partyId: 'r1', guestName: 'Alice' } }));

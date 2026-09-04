@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.fancyrsvp.checkin.data.local.EventEntity
 import com.fancyrsvp.checkin.data.repo.BundleRepository
 import com.fancyrsvp.checkin.data.repo.DeviceRepository
+import com.fancyrsvp.checkin.data.repo.UpdateRepository
 import com.fancyrsvp.checkin.device.DeviceStatusMonitor
 import com.fancyrsvp.checkin.ui.session.SessionManager
 import com.fancyrsvp.checkin.util.safeLaunch
@@ -33,6 +34,7 @@ class PrepareViewModel @Inject constructor(
     private val deviceStatusMonitor: DeviceStatusMonitor,
     private val deviceRepository: DeviceRepository,
     private val sessionManager: SessionManager,
+    private val updateRepository: UpdateRepository,
 ) : ViewModel() {
 
     /** Readiness, as §8.2 requires it to be presented. */
@@ -138,6 +140,20 @@ class PrepareViewModel @Inject constructor(
         safeLaunch {
             try {
                 bundleRepository.prepareEvent(eventId, forceRestart) { p -> _progress.value = p }
+
+                /*
+                 * The server has just refused this build as too old to arm a
+                 * tablet, so a previous "Later" on the update offer is no longer
+                 * a workable answer — there is nothing this device can do until
+                 * it updates. Forgetting the dismissal brings the offer straight
+                 * back, which is the remedy the app is already holding.
+                 */
+                val outcome = _progress.value
+                if (outcome is BundleRepository.Progress.Failed &&
+                    outcome.reason is BundleRepository.Failure.AppTooOld
+                ) {
+                    updateRepository.clearDismissal()
+                }
             } catch (t: Throwable) {
                 // try/finally alone let the exception escape into viewModelScope,
                 // which terminates the process — the cleanup ran and the app still

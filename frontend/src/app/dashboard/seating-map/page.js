@@ -715,7 +715,11 @@ export default function SeatingMapPage() {
      degrades cleanly: an empty map just means the index lists parties instead
      of people, which is exactly what it did before. */
   const [membersByParty, setMembersByParty] = useState(null);
-  const [membersLoading, setMembersLoading] = useState(false);
+  /* Derived rather than a second flag. `membersByParty` is already the
+     effect's own "loaded" mark — it is what stops the refetch, and the catch
+     below sets `{}` precisely so a failure counts as loaded — so a separate
+     boolean could only ever agree with it or be wrong. */
+  const membersLoading = showPrintPreview && !!eventId && !membersByParty;
 
   // Cleared whenever the active event changes, so the pack can never print one
   // event's guest names against another's tables. `membersByParty` is the
@@ -730,7 +734,6 @@ export default function SeatingMapPage() {
   useEffect(() => {
     if (!showPrintPreview || !eventId || membersByParty) return undefined;
     let cancelled = false;
-    setMembersLoading(true);
     (async () => {
       try {
         const map = {};
@@ -755,8 +758,6 @@ export default function SeatingMapPage() {
       } catch {
         // Non-fatal by design — the pack still prints, keyed on party labels.
         if (!cancelled) setMembersByParty({});
-      } finally {
-        if (!cancelled) setMembersLoading(false);
       }
     })();
     return () => { cancelled = true; };

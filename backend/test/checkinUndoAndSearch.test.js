@@ -43,14 +43,27 @@ test('undo with a whitespace-only reason is refused', async () => {
   assert.equal(mock.calls.length, 0);
 });
 
+/**
+ * Resolver for the console undo: report the party's live rows, then answer the
+ * per-row RPC. `rpcCalls` records what the reversal actually asked the database
+ * to do.
+ */
+const undoResolver = (liveIds, rpcCalls = [], rpcResult = null) => (s) => {
+  if (s.op === 'rpc') {
+    rpcCalls.push({ fn: s.fn, params: s.params });
+    return rpcResult || { data: { ok: true, server_id: s.params.p_server_id, server_seq: 7 } };
+  }
+  if (s.table === 'check_ins' && s.op === 'select') {
+    return { data: liveIds.map((id) => ({ id })) };
+  }
+  return {};
+};
+
 test('undo SOFT-deletes — it must never issue a DELETE against check_ins', async () => {
   const ops = [];
   mock.setResolver((s) => {
-    if (s.table === 'check_ins') {
-      ops.push(s.op);
-      if (s.op === 'update') return { data: [{ id: 'ci-1', guest_id: 'g1' }] };
-    }
-    return {};
+    if (s.table === 'check_ins') ops.push(s.op);
+    return undoResolver(['ci-1'])(s);
   });
 
   const { res } = await invoke(undoCheckIn, mockReq({
@@ -60,20 +73,26 @@ test('undo SOFT-deletes — it must never issue a DELETE against check_ins', asy
   }));
 
   assert.equal(res.statusCode, 200);
-  assert.ok(ops.includes('update'));
   // The whole point of R-1: arrival evidence is marked, never destroyed.
   assert.equal(ops.includes('delete'), false, 'a hard DELETE would erase arrival evidence');
 });
 
-test('undo records the actor and the reason on the row', async () => {
-  let patch = null;
-  mock.setResolver((s) => {
-    if (s.table === 'check_ins' && s.op === 'update') {
-      patch = s.payload;
-      return { data: [{ id: 'ci-1', guest_id: 'g1' }] };
-    }
-    return {};
-  });
+/**
+ * ── THE BUG THIS TEST EXISTS FOR ──
+ *
+ * The console undo was a direct UPDATE of deleted_at/deleted_by/undo_reason. It
+ * was right about the database and invisible to every tablet: devices read
+ * changes from getDelta, which selects on `server_seq.gt.N,undo_seq.gt.N`, and
+ * that UPDATE never allocated an `undo_seq`. The row stayed NULL, never matched,
+ * and no device ever heard. The dashboard's count dropped while both tablets
+ * went on showing the guest as arrived and would refuse to re-admit them.
+ *
+ * Going through the RPC is what allocates that sequence number, so this asserts
+ * the CALL, not the column patch.
+ */
+test('undo goes through the RPC, so it takes a sequence number devices can see', async () => {
+  const rpcCalls = [];
+  mock.setResolver(undoResolver(['ci-1'], rpcCalls));
 
   await invoke(undoCheckIn, mockReq({
     params: { eventId: EVENT },
@@ -81,17 +100,62 @@ test('undo records the actor and the reason on the row', async () => {
     user: { id: 'supervisor-9' },
   }));
 
-  assert.ok(patch.deleted_at);
-  assert.equal(patch.deleted_by, 'supervisor-9');
-  assert.equal(patch.undo_reason, 'checked in by mistake');
+  assert.equal(rpcCalls.length, 1);
+  assert.equal(rpcCalls[0].fn, 'checkin_undo_by_ref');
+  assert.equal(rpcCalls[0].params.p_server_id, 'ci-1');
+  assert.equal(rpcCalls[0].params.p_event_id, EVENT);
+  assert.equal(rpcCalls[0].params.p_actor, 'supervisor-9');
+  assert.equal(rpcCalls[0].params.p_reason, 'checked in by mistake');
+});
+
+test('every live check-in in the party is reversed, one call each', async () => {
+  const rpcCalls = [];
+  mock.setResolver(undoResolver(['ci-1', 'ci-2', 'ci-3'], rpcCalls));
+
+  const { res } = await invoke(undoCheckIn, mockReq({
+    params: { eventId: EVENT },
+    body: { partyId: PARTY, reason: 'duplicate scan' },
+    user: { id: 'supervisor-1' },
+  }));
+
+  assert.equal(res.body.data.reversedCount, 3);
+  assert.deepEqual(rpcCalls.map((c) => c.params.p_server_id), ['ci-1', 'ci-2', 'ci-3']);
+});
+
+/**
+ * An unapplied migration must not stop an organizer reversing a mistaken
+ * admission. The reversal still lands; only the propagation to devices is lost,
+ * which is exactly the behaviour this replaced.
+ */
+test('an unapplied migration still reverses, via the original UPDATE', async () => {
+  const ops = [];
+  mock.setResolver((s) => {
+    if (s.op === 'rpc') {
+      return { data: null, error: { code: 'PGRST202', message: 'Could not find the function' } };
+    }
+    if (s.table === 'check_ins') {
+      ops.push(s.op);
+      if (s.op === 'select') return { data: [{ id: 'ci-1' }] };
+    }
+    return {};
+  });
+
+  const { res } = await invoke(undoCheckIn, mockReq({
+    params: { eventId: EVENT },
+    body: { partyId: PARTY, reason: 'fallback path' },
+    user: { id: 'supervisor-1' },
+  }));
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.data.reversedCount, 1);
+  assert.ok(ops.includes('update'), 'must fall back to marking the row directly');
 });
 
 test('undo writes an audit row and tells the other devices', async () => {
   const audits = [];
   mock.setResolver((s) => {
-    if (s.table === 'check_ins' && s.op === 'update') return { data: [{ id: 'ci-1' }, { id: 'ci-2' }] };
     if (s.table === 'activity_logs' && s.op === 'insert') { audits.push(s.payload); return {}; }
-    return {};
+    return undoResolver(['ci-1', 'ci-2'])(s);
   });
 
   const { res } = await invoke(undoCheckIn, mockReq({
@@ -110,7 +174,7 @@ test('undo writes an audit row and tells the other devices', async () => {
 
 test('undoing a party with nothing live is 404', async () => {
   mock.setResolver((s) => {
-    if (s.table === 'check_ins' && s.op === 'update') return { data: [] };
+    if (s.table === 'check_ins' && s.op === 'select') return { data: [] };
     return {};
   });
   const { res } = await invoke(undoCheckIn, mockReq({
@@ -120,15 +184,26 @@ test('undoing a party with nothing live is 404', async () => {
 });
 
 test('undoPartyCheckIn only touches rows that are still live', async () => {
-  let filters = null;
+  let selectFilters = null;
+  const rpcCalls = [];
   mock.setResolver((s) => {
-    if (s.table === 'check_ins' && s.op === 'update') { filters = s.filters; return { data: [{ id: 'ci-1' }] }; }
+    if (s.op === 'rpc') { rpcCalls.push(s.params); return { data: { ok: true, server_id: s.params.p_server_id } }; }
+    if (s.table === 'check_ins' && s.op === 'select') {
+      selectFilters = s.filters;
+      return { data: [{ id: 'ci-1' }] };
+    }
     return {};
   });
   await guestService.undoPartyCheckIn(EVENT, PARTY, { actorId: 'u1', reason: 'r' });
-  // Without the `is deleted_at null` guard, a repeated undo would overwrite the
-  // original actor and reason with the second caller's.
-  assert.deepEqual(filters.is, [['deleted_at', null]]);
+
+  // The live-rows guard moved from the UPDATE onto the SELECT that chooses which
+  // rows to reverse — without it a repeated undo would re-stamp an already
+  // reversed row and overwrite the original actor and reason.
+  assert.deepEqual(selectFilters.is, [['deleted_at', null]]);
+  assert.deepEqual(selectFilters.eq, [['event_id', EVENT], ['party_id', PARTY]]);
+  // And the RPC is itself idempotent — it answers `already_undone` rather than
+  // re-stamping, so the guard is belt and braces rather than the only defence.
+  assert.equal(rpcCalls.length, 1);
 });
 
 // ══════════════════════════════════════════════════════════════════
@@ -232,13 +307,79 @@ test('a live check-in still reads as arrived', async () => {
 });
 
 // ══════════════════════════════════════════════════════════════════
-// checkInParty must ignore undone rows, or an undone guest can never
-// be re-admitted
+// checkInParty — the desk's arrival must be VISIBLE TO TABLETS
 // ══════════════════════════════════════════════════════════════════
 
-test('checkInParty excludes soft-deleted rows when deciding who is already in', async () => {
+/**
+ * ── THE BUG THIS TEST EXISTS FOR ──
+ *
+ * A desk check-in was a direct INSERT. `server_seq` has no default and no
+ * trigger — it is allocated only inside `checkin_batch_upsert`, which just the
+ * device drain calls — so every arrival taken at the front desk landed with
+ * `server_seq = NULL`. `getDelta` selects on `server_seq.gt.N,undo_seq.gt.N`,
+ * so no tablet was ever told about it.
+ *
+ * The count stayed right by accident: the guest re-scans at a door, the tablet
+ * has never heard of them, admits them, and the batch endpoint answers
+ * `conflict` and keeps the desk's row. One manufactured conflict per guest.
+ *
+ * So this asserts the CALL, not the column writes — the sequence number is
+ * allocated inside the function, in the same transaction as the insert.
+ */
+test('a desk check-in goes through the RPC, so it takes a sequence number tablets can see', async () => {
+  const rpcCalls = [];
+  mock.setResolver((s) => {
+    if (s.op === 'rpc') {
+      rpcCalls.push({ fn: s.fn, params: s.params });
+      return { data: { ok: true, checked_in_count: 2, total_guests: 3, already_checked_in: 1, checked_in_at: 'now' } };
+    }
+    return {};
+  });
+
+  const out = await guestService.checkInParty(EVENT, PARTY, { method: 'manual_search', checkedInBy: 'organizer-7' });
+
+  assert.equal(rpcCalls.length, 1);
+  assert.equal(rpcCalls[0].fn, 'checkin_web_upsert');
+  assert.equal(rpcCalls[0].params.p_event_id, EVENT);
+  assert.equal(rpcCalls[0].params.p_party_id, PARTY);
+  assert.equal(rpcCalls[0].params.p_method, 'manual_search');
+  // The ORGANIZER audit uuid. checkin_batch_upsert hard-codes this to NULL,
+  // which is exactly why the web path could not simply reuse that function.
+  assert.equal(rpcCalls[0].params.p_checked_in_by, 'organizer-7');
+
+  // The return contract is read by checkinController for the desk's response
+  // and must not drift.
+  assert.deepEqual(out, {
+    success: true, checkedInCount: 2, totalGuests: 3, alreadyCheckedIn: 1, checkedInAt: 'now',
+  });
+});
+
+test('a fully-arrived party still reports ALREADY_CHECKED_IN with the original time', async () => {
+  mock.setResolver((s) => {
+    if (s.op === 'rpc') {
+      return { data: { ok: false, error: 'ALREADY_CHECKED_IN', total_guests: 2, checked_in_at: '2026-08-01T19:00:00Z' } };
+    }
+    return {};
+  });
+
+  const out = await guestService.checkInParty(EVENT, PARTY, { method: 'manual_search' });
+  assert.equal(out.success, false);
+  assert.equal(out.error, 'ALREADY_CHECKED_IN');
+  assert.equal(out.checkedInAt, '2026-08-01T19:00:00Z');
+  assert.equal(out.totalGuests, 2);
+});
+
+/**
+ * The migration may not be applied yet, and a desk that cannot admit anyone is
+ * far worse than one whose arrivals reach tablets a poll later. The legacy
+ * INSERT path is kept for exactly that window — and it must still get the
+ * soft-delete rule right, or a guest whose check-in was undone could never be
+ * re-admitted.
+ */
+test('an unapplied migration falls back to the direct insert, still ignoring undone rows', async () => {
   let selectFilters = null;
   mock.setResolver((s) => {
+    if (s.op === 'rpc') return { data: null, error: { code: 'PGRST202', message: 'Could not find the function' } };
     if (s.table === 'guests' && s.op === 'select') return { data: [{ id: 'g1', full_name: 'Alice' }] };
     if (s.table === 'check_ins' && s.op === 'select') { selectFilters = s.filters; return { data: [] }; }
     if (s.table === 'check_ins' && s.op === 'insert') return { data: [{ id: 'ci-2', checked_in_at: 'now' }] };

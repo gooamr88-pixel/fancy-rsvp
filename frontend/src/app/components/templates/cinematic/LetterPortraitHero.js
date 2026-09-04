@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useReducedMotion } from 'framer-motion';
 import {
   getCinematicCopy,
@@ -63,19 +63,31 @@ export default function LetterPortraitHero({
   const copy = getCinematicCopy(template, { isRTL, occasion });
   const reduceMotion = useReducedMotion();
 
-  /* Whether an opening has ever covered this hero. A ref, not state: it only
-     decides which branch the effect below takes, and re-rendering on it would
-     be a render that changes nothing. */
-  const sawOpening = useRef(openingActive);
-  const [arriving, setArriving] = useState(openingActive && !reduceMotion);
+  /* Whether the entrance has been handed to CSS yet. It starts released when
+     there is no opening to wait behind: an event with the cover turned off
+     never had an envelope to arrive FROM, so it renders settled from the first
+     frame rather than performing a transition out of a state nobody saw. */
+  const [released, setReleased] = useState(!openingActive);
+
+  /* An opening that comes BACK — the dashboard's replay button — re-arms the
+     entrance. Adjusted during the render that changes the prop, which is
+     React's documented shape for this and the only one that does not paint a
+     frame of the settled hero on the way back to armed. */
+  const [openingWas, setOpeningWas] = useState(openingActive);
+  if (openingWas !== openingActive) {
+    setOpeningWas(openingActive);
+    if (openingActive) setReleased(false);
+  }
+
+  /* Reduced motion gets the settled picture, and gets it by derivation rather
+     than by an effect correcting the state afterwards: the entrance is
+     decorative, and a slow zoom across a full-screen photograph is exactly the
+     kind of thing the preference is asking us not to do — including for the
+     one frame an effect would take to notice. */
+  const arriving = !reduceMotion && !released;
 
   useEffect(() => {
-    // Reduced motion gets the settled picture. The entrance is decorative and
-    // a slow zoom across a full-screen photograph is exactly the kind of thing
-    // the preference is asking us not to do.
-    if (reduceMotion) { setArriving(false); return undefined; }
-    if (openingActive) { sawOpening.current = true; setArriving(true); return undefined; }
-    if (!sawOpening.current) { setArriving(false); return undefined; }
+    if (reduceMotion || openingActive) return undefined;
 
     /* Released on the next frame so the browser has a painted starting state
        to interpolate FROM — clearing it in the same commit produces no
@@ -84,8 +96,8 @@ export default function LetterPortraitHero({
        The timer is not redundant: requestAnimationFrame does not fire in a
        backgrounded tab, and a guest who opened the invitation and switched
        apps would come back to a hero frozen at its entrance. */
-    const raf = requestAnimationFrame(() => setArriving(false));
-    const backstop = setTimeout(() => setArriving(false), ARRIVE_BACKSTOP_MS);
+    const raf = requestAnimationFrame(() => setReleased(true));
+    const backstop = setTimeout(() => setReleased(true), ARRIVE_BACKSTOP_MS);
     return () => { cancelAnimationFrame(raf); clearTimeout(backstop); };
   }, [openingActive, reduceMotion]);
 

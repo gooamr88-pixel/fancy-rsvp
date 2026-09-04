@@ -457,58 +457,21 @@ const getEventAnalytics = async (req, res, next) => {
   }
 };
 
-/**
- * Get maybe-response guests who haven't confirmed yet.
- * GET /api/v1/events/:eventId/analytics/maybe-guests
+/*
+ * `getMaybeGuests` and its `parseDuration` helper were here and are gone.
+ *
+ * GET /events/:eventId/analytics/maybe-guests had no caller in the web app, the
+ * tablet app or the e2e suite, and no test of its own — checked against a corpus
+ * of every frontend and Kotlin source file in the repository. It listed parties
+ * that answered "maybe" and flagged the overdue ones, which is a real idea, but
+ * nothing has ever asked for it and no screen was built to show it.
+ *
+ * Restoring it is `git log -- controllers/analyticsController.js` away, and the
+ * query is four lines. Carrying an endpoint nobody calls costs more than that:
+ * it is a live authenticated surface that reads guest emails and phone numbers.
  */
-const getMaybeGuests = async (req, res, next) => {
-  const { eventId } = req.params;
-
-  try {
-    const { data: maybeParties, error } = await supabase
-      .from('rsvp_parties')
-      .select('id, label, maybe_confirm_by, created_at, updated_at, guests(is_primary_contact, email, phone)')
-      .eq('event_id', eventId)
-      .eq('response', 'maybe')
-      .order('created_at', { ascending: false });
-
-    if (error) throw error;
-
-    return res.json({
-      success: true,
-      guests: (maybeParties || []).map(p => {
-        const primary = (p.guests || []).find(g => g.is_primary_contact) || {};
-        return {
-          id: p.id, guest_name: p.label, email: primary.email || null, phone: primary.phone || null,
-          maybe_confirm_by: p.maybe_confirm_by, created_at: p.created_at, updated_at: p.updated_at,
-          daysSinceRsvp: Math.floor((Date.now() - new Date(p.created_at).getTime()) / (1000 * 60 * 60 * 24)),
-          isOverdue: p.maybe_confirm_by && Date.now() > new Date(p.updated_at || p.created_at).getTime() + parseDuration(p.maybe_confirm_by),
-        };
-      }),
-    });
-  } catch (err) {
-    next(err);
-  }
-};
-
-/**
- * Parse a human-readable duration like "24h", "3d", "1w" into milliseconds.
- */
-function parseDuration(str) {
-  if (!str) return Infinity;
-  const match = str.match(/^(\d+)\s*(h|d|w)$/i);
-  if (!match) return Infinity;
-  const val = parseInt(match[1]);
-  const unit = match[2].toLowerCase();
-  if (unit === 'h') return val * 60 * 60 * 1000;
-  if (unit === 'd') return val * 24 * 60 * 60 * 1000;
-  if (unit === 'w') return val * 7 * 24 * 60 * 60 * 1000;
-  return Infinity;
-}
-
 
 module.exports = {
   trackGuestEvent,
   getEventAnalytics,
-  getMaybeGuests,
 };

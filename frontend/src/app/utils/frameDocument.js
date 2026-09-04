@@ -38,3 +38,22 @@ export function viewOf(node) {
 export function byIdNear(node, id) {
   return docOf(node)?.getElementById(id) || null;
 }
+
+/**
+ * Writes `dir` onto the `<html>` of the document `node` lives in.
+ *
+ * The frame document's OWN direction, not the portal content's: RTL there is
+ * what flips `env(safe-area-inset-*)`-aware and logical-property layout, and
+ * setting it on anything inside `<body>` does not.
+ *
+ * Here rather than inline in PreviewFrame because the node it is handed is the
+ * frame body held in React state, and `react-hooks/immutability` reads any
+ * write reached from a `useState` value as mutating React's own data. It is
+ * not — it is a DOM document, the external system that effect exists to
+ * synchronise with — but this module is where "operate on the frame's document
+ * rather than the dashboard's" already lives, so it belongs here anyway.
+ */
+export function setDocDirection(node, dir) {
+  const el = docOf(node)?.documentElement;
+  if (el) el.dir = dir;
+}

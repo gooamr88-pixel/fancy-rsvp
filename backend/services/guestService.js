@@ -1276,6 +1276,52 @@ async function seatImportedParties(eventId, actorUserId, wanted) {
 }
 
 /** Export dataset for CSV/Excel. */
+/**
+ * Everything `utils/excelHelper.generateExcelExport` needs, assembled once.
+ *
+ * ── WHY THIS IS A FUNCTION AND NOT FOUR QUERIES AT THE CALL SITE ──
+ *
+ * It was four queries at one call site (rsvpController.exportGuestsExcel), and
+ * the second caller — the post-event archive link in the data-deletion warning
+ * email — would have had to reproduce all of it, including the part that is not
+ * obvious:
+ *
+ *   • the `guestRows` mapping is a CONTRACT with generateExcelExport. It expects
+ *     the pre-rebuild `rsvp` shape (`rsvp_guests`, `seating_assignments`), which
+ *     no table produces any more; the mapping below is what manufactures it.
+ *   • check-ins must filter `deleted_at IS NULL`. Undone arrivals are retained
+ *     as evidence (migration 20260814000000), and an export that listed them
+ *     would show guests as having attended who were signed back out at the door.
+ *   • the timezone is the EVENT's, so arrival times are printed on the venue's
+ *     clock rather than on the clock of whoever is downloading.
+ *
+ * Two of those three are invisible mistakes — the file generates, opens, and is
+ * quietly wrong. Being wrong in the archive is worse than in the dashboard
+ * export, because the archive is the copy the organizer keeps after the
+ * original has been deleted.
+ */
+async function buildEventExcelExport(eventId, { attendingOnly = false, sort = null } = {}) {
+  const { rows, meta } = await exportParties(eventId, { attendingOnly, sort });
+
+  const [{ data: tables, error: tablesError }, { data: event }, { data: checkins, error: checkinsError }] =
+    await Promise.all([
+      supabase.from('tables').select('*').eq('event_id', eventId),
+      supabase.from('events').select('timezone').eq('id', eventId).maybeSingle(),
+      supabase.from('check_ins').select('*, rsvp_parties(label)').eq('event_id', eventId).is('deleted_at', null),
+    ]);
+  if (tablesError) throw tablesError;
+  if (checkinsError) throw checkinsError;
+
+  const guestRows = rows.map((r) => ({
+    guest_name: r.guest_name, email: r.email, phone: r.phone, response: r.response,
+    party_size: r.party_size, notes: r.notes, side: r.side,
+    rsvp_guests: (r.guests || []).map((g) => ({ meal_selection: g.meal_selection, is_primary: g.is_primary_contact })),
+    seating_assignments: r.table_name ? [{ tables: { table_name: r.table_name } }] : [],
+  }));
+
+  return { guestRows, tables: tables || [], checkins: checkins || [], timezone: event?.timezone || null, meta };
+}
+
 async function exportParties(eventId, { attendingOnly, sort } = {}) {
   const EXPORT_LIMIT = 10000;
   // Needed only to write the Side column as "<Name>'s Side" instead of the raw
@@ -1403,6 +1449,74 @@ async function exportParties(eventId, { attendingOnly, sort } = {}) {
  * guest already checked in is silently skipped rather than re-inserted.
  */
 async function checkInParty(eventId, partyId, { method, checkedInBy = null } = {}) {
+  /*
+   * ── WHY THIS GOES THROUGH AN RPC AND NOT THE INSERT BELOW ──
+   *
+   * The direct INSERT that follows is correct about the database and invisible
+   * to every tablet at the venue.
+   *
+   * Devices read arrivals from `getDelta`, which selects on
+   * `server_seq.gt.<since>,undo_seq.gt.<since>`. `server_seq` has no default
+   * and no trigger — it is allocated inside `checkin_batch_upsert`, which only
+   * the device drain calls. So a check-in taken at the desk landed with
+   * `server_seq = NULL`, matched no possible delta, and no tablet was ever told
+   * about it.
+   *
+   * That did not corrupt the count, which is why it went unnoticed: the guest
+   * scans at a door, the tablet has never heard of them, admits them, and the
+   * batch endpoint answers `conflict` and keeps the desk's original row. Right
+   * total, manufactured conflict — one per guest the desk admits.
+   *
+   * `checkin_web_upsert` (migration 20260831000000) allocates the sequence and
+   * inserts in ONE transaction under the same advisory lock the drain takes.
+   * Doing those as two steps from here is not equivalent: a device polling in
+   * between reads the already-advanced cursor, applies nothing, and moves its
+   * own cursor past a row that lands a moment later — invisible to it forever.
+   *
+   * The INSERT path below is KEPT as a fallback, deliberately. Migrations in
+   * this repository have shipped unapplied more than once, and a desk that
+   * cannot admit anyone is far worse than a desk whose arrivals reach tablets
+   * a poll later. Same posture as undoPartyCheckIn.
+   */
+  const rpc = await supabase.rpc('checkin_web_upsert', {
+    p_event_id: eventId,
+    p_party_id: partyId,
+    p_method: method,
+    p_checked_in_by: checkedInBy,
+  });
+
+  if (!rpc.error) {
+    const data = rpc.data || {};
+    if (data.ok) {
+      return {
+        success: true,
+        checkedInCount: data.checked_in_count || 0,
+        totalGuests: data.total_guests || 0,
+        alreadyCheckedIn: data.already_checked_in || 0,
+        checkedInAt: data.checked_in_at,
+      };
+    }
+    if (data.error === 'ALREADY_CHECKED_IN') {
+      return {
+        success: false,
+        error: 'ALREADY_CHECKED_IN',
+        checkedInAt: data.checked_in_at,
+        totalGuests: data.total_guests || 0,
+      };
+    }
+    return { success: false, error: data.error || 'GUEST_NOT_FOUND' };
+  }
+
+  if (!(rpc.error.code === 'PGRST202' || /could not find the function/i.test(rpc.error.message || ''))) {
+    throw rpc.error;
+  }
+
+  logger.warn(
+    { eventId, partyId },
+    '[guests] checkin_web_upsert missing — migration 20260831000000 is not applied; '
+    + 'recording without a sequence number, so tablets will NOT see this arrival until they re-prepare',
+  );
+
   const { data: guests, error: guestsErr } = await supabase
     .from('guests').select('id, full_name').eq('party_id', partyId).eq('event_id', eventId);
   if (guestsErr) throw guestsErr;
@@ -1474,21 +1588,83 @@ async function checkInParty(eventId, partyId, { method, checkedInBy = null } = {
  *
  * Already-undone rows are skipped, so a repeated undo is a no-op rather than
  * a re-stamp that would overwrite the original actor and reason.
+ *
+ * ── WHY THIS GOES THROUGH THE RPC AND NOT A DIRECT UPDATE ──
+ *
+ * It used to be one `UPDATE` setting `deleted_at`, `deleted_by` and
+ * `undo_reason`. Correct as far as the database went, and invisible to every
+ * tablet at the venue.
+ *
+ * Devices learn about changes from `getDelta`, which selects on
+ * `server_seq.gt.<since>,undo_seq.gt.<since>`. That UPDATE never allocated an
+ * `undo_seq`, so the reversed row stayed at `undo_seq = NULL`, never matched the
+ * filter, and no device ever heard about it. The dashboard's arrival count
+ * dropped while both tablets went on showing the guest as arrived — and would
+ * refuse to re-admit them at the door on the Layer 1 duplicate guard (§5.3).
+ *
+ * `checkin_undo_by_ref` allocates that sequence number under the same advisory
+ * lock the batch upsert takes, so the reversal takes its own position in the
+ * stream and every device picks it up on the next poll. Reusing it also means
+ * the two undo paths — dashboard and tablet — write identical rows, instead of
+ * one of them quietly omitting fields the other sets.
+ *
+ * One call per live check-in because the RPC reverses ONE row; a party is
+ * usually one to four people, so this is a handful of statements, and each is
+ * idempotent.
  */
 async function undoPartyCheckIn(eventId, partyId, { actorId = null, reason = null } = {}) {
-  const { data, error } = await supabase
+  const { data: live, error: liveErr } = await supabase
     .from('check_ins')
-    .update({
-      deleted_at: new Date().toISOString(),
-      deleted_by: actorId,
-      undo_reason: reason || 'Reversed from the check-in console',
-    })
+    .select('id')
     .eq('event_id', eventId)
     .eq('party_id', partyId)
-    .is('deleted_at', null)
-    .select('id, guest_id');
-  if (error) throw error;
-  return data?.length || 0;
+    .is('deleted_at', null);
+  if (liveErr) throw liveErr;
+  if (!live || live.length === 0) return 0;
+
+  const undoReason = reason || 'Reversed from the check-in console';
+  let reversed = 0;
+
+  for (const row of live) {
+    const { data, error } = await supabase.rpc('checkin_undo_by_ref', {
+      p_event_id: eventId,
+      p_client_checkin_id: null,
+      p_server_id: row.id,
+      p_actor: actorId,
+      p_reason: undoReason,
+      p_staff_id: null,
+      p_staff_name: null,
+    });
+
+    /*
+     * The migration may not be applied on every deployment yet. Falling back to
+     * the original UPDATE keeps the reversal working — the dashboard stays
+     * correct — and only the propagation to devices is missing, which is exactly
+     * the behaviour this replaced. Better than refusing to reverse at all.
+     */
+    if (error && (error.code === 'PGRST202' || /could not find the function/i.test(error.message || ''))) {
+      logger.warn(
+        { eventId, partyId },
+        '[guests] checkin_undo_by_ref missing — migration 20260830000004 is not applied; '
+        + 'reversing without a sequence number, so tablets will NOT see this undo',
+      );
+      const { error: fallbackErr } = await supabase
+        .from('check_ins')
+        .update({ deleted_at: new Date().toISOString(), deleted_by: actorId, undo_reason: undoReason })
+        .eq('id', row.id)
+        .is('deleted_at', null);
+      if (fallbackErr) throw fallbackErr;
+      reversed += 1;
+      continue;
+    }
+
+    if (error) throw error;
+    // `already_undone` means someone reversed it between the read and now; it is
+    // not a failure, but it is not a reversal this call performed either.
+    if (data?.ok && !data.already_undone) reversed += 1;
+  }
+
+  return reversed;
 }
 
 /** Columns the check-in desk search needs — the full row the caller returns. */
@@ -1692,6 +1868,12 @@ module.exports = {
   summarizeGuestList,
   deleteAllParties,
   exportParties,
+  buildEventExcelExport,
+  /* The moment the ticket page will show a guest their table. Exported so the
+     scheduler's run-up windows can be ASSERTED against it rather than compared
+     by eye — a reminder that names a table must never fire before the page that
+     shows it (test/dayBeforeReminder.test.js). */
+  SEATING_REVEAL_WINDOW_MS,
   checkInParty,
   undoPartyCheckIn,
   searchGuestsForCheckin,

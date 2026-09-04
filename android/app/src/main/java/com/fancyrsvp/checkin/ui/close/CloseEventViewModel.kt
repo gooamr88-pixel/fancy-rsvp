@@ -78,9 +78,16 @@ class CloseEventViewModel @Inject constructor(
         // a purge that destroys check-ins existing nowhere else (§20.5).
         safeLaunch(onError = { _state.value = State.Blocked(pending = -1, stalled = 0) }) {
             _state.value = withContext(io) {
-                val pending = db.syncQueueDao().depthForEvent(id)
-                // Stalled entries are a subset of pending, counted separately so the
-                // message can distinguish "wait" from "get help".
+                /*
+                 * Counted as EVIDENCE, not as rows. This was `depthForEvent` —
+                 * every entry in the queue — so one reversal the server had
+                 * permanently refused blocked the event from ever being closed,
+                 * and with it the only route back to the Prepare screen. See
+                 * SyncQueueDao.unsentEvidenceForEvent.
+                 */
+                val pending = db.syncQueueDao().unsentEvidenceForEvent(id)
+                // Stalled entries are counted separately so the message can
+                // distinguish "wait for signal" from "this will never send".
                 val stalled = db.syncQueueDao().stalledCountForEvent(id)
 
                 if (pending > 0) {

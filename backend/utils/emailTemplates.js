@@ -165,6 +165,27 @@ const BRAND = {
   danger: '#C45E5E',
   dangerBg: '#FBF0F0',
   dangerBorder: '#EBC9C9',
+  /**
+   * The one true red, for a badge that has to be read as an ALARM.
+   *
+   * `danger` above is a muted rose, and it is correct for what it does: tinting
+   * a `noticeBox`, colouring a "Declined" row, marking a decline button. At
+   * those sizes, against a large pale field, it reads as "careful".
+   *
+   * It does not survive being shrunk. Inside a `badge()` — an 11px uppercase
+   * pill — #C45E5E on #F8F4EC is soft enough to read as ornament, which is
+   * exactly wrong on the one email in this system that announces irreversible
+   * deletion. That badge is filled SOLID with this colour and set in white, so
+   * it carries at pill size.
+   *
+   * Kept separate rather than darkening `danger`, because darkening `danger`
+   * would drag six other surfaces with it — including the guest-facing decline
+   * button, where an alarm red is the wrong note entirely.
+   *
+   * Contrast: #FFFFFF on #B23B3B is 5.9:1 — above WCAG AA for normal text, and
+   * this is bold 11px uppercase.
+   */
+  alert: '#B23B3B',
 };
 
 /**
@@ -1551,6 +1572,233 @@ const getEventReminderTemplate = (rsvp, event, opts = {}, lang = 'en') => {
   });
 };
 
+/**
+ * "How long until this starts", in words, at render time.
+ *
+ * An email is a photograph, not a clock — whatever this says is frozen the
+ * instant it is composed and will still say it when the guest opens it three
+ * hours later. So it is deliberately VAGUE ("in about 6 hours") rather than
+ * precise ("in 5 hours 47 minutes"): a rounded figure ages into a harmless
+ * approximation, while a precise one ages into a visible lie and undermines the
+ * exact time printed directly below it.
+ *
+ * Under an hour it switches to minutes, where the same rounding still holds and
+ * the urgency is the whole message. Past the start time it returns null and the
+ * caller drops the clause — "in about 0 hours" is worse than saying nothing.
+ */
+/**
+ * An Arabic count with the right noun form, which is FOUR forms and not two.
+ *
+ * English needs "hour"/"hours". Arabic needs singular, a DUAL, a plural for
+ * 3-10, and back to the singular from 11 up:
+ *
+ *   1        ساعة        (no numeral — "٢ ساعة" reads as a form field)
+ *   2        ساعتين      the dual. NOT "٢ ساعات", which is what a two-form
+ *                        pluraliser produces and what this said before.
+ *   3-10     ٣ ساعات
+ *   11+      ١١ ساعة
+ *
+ * The two-form version was wrong at exactly one value, and that value is
+ * reachable: the final-call mail rounds to hours, and a send delayed into the
+ * last stretch of its window renders "2". It would have read as broken Arabic
+ * to every guest on that event.
+ */
+const arCount = (n, { one, two, few, many }) => {
+  if (n === 1) return one;
+  if (n === 2) return two;
+  if (n >= 3 && n <= 10) return `${n} ${few}`;
+  return `${n} ${many}`;
+};
+
+const startsInPhrase = (eventDate, lang) => {
+  const start = new Date(eventDate).getTime();
+  if (Number.isNaN(start)) return null;
+  const ms = start - Date.now();
+  if (ms <= 0) return null;
+
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 60) {
+    return pick(lang, {
+      en: `in about ${minutes} minute${minutes === 1 ? '' : 's'}`,
+      ar: `خلال ${arCount(minutes, { one: 'دقيقة', two: 'دقيقتين', few: 'دقائق', many: 'دقيقة' })} تقريبًا`,
+    });
+  }
+  const hours = Math.round(ms / 3600000);
+  return pick(lang, {
+    en: `in about ${hours} hour${hours === 1 ? '' : 's'}`,
+    ar: `خلال ${arCount(hours, { one: 'ساعة', two: 'ساعتين', few: 'ساعات', many: 'ساعة' })} تقريبًا`,
+  });
+};
+
+/**
+ * THE FINAL CALL — T-6h, to every confirmed guest.
+ *
+ * ── How this differs from getEventReminderTemplate, and why it is a separate
+ *    template rather than the same one sent twice ──
+ *
+ * The day-before mail is about PLANNING: it opens with the date, lays out the
+ * details, and asks the guest to save the pass for later. This one is about
+ * LEAVING. The guest reading it is deciding when to get in a car, so it leads
+ * with how long they have and the route, and repeats the table and pass because
+ * those are what they will be hunting for in an hour.
+ *
+ * Sending the identical email twice would have been less code and a worse
+ * product: a duplicate reads as a system fault, and it teaches people that the
+ * first one did not matter.
+ *
+ * `opts` matches getEventReminderTemplate exactly ({ tableName, links }) so the
+ * scheduler can hand both templates the same object.
+ */
+const getFinalCallReminderTemplate = (rsvp, event, opts = {}, lang = 'en') => {
+  const formattedDate = formatEventDateLang(event.event_date, lang, event.timezone);
+  const where = event.location_name || event.location_address || null;
+  const { qrImageUrl, qrDownloadUrl, ticketUrl } = opts.links || {};
+  const formattedTable = formatTableLabel(opts.tableName, lang);
+  const partySize = Number(rsvp.party_size) || 1;
+  const rtl = isRtl(lang);
+  const countdown = startsInPhrase(event.event_date, lang);
+  const mapsUrl = buildMapsUrl(event);
+
+  const rows = [];
+  if (formattedDate) rows.push([pick(lang, { en: 'Starts', ar: 'يبدأ' }), escapeHtml(formattedDate)]);
+  if (where) rows.push([pick(lang, { en: 'Where', ar: 'المكان' }), venueValueHtml(event, lang)]);
+  if (formattedTable) rows.push([pick(lang, { en: 'Your table', ar: 'طاولتك' }), escapeHtml(formattedTable), BRAND.gold]);
+
+  return emailShell({
+    ...guestBrand(event),
+    lang,
+    preheader: pick(lang, {
+      en: countdown ? `${event.title} starts ${countdown}` : `${event.title} is today`,
+      ar: countdown ? `${event.title} يبدأ ${countdown}` : `${event.title} اليوم`,
+    }),
+    // "Today" is safe here in a way "Tomorrow" was not on the day-before mail:
+    // this fires six hours out, so the event is inside the same local day for
+    // every timezone a guest could plausibly be reading in.
+    eyebrow: pick(lang, { en: 'Today', ar: 'اليوم' }),
+    heading: escapeHtml(event.title),
+    contentHtml: `
+      ${greeting(rsvp.guest_name, lang)}
+      ${countdown ? badge(pick(lang, {
+        en: `Starts ${countdown}`,
+        ar: `يبدأ ${countdown}`,
+      })) : ''}
+      ${para(pick(lang, {
+        en: 'Time to start getting ready. Here is everything for the door — the address, your table, and the code we scan when you arrive.',
+        ar: 'حان وقت الاستعداد. إليك كل ما تحتاجه عند الباب — العنوان، وطاولتك، والرمز الذي نمسحه عند وصولك.',
+      }))}
+      ${rows.length ? dataTable(rows, lang) : ''}
+      ${mapsUrl ? button(mapsUrl, pick(lang, { en: '&#128205; Get directions', ar: '&#128205; الاتجاهات' })) : ''}
+      ${qrImageUrl ? entryPass({
+        guestName: rsvp.guest_name,
+        eventTitle: event.title,
+        qrImageUrl,
+        ticketUrl,
+        tableIsAssigned: !!formattedTable,
+        tableValue: formattedTable || pick(lang, { en: 'Assigned when you arrive', ar: 'يُحدَّد عند وصولك' }),
+        admitsLabel: rtl ? guestCount(partySize, lang) : `Admits ${partySize}`,
+        reference: `#${String(rsvp.id || '').replace(/-/g, '').slice(-6).toUpperCase()}`,
+        lang,
+      }) : ''}
+      ${qrDownloadUrl ? button(qrDownloadUrl, pick(lang, { en: '&#11015; Save my QR code', ar: '&#11015; احفظ رمز الدخول' }), { bg: BRAND.white, color: BRAND.goldDark, border: BRAND.gold }) : ''}
+      ${qrImageUrl ? para(pick(lang, {
+        en: 'Save the code to your photos now — the venue may have no signal when you get there.',
+        ar: 'احفظ الرمز في صورك الآن — قد لا يتوفر إنترنت عند وصولك للمكان.',
+      }), { size: 13, color: BRAND.stone, align: 'center', mb: 6 }) : ''}
+      ${para(pick(lang, { en: 'Travel safely — see you shortly.', ar: 'رحلة آمنة — نراك بعد قليل.' }), { mb: 0 })}
+    `,
+  });
+};
+
+/**
+ * A duration as HH:MM:SS, zero-padded, for the deletion countdown.
+ *
+ * Hours are NOT capped at 24 and are not carried into days: a 36-hour grace
+ * window renders "36:00:00", not "12:00:00" and not "1d 12:00:00". A clock that
+ * silently wraps is the single worst failure this display can have, because
+ * "12:00:00" is a completely plausible reading of a deadline that is actually a
+ * day and a half away.
+ */
+const formatHMS = (ms) => {
+  const total = Math.max(0, Math.floor(Number(ms) || 0) / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = Math.floor(total % 60);
+  return [h, m, s].map((n) => String(n).padStart(2, '0')).join(':');
+};
+
+/**
+ * THE DATA-DELETION WARNING — to the organizer, once, after their event ends.
+ *
+ * ── THE HONESTY PROBLEM AT THE HEART OF THIS TEMPLATE ──
+ *
+ * The brief asked for a countdown in hours, minutes and seconds. An email cannot
+ * have one: it is a photograph of a moment, and whatever this renders is frozen
+ * the instant it is composed. A ticking-looking `23:59:58` that has not moved
+ * since yesterday is not a countdown, it is a wrong number in a convincing
+ * typeface — on the one message where being wrong means somebody loses their
+ * guest list.
+ *
+ * So BOTH are shown, and the labels do the work:
+ *
+ *   • the HH:MM:SS figure, labelled as the time remaining WHEN THIS WAS SENT
+ *   • the absolute deadline, on the organizer's own clock, as the authority
+ *
+ * The genuinely live clock lives on the dashboard banner, where it can tick.
+ * A reader who opens this three hours late reads a stale figure that is
+ * explicitly stale, and an absolute time that is still exactly correct.
+ *
+ * ── WHY THE BADGE IS SOLID RED ──
+ *
+ * Every other badge in this file is a tinted pill in champagne or gold, because
+ * every other badge is telling somebody something nice. This one announces that
+ * data is about to be destroyed and cannot be recovered. See BRAND.alert.
+ */
+const getEventDataDeletionWarningTemplate = ({
+  orgName, event, deleteAt, archiveUrl, keepUrl = null, stats = null, timeZone = null,
+}) => {
+  const zone = timeZone || event.timezone || null;
+  const deadline = formatDateTime(deleteAt, zone);
+  const remaining = formatHMS(new Date(deleteAt).getTime() - Date.now());
+  const held = [];
+  if (stats) {
+    if (Number.isFinite(stats.parties)) held.push({ label: 'Invitations', value: stats.parties });
+    if (Number.isFinite(stats.guests)) held.push({ label: 'Guests', value: stats.guests });
+    if (Number.isFinite(stats.checkins)) held.push({ label: 'Checked in', value: stats.checkins });
+  }
+
+  return emailShell({
+    lang: 'en',
+    preheader: `Everything for ${event.title} is deleted on ${deadline || 'schedule'} — download it first.`,
+    eyebrow: 'Action needed',
+    heading: escapeHtml(event.title),
+    contentHtml: `
+      ${badge('&#9888;&#65039; Data deletion scheduled', { bg: BRAND.alert, fg: BRAND.white, border: BRAND.alert })}
+      ${para(`Hi ${escapeHtml(orgName || 'there')},`)}
+      ${para(`<strong class="fr-ink" style="color:${BRAND.charcoal};">${escapeHtml(event.title)}</strong> has finished, and everything we hold for it is scheduled for permanent deletion.`)}
+
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0;">
+        <tr><td align="center" bgcolor="${BRAND.dangerBg}" style="background-color:${BRAND.dangerBg}; border:1px solid ${BRAND.dangerBorder}; border-radius:16px; padding:24px 16px;">
+          <div style="font-family:${SANS}; font-size:10px; font-weight:bold; letter-spacing:1.6px; text-transform:uppercase; color:${BRAND.danger}; margin-bottom:10px;">Time left when this was sent</div>
+          <div style="font-family:'Courier New', Courier, monospace; font-size:38px; font-weight:bold; letter-spacing:4px; color:${BRAND.alert};">${remaining}</div>
+          ${deadline ? `<div style="font-family:${SANS}; font-size:13px; color:${BRAND.ink}; margin-top:12px;">Deleted after <strong>${escapeHtml(deadline)}</strong></div>` : ''}
+        </td></tr>
+      </table>
+
+      ${held.length ? statGrid(held.map((h) => ({ ...h, color: BRAND.charcoal }))) : ''}
+
+      ${para('Download everything now. This link builds a spreadsheet with your full guest list, seating, meal choices and door check-ins — one file, ready to keep.')}
+      ${button(archiveUrl, '&#11015; Download everything')}
+
+      ${noticeBox(`<strong>What is deleted, permanently:</strong> every guest and their contact details, all RSVPs and meal choices, your seating chart, the door check-in record, the message history, and the event's public page. This cannot be undone and we cannot recover it for you afterwards.`, 'danger')}
+
+      ${keepUrl ? `${para('Need longer? Keep this event on your account and nothing will be deleted.', { size: 13, color: BRAND.stone, mb: 6 })}
+      ${button(keepUrl, 'Keep this event&rsquo;s data', { bg: BRAND.white, color: BRAND.goldDark, border: BRAND.gold })}` : ''}
+
+      ${para('Thank you for hosting with us.', { mb: 0 })}
+    `,
+  });
+};
+
 /** Post-event thank-you to guests who attended. */
 const getPostEventThankYouTemplate = (rsvp, event, lang = 'en') => {
   const named = `<strong class="fr-ink" style="color:${BRAND.charcoal};">${escapeHtml(event.title)}</strong>`;
@@ -1828,6 +2076,13 @@ module.exports = {
   getQRTicketTemplate,
   getRsvpReminderTemplate,
   getEventReminderTemplate,
+  getFinalCallReminderTemplate,
+  getEventDataDeletionWarningTemplate,
+  /* Exported so eventPurge.test.js can assert the non-wrapping property
+     directly. Reading it out of rendered HTML cannot distinguish a correct
+     "12:00:00" from a 36-hour window that silently wrapped, and that is the one
+     way this display can be catastrophically wrong. */
+  formatHMS,
   getPostEventThankYouTemplate,
   getEventUpdatedTemplate,
   getEventCancelledTemplate,

@@ -1,7 +1,7 @@
 const express = require('express');
 const { body, param } = require('express-validator');
 const validate = require('../middleware/validate');
-const { getCampaignHistory, getSmsSettings, updateSmsSettings, getSmsLog, getTopUpQuote, resendSmsMessage, updateOrganizerSmsConsent } = require('../controllers/campaignController');
+const { getCampaignHistory, getSmsSettings, updateSmsSettings, getSmsTemplates, updateSmsTemplates, getSmsLog, getTopUpQuote, resendSmsMessage, updateOrganizerSmsConsent } = require('../controllers/campaignController');
 const { requireSmsAddon } = require('../middleware/smsAddonGate');
 
 const router = express.Router({ mergeParams: true });
@@ -29,6 +29,21 @@ router.patch('/settings', [
   body('settings').isObject().withMessage('settings must be an object.'),
   validate,
 ], updateSmsSettings);
+
+/**
+ * The message bodies themselves — ours, theirs, and what either costs.
+ *
+ * Ungated on the add-on, exactly like /settings and for the same reason: an
+ * organizer deciding WHETHER to buy texting wants to read and rewrite the
+ * messages first. Nothing here can send anything, so there is no billing
+ * surface to protect — the write is validated for cost and stored, and the
+ * entitlement gate still stands between it and a carrier.
+ */
+router.get('/templates', getSmsTemplates);
+router.patch('/templates', [
+  body('templates').isObject().withMessage('templates must be an object.'),
+  validate,
+], updateSmsTemplates);
 
 // Per-message send log, including skips and their reasons in plain language.
 router.get('/log', getSmsLog);

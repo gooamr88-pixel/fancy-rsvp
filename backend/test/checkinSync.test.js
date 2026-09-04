@@ -709,18 +709,92 @@ test('delta flags truncation so the device fetches again instead of assuming it 
 });
 
 test('a negative or garbage since_seq is clamped, never passed through', async () => {
-  let filterSeen = null;
+  // The delta runs one query per sequence column (they are ordered by different
+  // columns and cannot share an ORDER BY), so both bounds are collected.
+  let bounds = [];
   mock.setResolver((s) => {
-    if (s.table === 'check_ins' && s.op === 'select') { filterSeen = s.filters.or; return { data: [] }; }
+    if (s.table === 'check_ins' && s.op === 'select') { bounds.push(...(s.filters.gt || [])); return { data: [] }; }
     if (s.table === 'event_checkin_cursors') return { data: { last_seq: 0, bundle_version: 1 } };
     return {};
   });
 
   await svc.getDelta(EVENT, -50);
-  assert.ok(String(filterSeen).includes('server_seq.gt.0'), 'since_seq must clamp to 0');
+  assert.deepEqual(bounds.sort(), [['server_seq', 0], ['undo_seq', 0]], 'since_seq must clamp to 0');
 
+  bounds = [];
   await svc.getDelta(EVENT, 'abc');
-  assert.ok(String(filterSeen).includes('server_seq.gt.0'));
+  assert.deepEqual(bounds.sort(), [['server_seq', 0], ['undo_seq', 0]]);
+});
+
+/**
+ * ── THE BUG THIS TEST EXISTS FOR ──
+ *
+ * A truncated page returned the EVENT CURSOR as its watermark — the highest
+ * number ever allocated — so the device applied the 500 rows it received and
+ * then advanced its cursor past everything that did not fit. It followed the
+ * `truncated` flag, asked again from the new cursor, and was handed nothing.
+ * Those changes were never delivered again.
+ *
+ * A tablet offline across more than one page of activity came back permanently
+ * short, and nothing anywhere said so.
+ */
+test('a truncated delta reports the last row SENT, not the event watermark', async () => {
+  const created = Array.from({ length: 501 }, (_, i) => ({
+    id: `ci-${i + 1}`, guest_id: `g-${i + 1}`, party_id: PARTY,
+    checked_in_at: '2026-08-01T19:00:00Z', method: 'qr_scan',
+    server_seq: i + 1, undo_seq: null, deleted_at: null,
+  }));
+
+  mock.setResolver((s) => {
+    if (s.table === 'check_ins' && s.op === 'select') {
+      const on = (s.filters.gt || [])[0];
+      return { data: on && on[0] === 'server_seq' ? created : [] };
+    }
+    // Far above the page, exactly as it would be during a busy event.
+    if (s.table === 'event_checkin_cursors') return { data: { last_seq: 5000 } };
+    return {};
+  });
+
+  const out = await svc.getDelta(EVENT, 0, { limit: 500 });
+
+  assert.equal(out.truncated, true);
+  assert.equal(out.changes.length, 500);
+  assert.equal(out.maxSeq, 500,
+    'the watermark must not pass a row the device has not been given');
+  assert.notEqual(out.maxSeq, 5000, 'this is the value that silently lost 4,500 changes');
+});
+
+/**
+ * An undone row sits in the stream at its `undo_seq`, which can be far above
+ * its `server_seq`. Ordering the union by `server_seq` therefore does not order
+ * it by position at all — which is why the two branches are fetched separately
+ * and merged here rather than in one `.or()`.
+ */
+test('an undone row is ordered by its undo position, not by when it was created', async () => {
+  const oldButJustUndone = {
+    id: 'ci-old', guest_id: 'g-old', party_id: PARTY, checked_in_at: '2026-08-01T18:00:00Z',
+    method: 'qr_scan', server_seq: 2, undo_seq: 900, deleted_at: '2026-08-01T21:00:00Z',
+  };
+  const recentArrival = {
+    id: 'ci-new', guest_id: 'g-new', party_id: PARTY, checked_in_at: '2026-08-01T20:00:00Z',
+    method: 'qr_scan', server_seq: 400, undo_seq: null, deleted_at: null,
+  };
+
+  mock.setResolver((s) => {
+    if (s.table === 'check_ins' && s.op === 'select') {
+      const on = (s.filters.gt || [])[0];
+      if (on && on[0] === 'server_seq') return { data: [recentArrival] };
+      return { data: [oldButJustUndone] };
+    }
+    if (s.table === 'event_checkin_cursors') return { data: { last_seq: 900 } };
+    return {};
+  });
+
+  const out = await svc.getDelta(EVENT, 1);
+
+  assert.deepEqual(out.changes.map((c) => c.serverSeq), [400, 900]);
+  assert.equal(out.changes[1].type, 'check_in_undone');
+  assert.equal(out.changes[1].serverSeq, 900, 'the reversal occupies the stream at its undo_seq');
 });
 
 // ══════════════════════════════════════════════════════════════════

@@ -427,28 +427,59 @@ export default function RsvpWizard({ event, guest, context, submit: doSubmit, re
       errors.email = 'Invalid email format';
     }
 
-    // Phone is OPTIONAL for everyone (Twilio TFV 30475) — only its format is
-    // checked, and only when the guest chose to supply one. Requiring it from
-    // attendees made the SMS program's identifier a precondition of registering,
-    // so "agreeing to receive messages" was not genuinely optional: there was no
-    // way to RSVP while staying out of the program entirely. Do not reintroduce
-    // a required-phone error here (see rsvpController's matching comment).
+    /**
+     * PHONE AND SMS CONSENT ARE REQUIRED — BUT NOT FROM SOMEBODY DECLINING.
+     *
+     * Both were optional between 2026-08-01 and 2026-09-04, deliberately:
+     * requiring them makes SMS opt-in a condition of RSVPing, which is the
+     * bundled consent Twilio rejected under TFV 30475. That was reversed on the
+     * product owner's explicit instruction; the full context, the risk and the
+     * required re-filing are documented once, in SmsConsentText.js.
+     *
+     * ── WHY A DECLINE IS EXEMPT ──
+     *
+     * The disclosure above the checkbox says the number is needed so the host
+     * can send "your table number, your entry pass, and any change of date or
+     * venue". A guest who says no receives none of those — there is no
+     * transactional message this platform will ever send them — so demanding
+     * consent from them would be a requirement with no stated purpose behind
+     * it, sitting directly under a sentence that does not apply.
+     *
+     * It also mattered to the compliance case rather than only to the copy. The
+     * whole argument for requiring consent at all is that every message is
+     * transactional about an event the recipient chose to attend. A form that
+     * demands it from somebody who just said they are NOT attending contradicts
+     * that argument on the same screen a reviewer is looking at.
+     *
+     * 'maybe' is NOT exempt: they still receive change-of-date and change-of-
+     * venue notices, and they can convert to a yes and be seated.
+     *
+     * The two checks stay separate even though they now fail together, because
+     * they fail for different reasons: a missing number is a blank field, an
+     * unticked box is a decision not made. One combined error under the phone
+     * input would leave somebody who typed a valid number wondering what is
+     * wrong.
+     */
+    const isDeclining = attending === 'no';
     const normalizedPhone = phone.trim() ? normalizeToE164(phone) : '';
-    if (phone.trim() && !normalizedPhone) {
-      errors.phone = t.phone_invalid || 'Enter a valid phone number';
+
+    if (isDeclining) {
+      // Still format-checked when volunteered — a decliner may leave a number
+      // for the host's own records, and a malformed one helps nobody.
+      if (phone.trim() && !normalizedPhone) {
+        errors.phone = t.phone_invalid || 'Enter a valid phone number';
+      }
+    } else {
+      if (!phone.trim()) {
+        errors.phone = t.phone_required || 'A mobile number is required';
+      } else if (!normalizedPhone) {
+        errors.phone = t.phone_invalid || 'Enter a valid phone number';
+      }
+      if (!smsConsent) {
+        errors.smsConsent = t.sms_consent_required
+          || 'Please agree to receive event texts so we can send your table and entry pass';
+      }
     }
-    // TCPA / Twilio Toll-Free Verification: SMS consent is INDEPENDENT and
-    // OPTIONAL. It is deliberately NOT validated here. Blocking submission on
-    // an unticked box (which this did until 2026-08-01) made SMS opt-in a
-    // condition of RSVPing — phone is required for attendees, so "attend" and
-    // "consent to texts" were the same act. That is precisely the bundled
-    // consent Twilio rejects, and it contradicts the independence notice
-    // rendered under the checkbox (SmsConsentText.js).
-    //
-    // The unticked state is not discarded: it is submitted as smsConsent:false,
-    // stored with a timestamp, and enforced at send time — only sms_consent =
-    // true is sendable (backend/services/smsDispatch.js). Do not reintroduce a
-    // validation error here.
 
     if (partySize < 1 || partySize > 20) errors.partySize = 'Party size must be between 1 and 20';
     if (attending === 'yes') {

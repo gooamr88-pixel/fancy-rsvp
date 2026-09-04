@@ -447,18 +447,24 @@ export default function RSVPsTab({
    * no message box anywhere in this flow, deliberately — see the note on the
    * invitations route.
    */
-  const handleSendInvitations = useCallback(async (partyIds, channel) => {
+  const handleSendInvitations = useCallback(async (partyIds, channel, smsType = null) => {
     const ids = Array.isArray(partyIds) ? partyIds : [partyIds];
     if (ids.length === 0) return;
 
-    const key = ids.length === 1 ? `${ids[0]}:${channel}` : `bulk:${channel}`;
+    /* The spinner key has to include smsType. Four of the menu's items are
+       channel 'sms' now and differ only by type, so keying on the channel alone
+       would spin every one of their buttons when any one was pressed. */
+    const what = smsType ? `${channel}:${smsType}` : channel;
+    const key = ids.length === 1 ? `${ids[0]}:${what}` : `bulk:${what}`;
     setSending(key);
     try {
       const res = await fetch(`${apiUrl}/events/${eventId}/invitations/send`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channel, partyIds: ids }),
+        // smsType omitted entirely when absent, so the server keeps applying
+        // its own default rather than being handed an explicit null.
+        body: JSON.stringify({ channel, partyIds: ids, ...(smsType ? { smsType } : {}) }),
       });
       const data = await res.json().catch(() => ({}));
 
@@ -496,9 +502,17 @@ export default function RSVPsTab({
    * two different in-flight key formats, which is how the two spinners drifted
    * apart in the first place.
    */
-  const handleSendGuest = useCallback((rsvpId, channel) => {
+  /**
+   * `sel` is `{ channel, smsType }` from GuestSendMenu.
+   *
+   * It was a bare channel string, which stopped being enough when the menu grew
+   * items that share a channel and differ only by message type. A string is
+   * still accepted so nothing that calls this with one breaks mid-refactor.
+   */
+  const handleSendGuest = useCallback((rsvpId, sel) => {
+    const { channel, smsType } = typeof sel === 'string' ? { channel: sel, smsType: null } : (sel || {});
     if (channel === 'qr') return handleResend(rsvpId, 'qr');
-    return handleSendInvitations([rsvpId], channel);
+    return handleSendInvitations([rsvpId], channel, smsType);
   }, [handleResend, handleSendInvitations]);
 
   /**
@@ -1390,7 +1404,7 @@ const RSVPRow = React.memo(function RSVPRow({ rsvp, isEven, deletingId, onDelete
             reach={reachability}
             attending={isAccepted(rsvp.response)}
             onBuySms={onBuySms}
-            onSend={(channel) => onSendGuest(rsvp.id, channel)}
+            onSend={(sel) => onSendGuest(rsvp.id, sel)}
           />
           <IconActionButton
             title="Edit guest"
@@ -1474,7 +1488,7 @@ const RSVPCard = React.memo(function RSVPCard({ rsvp, deletingId, onDelete, rese
           reach={reach}
           attending={isAccepted(rsvp.response)}
           onBuySms={onBuySms}
-          onSend={(channel) => onSendGuest(rsvp.id, channel)}
+          onSend={(sel) => onSendGuest(rsvp.id, sel)}
         />
         <IconActionButton
           title="Edit guest"

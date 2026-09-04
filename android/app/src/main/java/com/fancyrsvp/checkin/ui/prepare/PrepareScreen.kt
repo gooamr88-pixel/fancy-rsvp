@@ -703,5 +703,9 @@ private fun failureText(failure: BundleRepository.Failure): String = when (failu
     is BundleRepository.Failure.NoStorage ->
         stringResource(R.string.prepare_no_space, failure.guestCount)
     is BundleRepository.Failure.Server -> stringResource(R.string.prepare_failed_server, failure.code)
+    // Both versions are named. "Update the app" alone leaves an operator with no
+    // way to tell whether the update they just installed was the right one.
+    is BundleRepository.Failure.AppTooOld ->
+        stringResource(R.string.prepare_failed_app_too_old, failure.installed, failure.required)
     is BundleRepository.Failure.Unknown -> stringResource(R.string.prepare_failed_unknown)
 }

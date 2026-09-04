@@ -75,6 +75,16 @@ const server = app.listen(PORT, () => {
   } catch (err) {
     logger.warn({ err }, 'Draft cleanup failed to start (non-fatal)');
   }
+
+  // Post-event data purge — warns the organizer when their event ends, then
+  // permanently deletes everything belonging to it PURGE_GRACE_HOURS later
+  // (default 24). OFF by default and opt-in, unlike the cleanup above: this one
+  // destroys real customer data. Enable with EVENT_PURGE_ENABLED=true.
+  try {
+    require('./services/eventPurge').start();
+  } catch (err) {
+    logger.warn({ err }, 'Event purge failed to start (non-fatal)');
+  }
 });
 
 // Handle graceful shutdown
@@ -83,6 +93,7 @@ function gracefulShutdown(signal) {
   try { require('./services/emailScheduler').stop(); } catch { /* ignore */ }
   try { require('./services/revenueRollup').stop(); } catch { /* ignore */ }
   try { require('./services/draftCleanup').stop(); } catch { /* ignore */ }
+  try { require('./services/eventPurge').stop(); } catch { /* ignore */ }
   server.close(() => {
     logger.info('HTTP server closed — all connections drained');
     process.exit(0);

@@ -81,7 +81,17 @@ function createMockSupabase() {
       lt(c, v) { return pushFilter('lt', c, v); },
       lte(c, v) { return pushFilter('lte', c, v); },
       contains() { return builder; },
-      order() { return builder; }, range() { return builder; }, limit() { return builder; },
+      order() { return builder; },
+      /*
+       * RECORDED, not ignored. Chunked reads (checkinSyncService.readAll) page
+       * with .range() and stop on a short page, so a resolver that hands back
+       * the same full array for every call never terminates — the loop only
+       * ends at its hard cap, and the test sees tens of thousands of rows.
+       *
+       * Resolvers that return a set larger than one chunk must slice on this.
+       */
+      range(from, to) { state.range = [from, to]; return builder; },
+      limit() { return builder; },
 
       // ── terminals ──
       single() { return finalize('single'); },

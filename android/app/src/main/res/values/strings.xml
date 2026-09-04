@@ -97,6 +97,14 @@
     <string name="prepare_failed_incomplete">The download was incomplete (%1$d of %2$d guests). Nothing was saved. Try again.</string>
     <string name="prepare_failed_corrupted">The guest list did not arrive intact. Nothing was saved. Try again.</string>
     <string name="prepare_failed_server">The server could not be reached (%1$d). Try again.</string>
+    <!--
+      Only ever shown at preparation — in an office, with internet, hours before
+      anyone arrives, which is the last moment an update is free. A tablet
+      already at a door is never blocked on its version (§21.4).
+      Both numbers appear so the operator can tell whether the update they just
+      installed was the right one.
+    -->
+    <string name="prepare_failed_app_too_old">This tablet runs version %1$s and the event needs %2$s or newer. Update the app, then prepare again.</string>
     <string name="prepare_failed_unknown">Preparation failed. Nothing was saved.</string>
 
     <!-- Staff login (§8.1) -->
@@ -254,8 +262,17 @@
     <string name="result_not_everyone">Not everyone? Choose who</string>
     <string name="result_choose_who">Who is arriving?</string>
     <string name="result_already_title">Already checked in</string>
-    <string name="result_override">Supervisor override</string>
-    <string name="result_override_unavailable">A supervisor is needed to check this guest in again.</string>
+    <!--
+      Replaces "Supervisor override" and "A supervisor is needed to check this
+      guest in again." The button those belonged to recorded nothing (it handed
+      already-arrived guests to a function that filters them out) and then
+      dismissed, so it read as success. Both strings are gone rather than
+      reworded: there is no action here to name.
+
+      Written as an instruction, not a status. Somebody is standing at a door
+      waiting to be told what to do.
+    -->
+    <string name="result_already_no_action">Already counted. Let them in — nothing to record.</string>
     <string name="result_not_found_title">Not on tonight\'s list</string>
     <string name="result_not_found_body">We can\'t place this code</string>
     <string name="result_not_found_code">Valid, and issued for this event</string>
@@ -358,6 +375,15 @@
     <!-- Guest list (§8.7) -->
     <string name="guests_title">Guests</string>
     <string name="guests_showing">%1$d shown</string>
+    <!--
+      Used once the page limit bites. The list has always been capped at 500 rows
+      with no paging, and reporting only "500 shown" on a 2,100-guest event reads
+      as the whole guest list — which is how somebody concludes a guest was never
+      invited. Say the total, and the search below becomes the obvious next move.
+    -->
+    <string name="guests_showing_of">%1$d of %2$d shown — search to narrow</string>
+    <string name="guests_search_label">Search by name</string>
+    <string name="guests_search_clear">Clear</string>
     <string name="guests_none">No guests match these filters</string>
     <!-- An empty list is almost always a filter left on from the last question
          somebody asked, so the way out is offered rather than described. -->
@@ -423,4 +449,46 @@
     <string name="action_ok">OK</string>
     <string name="action_cancel">Cancel</string>
     <string name="action_retry">Try again</string>
+
+    <!--
+      ══ In-app update ══════════════════════════════════════════════════════
+      Shown only on the welcome and preparation screens, and never while the
+      outbound queue holds anything — so the reader is in an office before
+      leaving for a venue, deciding whether to spend a few minutes now. The copy
+      is written for that moment: what it is, how big, what it will not touch.
+    -->
+    <string name="update_title">A newer version is ready</string>
+    <!-- installed → available, and the size, in one line. -->
+    <string name="update_versions">You have %1$s. Version %2$s is available — %3$s MB.</string>
+    <string name="update_whats_new">WHAT\'S NEW</string>
+    <!--
+      The single most important sentence here. "Update" on a sideloaded app is
+      widely assumed to mean uninstall-and-reinstall, which is exactly what
+      people have been told to do until now — and doing that WOULD destroy the
+      guest list. Saying plainly that it will not is what makes this safe to tap.
+    -->
+    <string name="update_keeps_data">Your guest list and any check-ins stay exactly as they are.</string>
+    <string name="update_now">Update now</string>
+    <string name="update_later">Later</string>
+    <string name="update_cancel">Stop</string>
+
+    <string name="update_downloading">Downloading the update</string>
+    <string name="update_percent">%1$d%%</string>
+    <string name="update_verifying">Checking the download</string>
+
+    <string name="update_ready_title">Ready to install</string>
+    <string name="update_ready_body">Android will ask you to confirm. The app closes for a moment and reopens on this screen.</string>
+    <string name="update_install">Install</string>
+
+    <string name="update_permission_title">One permission first</string>
+    <string name="update_permission_body">Android needs your permission for this app to install its own updates. The next screen is where you turn it on — then come back here.</string>
+    <string name="update_permission_open">Open settings</string>
+
+    <string name="update_failed_title">The update did not download</string>
+    <string name="update_failed_space">There is not enough free space on this tablet. Free some up and try again later.</string>
+    <!-- Deliberately reassuring about what did NOT happen: nothing was installed. -->
+    <string name="update_failed_corrupt">The download did not arrive intact, so nothing was installed. Try again on a better connection.</string>
+    <string name="update_failed_offline">No connection. Try again once this tablet is back online.</string>
+    <string name="update_failed_server">The update could not be reached right now.</string>
+    <string name="update_failed_continue">Continue</string>
 </resources>

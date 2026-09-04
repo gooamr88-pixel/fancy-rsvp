@@ -57,17 +57,27 @@ import { buildInvitationCardData } from '../../utils/invitationCardData';
                     before.
    ═══════════════════════════════════════════════════════════════ */
 
+/* One frozen empty object rather than a fresh `{}` per reset: an identity that
+   changes is a re-render of everything below that reads it, to say the same
+   nothing. */
+const NO_COUNTDOWN = Object.freeze({});
+
 /** Same arithmetic as EventPageClient's countdown, so the numbers agree. */
 function useCountdown(eventDate) {
-  const [timeLeft, setTimeLeft] = useState({});
+  /* "No date yet" and "an unparseable date" are answered from the props during
+     the render that asks, not by an effect that pushes an empty object in
+     afterwards — there is nothing external to synchronise with in that case. */
+  const target = eventDate ? +new Date(eventDate) : null;
+  const live = target !== null && target !== 0 && !Number.isNaN(target);
+
+  const [timeLeft, setTimeLeft] = useState(NO_COUNTDOWN);
 
   useEffect(() => {
-    const target = eventDate ? +new Date(eventDate) : null;
-    if (!target || Number.isNaN(target)) { setTimeLeft({}); return undefined; }
+    if (!live) return undefined;
     let timer;
     const tick = () => {
       const difference = target - Date.now();
-      if (difference <= 0) { setTimeLeft({}); clearInterval(timer); return; }
+      if (difference <= 0) { setTimeLeft(NO_COUNTDOWN); clearInterval(timer); return; }
       setTimeLeft({
         days: Math.floor(difference / (1000 * 60 * 60 * 24)),
         hours: Math.floor((difference / (1000 * 60 * 60)) % 24),
@@ -78,9 +88,9 @@ function useCountdown(eventDate) {
     tick();
     timer = setInterval(tick, 1000);
     return () => clearInterval(timer);
-  }, [eventDate]);
+  }, [target, live]);
 
-  return timeLeft;
+  return live ? timeLeft : NO_COUNTDOWN;
 }
 
 /** The recipient's name printed on the envelope / carved on the cover. */
@@ -138,9 +148,20 @@ export default function GuestExperiencePreview({
   const occasion = getCinematicOccasion(cinematic, event?.template_data);
   const [openingDone, setOpeningDone] = useState(!playOpening);
 
-  // A fresh replayKey re-arms the opening; a change to playOpening (the inline
-  // phone's stepper moving between "envelope" and "opened") follows it too.
-  useEffect(() => { setOpeningDone(!playOpening); }, [replayKey, playOpening]);
+  /* A fresh replayKey re-arms the opening; a change to playOpening (the inline
+     phone's stepper moving between "envelope" and "opened") follows it too.
+
+     Re-armed during the render that changes them, React's documented shape for
+     resetting state on a prop change. As an effect it painted one frame of the
+     PREVIOUS arm state first — for the stepper that is a visible flash of the
+     opened page before the envelope, on the one control whose whole job is to
+     show the organizer the envelope. */
+  const armKey = `${replayKey}|${playOpening ? 1 : 0}`;
+  const [armedFor, setArmedFor] = useState(armKey);
+  if (armedFor !== armKey) {
+    setArmedFor(armKey);
+    setOpeningDone(!playOpening);
+  }
 
   if (!event) return null;
 

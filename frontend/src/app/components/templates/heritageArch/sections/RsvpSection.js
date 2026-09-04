@@ -11,6 +11,7 @@ import AdultsOnlyNotice from '../../../guest/AdultsOnlyNotice';
 import CompanionMealCounter, { trimMealCounts } from '../../../guest/rsvp/CompanionMealCounter';
 import CountryCodePhoneInput from '../../../CountryCodePhoneInput';
 import SmsConsentText, { SmsConsentIndependence } from '../../../guest/SmsConsentText';
+import CreateYourOwnEvent from '../../../guest/CreateYourOwnEvent';
 import TurnstileWidget, { turnstileEnabled } from '../../../guest/TurnstileWidget';
 import { normalizeToE164 } from '../../../../utils/phone';
 import { publicApiFetch } from '../../../../utils/publicApi';
@@ -536,12 +537,18 @@ export default function RsvpSection({ event, slug, guestRsvp, hasResponded, resp
     invalid: !!errors[`field_${field.id}`],
   });
 
-  // Consent is about *collecting a phone number*, not about attendance. The
-  // number is optional for everyone (Twilio TFV 30475), so the checkbox is asked
-  // only once a guest volunteers one. A guest who leaves the field blank is
-  // never asked about SMS at all, and can still RSVP and attend.
+  /* The number and the consent box are REQUIRED to submit — unless the guest is
+     declining, who receives no table, no pass and no transactional message at
+     all and is therefore exempt from both. `showSmsConsent` used to mean "has
+     typed a number"; it means "is not saying no" now.
+
+     Mirrors StepPartyDetails exactly, including the decline exemption. These two
+     RSVP paths have drifted apart before, and a validator that disagrees with
+     the form it validates rejects submissions for fields it never showed. Full
+     rationale — and the Twilio re-filing this requires — in SmsConsentText.js. */
   const hasPhone = !!phone.trim();
-  const showSmsConsent = hasPhone;
+  const isDeclining = attending === 'no';
+  const showSmsConsent = !isDeclining;
 
   const validate = () => {
     const e = {};
@@ -549,11 +556,20 @@ export default function RsvpSection({ event, slug, guestRsvp, hasResponded, resp
     if (!attending) e.attending = true;
     if (!guestName.trim()) e.guestName = isRTL ? 'مطلوب' : 'Required';
 
-    // Phone: OPTIONAL for everyone — format-checked only when supplied. Do not
-    // reintroduce a required-phone error: it made the SMS program's identifier a
-    // precondition of registering (see rsvpController's matching comment).
+    // Phone: REQUIRED unless declining — it is the address the consent below is
+    // consent to use, and a decline has nothing to consent to. Blank and
+    // malformed are reported separately so a guest who typed something is not
+    // told it is missing.
     const normalizedPhone = hasPhone ? normalizeToE164(phone) : '';
-    if (hasPhone && !normalizedPhone) e.phone = isRTL ? 'رقم هاتف غير صالح' : 'Invalid phone number';
+    if (isDeclining) {
+      // Still format-checked when volunteered: a decliner may leave a number for
+      // the host's records, and a malformed one helps nobody.
+      if (hasPhone && !normalizedPhone) e.phone = isRTL ? 'رقم هاتف غير صالح' : 'Invalid phone number';
+    } else if (!hasPhone) {
+      e.phone = isRTL ? 'مطلوب' : 'Required';
+    } else if (!normalizedPhone) {
+      e.phone = isRTL ? 'رقم هاتف غير صالح' : 'Invalid phone number';
+    }
 
     // Email: required for attendees (confirmation + logistics), optional for declines.
     if (isAttending) {
@@ -563,10 +579,14 @@ export default function RsvpSection({ event, slug, guestRsvp, hasResponded, resp
       e.email = isRTL ? 'بريد إلكتروني غير صالح' : 'Invalid email';
     }
 
-    // SMS consent is INDEPENDENT and OPTIONAL — deliberately not validated.
-    // See RsvpWizard's matching comment and SmsConsentText.js: an unticked box
-    // must never block an RSVP, or SMS opt-in becomes a condition of attending.
-    // The false value is still recorded and enforced at send time.
+    // SMS consent is REQUIRED to submit, unless declining. Its own error rather
+    // than being folded into the phone one: a blank field and an unmade
+    // decision are different problems and need different sentences.
+    if (!isDeclining && !smsConsent) {
+      e.smsConsent = isRTL
+        ? 'يرجى الموافقة على استلام رسائل الفعالية لنتمكن من إرسال طاولتك وتذكرة دخولك'
+        : 'Please agree to receive event texts so we can send your table and entry pass';
+    }
 
     // Bot check — only when Turnstile is configured (mirrors the backend gate).
     if (turnstileEnabled && !captchaToken) e.captcha = true;
@@ -821,6 +841,15 @@ export default function RsvpSection({ event, slug, guestRsvp, hasResponded, resp
             </div>
           </motion.div>
         )}
+
+        {/* Last on the confirmation screen, after the pass and the seating map —
+            the guest's own business with this event is finished by then.
+            Constrained to the same 440px column as the cards above so it reads
+            as the closing note of this page rather than a full-bleed band.
+            Renders nothing for a white-labelled event. */}
+        <div style={{ width: '100%', maxWidth: '440px' }}>
+          <CreateYourOwnEvent event={event} themeColor={C.maroon} isRTL={isRTL} />
+        </div>
       </SectionShell>
     );
   }
@@ -937,13 +966,18 @@ export default function RsvpSection({ event, slug, guestRsvp, hasResponded, resp
 
                     <div>
                       <label style={labelStyle}>
-                        {/* Never marked required (Twilio TFV 30475) — a mandatory
-                            number would make the SMS program a condition of
-                            registering. */}
-                        {isRTL ? 'رقم الهاتف (اختياري)' : 'Phone number (optional)'}
-                        {attending === 'no' && <span style={{ opacity: 0.5, fontWeight: 500 }}> {isRTL ? '(اختياري)' : '(optional)'}</span>}
+                        {/* The label follows the rule rather than stating a
+                            constant: required for anyone not declining, optional
+                            for a decline. A mandatory field labelled optional is
+                            the worse error; an optional one marked with a red
+                            asterisk is the same error mirrored, and sends a
+                            decliner hunting for a number nobody needs. */}
+                        {isRTL ? 'رقم الهاتف' : 'Phone number'}
+                        {isDeclining
+                          ? <span style={{ opacity: 0.5, fontWeight: 500 }}> {isRTL ? '(اختياري)' : '(optional)'}</span>
+                          : <span style={{ color: '#C0392B', marginInlineStart: '3px', fontWeight: 700 }} aria-hidden="true">*</span>}
                       </label>
-                      <CountryCodePhoneInput value={phone} onChange={(v) => { setPhone(v); clearError('phone'); setContactRegistered(null); }} hasError={!!errors.phone} />
+                      <CountryCodePhoneInput value={phone} onChange={(v) => { setPhone(v); clearError('phone'); setContactRegistered(null); }} hasError={!!errors.phone} isRTL={isRTL} />
                       {errors.phone && <span style={errorTextStyle}>{typeof errors.phone === 'string' ? errors.phone : (isRTL ? 'مطلوب' : 'Required')}</span>}
                     </div>
 
@@ -961,35 +995,59 @@ export default function RsvpSection({ event, slug, guestRsvp, hasResponded, resp
                       />
                     )}
 
-                    {/* SMS consent — only when a phone is actually being collected.
-                        OPTIONAL: leaving it unticked never blocks the RSVP (see the
-                        validate() comment). The independence notice renders OUTSIDE
-                        the <label>, so ticking the box agrees to the SMS sentence
-                        and nothing else — Privacy/Terms are linked from the notice,
-                        never from the label. */}
-                    <AnimatePresence>
-                      {showSmsConsent && (
-                        <motion.div
-                          initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
-                          style={{ overflow: 'hidden' }}
-                        >
-                          <label
-                            style={{
-                              display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer',
-                              padding: '12px 14px', borderRadius: '12px',
-                              background: alpha(C.maroon, 0.05),
-                              border: `1px solid ${C.border}`,
-                            }}
-                          >
-                            <input type="checkbox" checked={smsConsent} onChange={(e) => setSmsConsent(e.target.checked)} style={{ marginTop: '2px', width: '17px', height: '17px', accentColor: C.maroon, flexShrink: 0 }} />
-                            <span style={{ fontSize: '12px', color: C.ink, opacity: 0.85, lineHeight: 1.6, fontFamily: 'var(--font-sans)' }}>
-                              <SmsConsentText isRTL={isRTL} />
-                            </span>
-                          </label>
-                          <SmsConsentIndependence isRTL={isRTL} linkStyle={{ color: C.maroon }} style={{ margin: '8px 0 0', padding: '0 2px' }} />
-                        </motion.div>
+                    {/* SMS consent — REQUIRED to submit, unless declining.
+                        Rendered for everyone who is not saying no, and NOT gated
+                        on having typed a number: a control that blocks
+                        submission must be visible when the guest decides
+                        whether to fill the field above it.
+
+                        The disclosure notice renders OUTSIDE the <label>, so
+                        ticking the box agrees to the SMS sentence and nothing
+                        else — Privacy/Terms are linked from the notice, never
+                        from the label. See SmsConsentText.js. */}
+                    {showSmsConsent && (
+                    <div>
+                      <label
+                        style={{
+                          display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer',
+                          padding: '12px 14px', borderRadius: '12px',
+                          // The whole card turns on error — one unticked box in a
+                          // long form is easy to miss when only a small line
+                          // beneath it changes colour.
+                          background: errors.smsConsent ? '#FBF0F0' : alpha(C.maroon, 0.05),
+                          border: `1px solid ${errors.smsConsent ? '#D98A8A' : C.border}`,
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={smsConsent}
+                          onChange={(e) => {
+                            setSmsConsent(e.target.checked);
+                            // Clear on comply, so the card stops being red the
+                            // moment they tick rather than at the next submit.
+                            if (e.target.checked) clearError('smsConsent');
+                          }}
+                          required
+                          aria-invalid={errors.smsConsent ? 'true' : undefined}
+                          aria-describedby={errors.smsConsent ? 'ha-sms-consent-error' : undefined}
+                          style={{ marginTop: '2px', width: '17px', height: '17px', accentColor: C.maroon, flexShrink: 0 }}
+                        />
+                        <span style={{ fontSize: '12px', color: C.ink, opacity: 0.85, lineHeight: 1.6, fontFamily: 'var(--font-sans)' }}>
+                          <SmsConsentText isRTL={isRTL} />
+                          <span style={{ color: '#C0392B', marginInlineStart: '3px', fontWeight: 700 }} aria-hidden="true">*</span>
+                        </span>
+                      </label>
+                      {errors.smsConsent && (
+                        <p id="ha-sms-consent-error" role="alert" style={{
+                          margin: '6px 0 0', padding: '0 2px',
+                          fontFamily: 'var(--font-sans)', fontSize: '12px', color: '#B23B3B',
+                        }}>
+                          {errors.smsConsent}
+                        </p>
                       )}
-                    </AnimatePresence>
+                      <SmsConsentIndependence isRTL={isRTL} linkStyle={{ color: C.maroon }} style={{ margin: '8px 0 0', padding: '0 2px' }} />
+                    </div>
+                    )}
                   </div>
                 </motion.div>
 

@@ -406,11 +406,11 @@ function BrandMark({ height = 15, wordmark = true }) {
  * boundary for everybody, and `next build`, eslint and the full test suite were
  * all green while it did. `test/seatingPrintScope.test.js` pins it now.
  */
-function PrintLetterhead({ eventTitle, eventTimezone, organizerName, formattedDate, stats }) {
+function PrintLetterhead({ eventTitle, eventTimezone, organizerName, formattedDate, stats, printedAt }) {
   const metaParts = [
     formattedDate,
     organizerName ? `Prepared for ${organizerName}` : null,
-    `Printed ${formatInZone(Date.now(), eventTimezone, { year: 'numeric', month: 'long', day: 'numeric' })}`,
+    `Printed ${formatInZone(printedAt, eventTimezone, { year: 'numeric', month: 'long', day: 'numeric' })}`,
   ].filter(Boolean);
   return (
     <header style={{ flexShrink: 0, color: INK }}>
@@ -1102,10 +1102,21 @@ export default function SeatingChartPrintModal({
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [marquee, setMarquee] = useState(null);
   const svgRef = useRef(null);
+  /* The live element list, for the pointer handlers. They are registered once
+     and run long after the render that created them, so they must not close
+     over a stale array — but writing the ref during render is not allowed
+     (`react-hooks/refs`), and it does not need to be: every reader is a
+     pointer handler, which cannot run before the commit this effect follows. */
   const elementsRef = useRef(elements);
-  elementsRef.current = elements;
+  useEffect(() => { elementsRef.current = elements; }, [elements]);
   const dragRef = useRef(null);
   const marqueeRef = useRef(null);
+
+  /* Stamped once, when the preview opens. Read during render it was both
+     impure and wrong in a way you would only catch at midnight: each sheet in
+     the pack renders separately, so a pack that straddles a date boundary
+     printed two different dates on its own pages. */
+  const [printedAt] = useState(() => Date.now());
 
   /* ── preview zoom ── */
   const [zoom, setZoom] = useState(1);
@@ -1679,6 +1690,7 @@ export default function SeatingChartPrintModal({
                     organizerName={organizerName}
                     formattedDate={formattedDate}
                     stats={stats}
+                    printedAt={printedAt}
                   />
                   <FloorPlanFigure
                     svgRef={svgRef}

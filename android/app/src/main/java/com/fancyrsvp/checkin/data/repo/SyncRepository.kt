@@ -11,6 +11,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import java.time.Instant
@@ -44,8 +45,71 @@ import javax.inject.Singleton
 class SyncRepository @Inject constructor(
     private val api: CheckinApi,
     private val db: CheckinDatabase,
+    /**
+     * Injected for ONE purpose: acting on the server's instruction to destroy
+     * this event's local data. No cycle — DeviceRepository knows nothing about
+     * this class.
+     */
+    private val deviceRepository: DeviceRepository,
     private val io: CoroutineDispatcher,
 ) {
+
+    /**
+     * ── THE REMOTE WIPE, WHICH DID NOTHING AT ALL ──
+     *
+     * An organizer can ask a lost or stolen tablet to erase its guest list. The
+     * server records it, and from then on `requireDevice` answers EVERY call
+     * from that device with 403 and `meta.wipe_required: true`.
+     *
+     * Nothing on the device read it. `DeviceRepository.handleWipeInstruction`
+     * had zero callers, `SyncMeta.wipeRequired` was parsed and never accessed —
+     * the only read of `meta` anywhere was an empty lambda — and the auth
+     * interceptor reacts to 401 alone, so a 403 passed straight through to a
+     * caller that only cared whether it was 2xx. Guest names, phone numbers,
+     * dietary notes and table assignments stayed readable on a missing tablet
+     * indefinitely, while the dashboard told the organizer in as many words
+     * that they would be erased on next contact.
+     *
+     * Every sync path funnels through here because the 403 is not attached to
+     * any one endpoint — it is the answer to everything the device asks.
+     *
+     * The purge itself still refuses while the outbound queue holds unsent
+     * check-ins (DeviceRepository.purgeEventData). That is deliberate and is
+     * not weakened here: those records exist nowhere else, and a wipe must not
+     * become a way to lose them. It retries on the next call, which is seconds
+     * away.
+     *
+     * @return true when a wipe instruction was seen, so the caller can stop
+     *   rather than report an ordinary transport failure.
+     */
+    private suspend fun handleWipeSignal(eventId: String, rawErrorBody: String?): Boolean {
+        if (rawErrorBody.isNullOrBlank()) return false
+
+        val body = runCatching { Json.parseToJsonElement(rawErrorBody) as JsonObject }.getOrNull()
+            ?: return false
+        val code = body["error"]?.jsonPrimitive?.contentOrNull
+        val wipeRequired = (body["meta"] as? JsonObject)
+            ?.get("wipe_required")?.jsonPrimitive?.booleanOrNull == true
+
+        // Both spellings, because the server states it two ways: an explicit
+        // meta flag, and the error code itself.
+        if (!wipeRequired && code != "WIPE_REQUESTED" && code != "DEVICE_REVOKED") return false
+
+        // Credentials are cleared only for a REVOKED device. A plain wipe leaves
+        // the tablet paired so it stays provisioned for the next event.
+        deviceRepository.handleWipeInstruction(eventId, revoked = code == "DEVICE_REVOKED")
+        return true
+    }
+
+    /**
+     * Records per request, shrunk by a 413 and restored by the next success.
+     *
+     * A field rather than a constant so the device can actually obey the
+     * server's "too large" — see the 413 branch in [drainOnce]. Only ever
+     * touched inside `withContext(io)`, which is a single-threaded confinement
+     * for this repository's writes, so it needs no further synchronisation.
+     */
+    private var batchSize: Int = SyncPolicy.BATCH_SIZE
 
     /** What a drain attempt did, for the worker's retry decision. */
     sealed interface DrainResult {
@@ -77,7 +141,7 @@ class SyncRepository @Inject constructor(
         // last instruction rather than reverting to a default (§21.5).
         if (event.syncDisabled) return@withContext DrainResult.SyncDisabled
 
-        val batch = db.syncQueueDao().peek(eventId, SyncPolicy.BATCH_SIZE)
+        val batch = db.syncQueueDao().peek(eventId, batchSize)
         if (batch.isEmpty()) return@withContext DrainResult.Complete(0, 0, 0)
 
         val checkIns = batch.filter { it.payloadType == "check_in" }
@@ -113,19 +177,53 @@ class SyncRepository @Inject constructor(
         }
 
         if (!response.isSuccessful) {
+            // Read BEFORE anything else looks at the response: errorBody() is a
+            // one-shot stream, and a wipe instruction arrives as a 403 on
+            // whatever call the device happened to make next.
+            if (handleWipeSignal(eventId, runCatching { response.errorBody()?.string() }.getOrNull())) {
+                return@withContext DrainResult.Failed("wipe requested", retryable = false)
+            }
+
             val retryable = when (response.code()) {
                 // 429 is a NORMAL backoff signal, never a reason to discard data
                 // (§21.9). 5xx and 408 are transient by definition.
                 429, 408, in 500..599 -> true
-                // 413 means the batch was too large; the next attempt sends fewer.
                 413 -> true
                 else -> false
             }
+
+            /*
+             * ── 413 HAS TO ACTUALLY SEND FEWER ──
+             *
+             * The comment here read "the next attempt sends fewer" and nothing
+             * implemented it: `peek` asked for the same `SyncPolicy.BATCH_SIZE`
+             * constant every time, so a 413 produced an identical request on an
+             * unbounded retry ladder and NO check-in would ever upload again.
+             *
+             * It has never fired because the device's batch size and the
+             * server's cap are both exactly 100 (`MAX_BATCH` in
+             * checkinSyncService.js), and the check is `>`. That is a zero-width
+             * margin: lowering the server cap, or raising this constant, turns a
+             * tuning change into total upload failure at every venue at once.
+             *
+             * Halving is the standard response and it converges fast — 100, 50,
+             * 25… — and the floor of 1 means the worst case is one record per
+             * request, which is slow but still drains. Reset on the next success
+             * so a one-off does not cost throughput for the rest of the night.
+             */
+            if (response.code() == 413) {
+                batchSize = (batchSize / 2).coerceAtLeast(1)
+            }
+
             checkIns.forEach {
                 db.syncQueueDao().recordFailure(it.id, "HTTP ${response.code()}")
             }
             return@withContext DrainResult.Failed("HTTP ${response.code()}", retryable)
         }
+
+        // The server accepted a batch of this size, so any earlier 413 shrink has
+        // done its job and full throughput can resume.
+        batchSize = SyncPolicy.BATCH_SIZE
 
         val body = response.body()?.data
             ?: return@withContext DrainResult.Failed("empty batch response", retryable = true)
@@ -304,8 +402,32 @@ class SyncRepository @Inject constructor(
                  * closing the event (CloseEventScreen) with no control anywhere
                  * that can clear it.
                  */
-                response.code() == 404 -> {
+                /*
+                 * ── AND THE SAME IS TRUE OF EVERY OTHER REFUSAL ──
+                 *
+                 * This was `response.code() == 404` alone, with everything else
+                 * falling through to `recordFailure` below. That left three
+                 * refusals the server will never change its mind about — 400,
+                 * 403 SUPERVISOR_REQUIRED, 403 UNKNOWN_STAFF — being retried
+                 * ten times and then parked in the queue forever, with the
+                 * local reversal still displayed.
+                 *
+                 * None of them can resolve. The acting staff id is captured at
+                 * the moment of the decision and queued with the undo, so a
+                 * different supervisor picking up the tablet does not change
+                 * what gets re-sent. And a parked entry is not harmless: it
+                 * blocks closing the event, unpairing and purging, and no
+                 * control anywhere in the app can clear it.
+                 *
+                 * 429 and 408 are excluded because they mean "not now", not
+                 * "no" — those still belong on the retry ladder.
+                 */
+                response.code() in 400..499 && response.code() != 429 && response.code() != 408 -> {
                     db.checkInDao().clearUndone(clientId)
+                    // Kept ON THE ROW so the guest list can say why the guest is
+                    // still showing as arrived. Clearing the mark without this
+                    // would look like the undo was never attempted.
+                    db.checkInDao().recordFailure(clientId, "undo refused: HTTP ${response.code()}")
                     removed.add(entry.id)
                 }
 
@@ -340,7 +462,13 @@ class SyncRepository @Inject constructor(
         } catch (_: java.io.IOException) {
             return@withContext false
         }
-        if (!response.isSuccessful) return@withContext false
+        if (!response.isSuccessful) {
+            // The poll is the call a quiet gate makes most often, so on a tablet
+            // that is not admitting anyone this is usually where the wipe
+            // instruction is first seen.
+            handleWipeSignal(eventId, runCatching { response.errorBody()?.string() }.getOrNull())
+            return@withContext false
+        }
         val delta = response.body()?.data ?: return@withContext false
 
         applyChanges(eventId, delta.changes)

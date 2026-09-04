@@ -241,7 +241,7 @@ export default function PhoneSimulator({ template, theme, guestName, onGuestName
             onBlur={e => { e.target.style.borderColor = '#E8E2D6'; e.target.style.boxShadow = 'none'; }}
           />
           <span style={{ fontFamily: 'var(--font-sans)', fontSize: 10, color: '#99958D', lineHeight: 1.35 }}>
-            Preview only — your guests' real names come from your guest list.
+            Preview only — your guests&rsquo; real names come from your guest list.
           </span>
         </div>
       </div>

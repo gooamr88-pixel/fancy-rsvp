@@ -4,7 +4,6 @@ import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.HTTP
-import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -36,8 +35,15 @@ interface CheckinApi {
     @POST("checkin/devices/pair")
     suspend fun pairDevice(@Body body: PairRequest): Response<Envelope<PairResponse>>
 
-    @POST("checkin/devices/refresh")
-    suspend fun refreshToken(@Body body: RefreshRequest): Response<Envelope<RefreshResponse>>
+    /*
+     * `refreshToken` was declared here and is gone. Token refresh cannot use
+     * this interface: it is the call made WHEN the access token has expired, so
+     * it must not pass through DeviceAuthInterceptor — which would attach the
+     * dead token and, on a 401, try to refresh by calling refresh. AppModule
+     * builds a separate `RefreshOnlyApi` on a client with no auth interceptor
+     * for exactly that reason, and that is the one in use. This declaration had
+     * no call site and existed only to be picked up by mistake.
+     */
 
     /** Confirms local event data has been destroyed after a remote wipe (§20.5). */
     @POST("checkin/devices/wipe-confirm")
@@ -45,8 +51,16 @@ interface CheckinApi {
 
     // ── Preparation (requires internet, done before travelling) ──
 
-    @GET("checkin/events")
-    suspend fun listEvents(): Response<Envelope<EventListResponse>>
+    /*
+     * `listEvents` was declared here and is gone, along with the last use of
+     * EventListResponse.
+     *
+     * A device is paired to exactly ONE event (§18.3), so there is no list to
+     * choose from: BundleRepository.refreshEvents reads that event's manifest
+     * instead, which is also the only call that carries the record count the
+     * pre-download storage check needs. GET /checkin/events remains on the
+     * server for the organizer's own dashboard.
+     */
 
     @GET("checkin/events/{eventId}/bundle/manifest")
     suspend fun bundleManifest(
@@ -107,9 +121,14 @@ interface CheckinApi {
         @Path("eventId") eventId: String,
     ): Response<Envelope<SyncControlsDto>>
 
-    @PATCH("checkin/events/{eventId}/controls")
-    suspend fun setControls(
-        @Path("eventId") eventId: String,
-        @Body body: SyncControlsDto,
-    ): Response<Envelope<SyncControlsDto>>
+    /*
+     * `setControls` was declared here and is gone.
+     *
+     * It had no call site, and it could never have had one: PATCH
+     * /events/:eventId/controls is `organizerOnly` on the server
+     * (checkinSyncRoutes.js), so a device token is refused outright. The
+     * emergency controls are set from the dashboard and READ here — which is
+     * what `controls` above does, and is the whole of §21.5's contract with a
+     * device: it obeys them, it does not author them.
+     */
 }

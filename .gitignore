@@ -50,4 +50,23 @@ android/.gradle/
 *.jks
 *.keystore
 *.p12
-"/images/" 
+
+# The built app. `deploy-android.bat :install` DELETES this and scp's a fresh
+# 46MB copy down from the build host on every deploy, so each run committed
+# another 46MB blob — none of which git can ever reclaim. It is a build output:
+# the artefact users actually install is published to /var/www/apk on the VPS,
+# and this copy exists only to feed `adb install`.
+#
+# Anchored, for the reason given above `/templates/`.
+/app-release.apk
+
+# ⚠ INERT AS WRITTEN — the quotes are literal.
+#
+# git does not strip quotation marks from a pattern, so this asks it to ignore
+# a path whose name begins with a `"` character. Nothing matches, and 179 files
+# under images/ are tracked today. Left exactly as found rather than "fixed":
+# correcting the quoting would start ignoring that folder, and since the files
+# already tracked stay tracked either way, the only thing it would change is
+# silently refusing NEW ones — the same failure the `/templates/` note above
+# describes. Decide what images/ is for, then write the rule deliberately.
+"/images/"

@@ -46,6 +46,30 @@ const nowISO = () => new Date().toISOString();
 const stamp = (table, id, col) => supabase.from(table).update({ [col]: nowISO() }).eq('id', id);
 
 /**
+ * A reminder window, in ms, overridable by env.
+ *
+ * Named in MINUTES on the wire (`EVENT_REMINDER_WINDOW_MIN=90`) rather than
+ * milliseconds, because the one operational use for these is "try it at 90
+ * minutes and see" — and an operator typing 90 into a variable that wants
+ * milliseconds gets a 90-millisecond window, which silently reminds nobody ever.
+ * Minutes make a typo produce a wrong time rather than no time.
+ *
+ * Falls back to the default on anything unparseable or non-positive, and says so
+ * — a mistyped window that quietly reverts is far better than one that disables
+ * a whole channel, but only if it is greppable afterwards.
+ */
+function envWindow(name, fallbackMs) {
+  const raw = process.env[`${name.replace(/_MS$/, '')}_MIN`];
+  if (raw === undefined || raw === '') return fallbackMs;
+  const minutes = parseInt(raw, 10);
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    logger.warn({ name, raw }, `[email-scheduler] ignoring an unusable ${name.replace(/_MS$/, '')}_MIN — using the default`);
+    return fallbackMs;
+  }
+  return minutes * 60 * 1000;
+}
+
+/**
  * Wraps dispatch() with retry logic and exponential backoff.
  * Retries up to MAX_RETRIES times on failure before giving up.
  * Returns { sent: true } on success, { sent: false, error } after exhausting retries.
@@ -206,7 +230,7 @@ async function jobRsvpReminders() {
     .from('events')
     // sms_* are selected once per EVENT and passed down to every party, so adding
     // the SMS channel costs one column set per event rather than a query per guest.
-    .select('id, title, slug, event_date, timezone, rsvp_deadline, sms_addon_purchased_at, sms_settings')
+    .select('id, title, slug, event_date, timezone, rsvp_deadline, sms_addon_purchased_at, sms_settings, sms_templates')
     .eq('status', 'active').eq('is_paid', true)
     .not('rsvp_deadline', 'is', null).gte('rsvp_deadline', nowISO()).lte('rsvp_deadline', soon)
     .limit(100);
@@ -234,13 +258,63 @@ async function jobRsvpReminders() {
   return sent;
 }
 
-/* ─── 2. The day-before reminder — table + entry pass, to confirmed guests ─── */
+/* ─── 2. The run-up reminders — three marks, three channels ─────────────────
+ *
+ * THIS USED TO BE ONE JOB SENDING BOTH CHANNELS AT ONE MARK, and the split is
+ * the substance of the change rather than a refactor.
+ *
+ *   T-24h   email   your table and entry pass          (unchanged)
+ *   T-6h    email   final call — leaving soon          (new)
+ *   T-2h    SMS     table + pass, on their phone       (moved from T-24h)
+ *
+ * ── Why the text moved and the email did not ──
+ *
+ * They are read in different places. The email is opened at a desk the day
+ * before, when there is still time to arrange a lift and put the date in a
+ * calendar; it wants to arrive early. The text is read on a lock screen while
+ * somebody is deciding whether to leave now, and at T-24h it is one notification
+ * among a day's worth by the time it matters. Two hours out it is the message on
+ * the screen when they pick the phone up.
+ *
+ * ── The cost of two hours ──
+ *
+ * A guest who has not seen their table until T-2h has two hours to notice. That
+ * is the deliberate trade, and it is only safe because the text is NOT the only
+ * carrier: the T-24h email named the same table, and the T-6h email names it
+ * again. The SMS is the last of three, not the first of one.
+ *
+ * ── Each mark keeps its own dedupe key ──
+ *
+ * `event_reminder` / `final_call` / `seating_reminder` are three different kinds
+ * with three different ref prefixes, so they cannot swallow one another on the
+ * (kind, ref) unique index. `evday:` in particular is KEPT for the text even
+ * though it no longer fires on the day before, because `sms_log` still holds
+ * historical rows under it and changing the prefix would re-send to every guest
+ * of every event currently in flight.
+ */
 
 /**
- * How close the event has to be before this fires. Also the seating embargo:
- * the guest ticket page keeps the chart locked until the same 24h mark.
+ * T-24h. Also the moment the seating chart unlocks — but that embargo is
+ * `SEATING_REVEAL_WINDOW_MS` in services/guestService.js, a separate constant
+ * that this one must not be assumed to control. They agree at 24h today; moving
+ * this alone does not move the reveal, and moving the reveal alone does not move
+ * this.
  */
-const EVENT_REMINDER_WINDOW_MS = DAY;
+const EVENT_REMINDER_WINDOW_MS = envWindow('EVENT_REMINDER_WINDOW_MS', DAY);
+
+/** T-6h. The "you're leaving soon" mail. */
+const FINAL_CALL_WINDOW_MS = envWindow('FINAL_CALL_WINDOW_MS', 6 * HOUR);
+
+/**
+ * T-2h. The text.
+ *
+ * Must stay STRICTLY BELOW the other two. The three sweeps select on
+ * `event_date <= now + window`, so a 2h text window nests inside the 6h and 24h
+ * mail windows and each mark is crossed once, in order. Configure this above
+ * FINAL_CALL_WINDOW_MS and the text starts arriving before the email that was
+ * supposed to precede it — no error, just the wrong order for every guest.
+ */
+const SMS_REMINDER_WINDOW_MS = envWindow('SMS_REMINDER_WINDOW_MS', 2 * HOUR);
 
 /**
  * ── WHY THIS WINDOW IS 24 HOURS AND NOT THREE DAYS ──
@@ -270,8 +344,22 @@ const EVENT_REMINDER_WINDOW_MS = DAY;
  * jobSeatingNotices' `seat:<party>:<table>` ref, a different key on a different
  * schedule.
  */
-async function jobEventReminders() {
-  const soon = new Date(Date.now() + EVENT_REMINDER_WINDOW_MS).toISOString();
+/**
+ * Walk every confirmed guest of every event inside `windowMs`, and hand each one
+ * to `handleParty`.
+ *
+ * The three run-up jobs differ only in when they run and what they send. Written
+ * out separately they were three copies of the same event query, the same
+ * paging walk, the same table lookup and the same language resolution — and
+ * every one of those is a place where two of the three can silently disagree.
+ * The `location_lat/location_lng` note below is the live example: it was fixed
+ * in one copy of this query once already.
+ *
+ * `handleParty` returns truthy for "one message went out", which is what the
+ * caller counts.
+ */
+async function sweepRunUpWindow(windowMs, handleParty) {
+  const soon = new Date(Date.now() + windowMs).toISOString();
   const { data: events } = await supabase
     .from('events')
     // location_lat/location_lng are NOT optional now that this template renders
@@ -280,10 +368,11 @@ async function jobEventReminders() {
     // absent. That fallback works, but it drops a guest at whatever Google
     // matches for a free-typed address rather than at the pin the organizer
     // actually placed — on the one message they open outside the venue.
-    .select('id, title, slug, event_date, timezone, location_name, location_address, location_lat, location_lng, sms_addon_purchased_at, sms_settings')
+    .select('id, title, slug, event_date, timezone, location_name, location_address, location_lat, location_lng, sms_addon_purchased_at, sms_settings, sms_templates')
     .eq('status', 'active').eq('is_paid', true)
     .gte('event_date', nowISO()).lte('event_date', soon)
     .limit(100);
+
   let sent = 0;
   for (const ev of (events || [])) {
     /**
@@ -323,33 +412,111 @@ async function jobEventReminders() {
       // with the send window.
       const tableName = party.seating_assignments?.[0]?.tables?.table_name || null;
       const links = ticketLinksFor(party, ev, tableName);
+      // The language this guest actually used when they RSVP'd. Without it a
+      // guest who replied in Arabic gets an English reminder days later.
       const lang = party.preferred_lang === 'ar' ? 'ar' : 'en';
 
-      /**
-       * THE DAY-BEFORE TEXT.
-       *
-       * ref is `evday:` and NOT `seat:` on purpose. The seating sweep used
-       * `seat:<party>:<table>` while it existed, and a guest seated at table 7
-       * and then reminded about table 7 would have collided on the (kind, ref)
-       * unique index with one of them swallowed as a DUPLICATE. The prefixes
-       * stay distinct even now that the seating text is retired, because
-       * `sms_log` still holds those historical rows.
-       *
-       * Carries `dateKey` for the same reason the email does — see the note
-       * above. Both channels have to move together: an organizer who reschedules
-       * and gets the mail resent but not the text would have half their guests
-       * told, split by which channel each one happens to use.
-       *
-       * Additive to the email below, never a replacement — `replacesEmail` is
-       * false for every current type, so `viaSms` is not consulted and the mail
-       * goes regardless of what the carrier did.
-       */
-      await trySms(ev, {
+      if (await handleParty({ ev, party, dateKey, tableName, links, lang })) sent++;
+    }
+  }
+  return sent;
+}
+
+/** T-24h, email: the table and the scannable entry pass. */
+async function jobEventReminders() {
+  return sweepRunUpWindow(EVENT_REMINDER_WINDOW_MS, async ({ ev, party, dateKey, tableName, links, lang }) => {
+    const email = primaryEmailOf(party);
+    if (!email) return false;
+    const r = { id: party.id, guest_name: party.label, email, party_size: (party.guests || []).length || 1 };
+    const html = T.getEventReminderTemplate(r, ev, { tableName, links }, lang);
+    // No "Tomorrow:" here either — see the eyebrow note in
+    // getEventReminderTemplate. The send window is 0-24h, not exactly 24h,
+    // and event_date is UTC while "tomorrow" is a claim about the reader's
+    // local date.
+    const subject = pickSubject(lang, {
+      en: `Your table and entry pass for ${ev.title}`,
+      ar: `طاولتك وتذكرة دخولك لـ ${ev.title}`,
+    });
+    const res = await dispatchWithRetry({ kind: 'event_reminder', ref: `rsvp:${party.id}:${dateKey}`, to: email, subject, html, eventId: ev.id });
+    return !!res.sent;
+  });
+}
+
+/**
+ * T-6h, email: the final call.
+ *
+ * ── Why this is a THIRD message and not a re-send of the T-24h one ──
+ *
+ * It is a different message for a different moment. The day-before mail is read
+ * at a desk and is about planning: the date, the table, the pass to save. This
+ * one is read while somebody is working out when to leave, so it leads with the
+ * countdown and the route, and carries the pass again because that is the thing
+ * they will be looking for in an hour.
+ *
+ * Re-sending `event_reminder` under a new ref would have been less code and the
+ * wrong message — an identical email arriving twice reads as a system fault, and
+ * the second copy trains people to ignore the first.
+ */
+async function jobFinalCallReminders() {
+  return sweepRunUpWindow(FINAL_CALL_WINDOW_MS, async ({ ev, party, dateKey, tableName, links, lang }) => {
+    const email = primaryEmailOf(party);
+    if (!email) return false;
+    const r = { id: party.id, guest_name: party.label, email, party_size: (party.guests || []).length || 1 };
+    const html = T.getFinalCallReminderTemplate(r, ev, { tableName, links }, lang);
+    const subject = pickSubject(lang, {
+      en: `Today: ${ev.title} — your table and entry pass`,
+      ar: `اليوم: ${ev.title} — طاولتك وتذكرة دخولك`,
+    });
+    const res = await dispatchWithRetry({ kind: 'final_call', ref: `fc:${party.id}:${dateKey}`, to: email, subject, html, eventId: ev.id });
+    return !!res.sent;
+  });
+}
+
+/**
+ * T-2h, SMS: the table and the pass link, on their phone.
+ *
+ * ── `evday:` IS KEPT, AND MUST BE ──
+ *
+ * The prefix reads like "event day" and this no longer fires on the day before,
+ * so renaming it to something honest is the obvious tidy. It would also re-send
+ * this text to every confirmed guest of every event currently inside its window,
+ * at the organizer's expense, because `sms_log`'s (kind, ref) index would see
+ * every new key as unsent. The prefix is a database value, not a label.
+ *
+ * It also has to stay distinct from `seat:<party>:<table>`, which the retired
+ * seating text used and whose rows `sms_log` still holds.
+ *
+ * Additive to both emails, never a replacement — `replacesEmail` is false for
+ * every current type, so a failed text costs nothing that was not already sent.
+ */
+async function jobSmsEventReminders() {
+  return sweepRunUpWindow(SMS_REMINDER_WINDOW_MS, async ({ ev, party, dateKey, tableName, links, lang }) => {
+    /**
+     * `sendTransactionalSms` DIRECTLY, and deliberately not `trySms`.
+     *
+     * `trySms` answers a question this job does not ask. Its return value means
+     * "should the email now be suppressed?", which is `sent && replacesEmail` —
+     * and `replacesEmail` is false for every current type, so it returns false
+     * even when the text was delivered perfectly. Every other caller wants that,
+     * because every other caller has an email leg to decide about. This one has
+     * none: the emails went at T-24h and T-6h, hours ago, from different jobs.
+     *
+     * Routing through it anyway would make this job report `0` on every run
+     * regardless of what happened — the kind of number that looks like a healthy
+     * "nothing due" and is actually "no idea".
+     *
+     * The add-on pre-check and the never-throw wrapper are reproduced here
+     * because they are what trySms was providing; the gate chain inside
+     * sendTransactionalSms is unchanged and re-verifies everything anyway.
+     */
+    if (!ev?.sms_addon_purchased_at) return false;
+    try {
+      const result = await sendTransactionalSms({
         type: 'seating_reminder',
+        eventId: ev.id,
         partyId: party.id,
         ref: `evday:${party.id}:${dateKey}`,
-        // The language this guest actually used when they RSVP'd. Without it a
-        // guest who replied in Arabic gets an English reminder days later.
+        event: ev,
         lang,
         context: {
           guestName: party.label,
@@ -359,28 +526,18 @@ async function jobEventReminders() {
           ticketUrl: links?.ticketUrl || null,
         },
       });
-
-      const email = primaryEmailOf(party);
-      if (!email) continue;
-      const r = { id: party.id, guest_name: party.label, email, party_size: (party.guests || []).length || 1 };
-      const html = T.getEventReminderTemplate(r, ev, { tableName, links }, lang);
-      // No "Tomorrow:" here either — see the eyebrow note in
-      // getEventReminderTemplate. The send window is 0-24h, not exactly 24h,
-      // and event_date is UTC while "tomorrow" is a claim about the reader's
-      // local date.
-      const subject = pickSubject(lang, {
-        en: `Your table and entry pass for ${ev.title}`,
-        ar: `طاولتك وتذكرة دخولك لـ ${ev.title}`,
-      });
-      const res = await dispatchWithRetry({ kind: 'event_reminder', ref: `rsvp:${party.id}:${dateKey}`, to: email, subject, html, eventId: ev.id });
-      if (res.sent) sent++;
+      return !!result.sent;
+    } catch (err) {
+      // One guest's text must never abandon the rest of the sweep.
+      logger.warn({ err, eventId: ev.id, partyId: party.id }, '[email-scheduler] reminder text failed');
+      return false;
     }
-  }
-  return sent;
+  });
 }
 
 /**
- * The next instant at which some event will CROSS the T-24h mark, or null.
+ * The next instant at which some event will CROSS the mark `offsetMs` before its
+ * start, or null.
  *
  * ── WHY A POLLING SWEEP CANNOT BE ON TIME, AND WHAT THIS REPLACES IT WITH ──
  *
@@ -391,34 +548,47 @@ async function jobEventReminders() {
  * after the mark, at an offset that had nothing to do with the event and moved
  * every deploy. Organizers reasonably read "24 hours before" as a promise.
  *
- * Rather than sweeping faster — which costs a full six-job run every minute to
- * buy a minute of accuracy — this asks the database for the ONE moment that
- * matters next and sleeps until exactly then.
+ * Rather than sweeping faster — which costs a full sweep every minute to buy a
+ * minute of accuracy — this asks the database for the ONE moment that matters
+ * next and sleeps until exactly then.
+ *
+ * ── WHY IT TAKES THE OFFSET AS AN ARGUMENT NOW ──
+ *
+ * There are three marks (T-24h mail, T-6h mail, T-2h text), and the promise is
+ * the same at each. A copy of this query per mark is three places for the
+ * `.gt()` below to become `.gte()`.
  *
  * `.gt()` and not `.gte()`: an event already inside the window is this run's
  * work, not the next alarm. Including it would arm a timer for a moment
  * already past and spin.
  */
-async function nextEventReminderDueAt() {
+async function nextDueAt(offsetMs) {
   const { data, error } = await supabase
     .from('events')
     .select('event_date')
     .eq('status', 'active').eq('is_paid', true)
-    .gt('event_date', new Date(Date.now() + EVENT_REMINDER_WINDOW_MS).toISOString())
+    .gt('event_date', new Date(Date.now() + offsetMs).toISOString())
     .order('event_date', { ascending: true })
     .limit(1);
 
   if (error || !data || data.length === 0) return null;
   const at = new Date(data[0].event_date).getTime();
-  return Number.isNaN(at) ? null : at - EVENT_REMINDER_WINDOW_MS;
+  return Number.isNaN(at) ? null : at - offsetMs;
 }
+
+/* `nextEventReminderDueAt` used to sit here as a one-line wrapper around
+   nextDueAt(EVENT_REMINDER_WINDOW_MS), kept "because the tests assert on it
+   directly". They do not — the only mentions left in reminderAlarm.test.js are
+   comments explaining that the assertions moved to `nextDueAt`, which is where
+   the query actually lives. A wrapper retained for a reason that is not true is
+   worse than one retained for no reason: it looks load-bearing. */
 
 /* ─── 3. Final headcount report — to the organizer ~24-30h before the event ─── */
 async function jobFinalReports() {
   const soon = new Date(Date.now() + 30 * HOUR).toISOString();
   const { data: events } = await supabase
     .from('events')
-    .select('id, title, slug, event_date, timezone, notification_preferences, sms_addon_purchased_at, sms_settings, organizations(name, email)')
+    .select('id, title, slug, event_date, timezone, notification_preferences, sms_addon_purchased_at, sms_settings, sms_templates, organizations(name, email)')
     .eq('status', 'active').eq('is_paid', true)
     .gte('event_date', nowISO()).lte('event_date', soon)
     .is('final_report_sent_at', null).limit(100);
@@ -564,7 +734,7 @@ async function notifyGuestsOfEventChange(eventId, { includeSms = false, force = 
       // event on the platform — not erroring, not logging, simply never texting
       // anyone about a cancellation. A quiet always-false is the worst kind of
       // bug to own, so the columns are listed with a note rather than inherited.
-      .select('id, title, slug, event_date, timezone, location_name, location_address, status, is_paid, cancellation_reason, sms_addon_purchased_at, sms_settings')
+      .select('id, title, slug, event_date, timezone, location_name, location_address, status, is_paid, cancellation_reason, sms_addon_purchased_at, sms_settings, sms_templates')
       .eq('id', eventId).single();
 
     // 'cancelled' is as valid a reason to notify as a date change — more so.
@@ -732,7 +902,7 @@ async function jobSeatingNotices() {
   for (const [eventId, rows] of byEvent) {
     const { data: ev } = await supabase
       .from('events')
-      .select('id, title, slug, event_date, timezone, sms_addon_purchased_at, sms_settings, status')
+      .select('id, title, slug, event_date, timezone, sms_addon_purchased_at, sms_settings, sms_templates, status')
       .eq('id', eventId).maybeSingle();
 
     // A cancelled event must not text anyone about where they were going to sit.
@@ -814,9 +984,20 @@ async function jobSeatingNotices() {
   return sent;
 }
 
+/**
+ * The fifteen-minute sweep.
+ *
+ * The three run-up jobs are here AS WELL AS on the alarm, and that duplication
+ * is deliberate: the alarm is an accuracy optimisation, not the guarantee. If it
+ * is stopped, mis-armed, or the process restarts inside a hop, the sweep still
+ * picks the work up within fifteen minutes. `running` stops the two from
+ * overlapping and the (kind, ref) unique indexes stop anything sending twice.
+ */
 const JOBS = [
   ['rsvp_reminders', jobRsvpReminders],
   ['event_reminders', jobEventReminders],
+  ['final_call', jobFinalCallReminders],
+  ['sms_reminders', jobSmsEventReminders],
   ['final_reports', jobFinalReports],
   ['post_event', jobPostEvent],
   ['pending_payments', jobPendingPayments],
@@ -839,21 +1020,37 @@ async function runOnce(trigger = 'interval') {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
- * THE DAY-BEFORE ALARM
+ * THE RUN-UP ALARM
  *
- * The full sweep stays exactly as it was — six jobs, every fifteen minutes. It
- * is the right shape for work whose due moment is soft: an RSVP chase, a recap,
- * a payment nudge. Nobody notices whether those land at 10:00 or 10:12.
+ * The full sweep stays exactly as it was — every fifteen minutes. It is the
+ * right shape for work whose due moment is soft: an RSVP chase, a recap, a
+ * payment nudge. Nobody notices whether those land at 10:00 or 10:12.
  *
- * The day-before reminder is not that. It is a promise with a number in it, and
- * it was being served by the same coarse sweep, so it arrived up to fifteen
- * minutes late at an offset determined by the last process restart.
+ * The run-up reminders are not that. They are promises with numbers in them —
+ * "24 hours before", "2 hours before" — and they were being served by the same
+ * coarse sweep, so they arrived up to fifteen minutes late at an offset
+ * determined by the last process restart. At the two-hour mark a fifteen-minute
+ * smear is a much larger fraction of the notice being given.
  *
- * This is a separate, much cheaper clock that runs ONLY `jobEventReminders`.
- * Each hop asks for the single next moment an event crosses T-24h and sleeps
- * until precisely then, so the reminder goes out within a second of the mark
- * instead of somewhere in a fifteen-minute smear.
+ * This is a separate, much cheaper clock. Each hop asks for the single next
+ * moment ANY of the three marks is crossed, sleeps until precisely then, and
+ * fires only the jobs whose mark has actually arrived.
  * ───────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * The three timed marks, in the order they are crossed.
+ *
+ * A table rather than three copies of the arm/fire/re-arm dance. Each mark needs
+ * its own `nextDueAt` query and its own due test, and the version of this with
+ * one timer per mark had three timers, three stop flags and three chances for a
+ * `clearTimeout` to be forgotten in `stop()` — which leaks a live handle into
+ * the next test and makes the suite hang rather than fail.
+ */
+const ALARMS = [
+  { name: 'event_reminders', offsetMs: EVENT_REMINDER_WINDOW_MS, job: jobEventReminders },
+  { name: 'final_call', offsetMs: FINAL_CALL_WINDOW_MS, job: jobFinalCallReminders },
+  { name: 'sms_reminders', offsetMs: SMS_REMINDER_WINDOW_MS, job: jobSmsEventReminders },
+];
 
 /**
  * The longest one hop will ever sleep.
@@ -901,9 +1098,42 @@ function alarmSleepMs(dueAt, now = Date.now()) {
 let alarmTimer = null;
 let alarmStopped = true;
 
-/** Run the day-before job alone, off the alarm rather than off the sweep. */
+/**
+ * Run the run-up jobs off the alarm rather than off the sweep.
+ *
+ * ── ALL THREE, BUT ONLY WHEN A MARK IS ACTUALLY ARRIVING ──
+ *
+ * The caller decides whether to invoke this at all; see armReminderAlarm.
+ *
+ * An earlier version of this ran all three on EVERY hop, justified by "each is
+ * a windowed query that matches nothing when its mark has not been crossed".
+ * That was simply false, and expensively so. `jobEventReminders` selects
+ * `event_date <= now + 24h` — which matches every event in the next twenty-four
+ * hours, on every hop, not just at the mark. It then pages every confirmed party
+ * of every one of them and calls dispatch() per party, and dispatch does an
+ * `email_log` lookup per party to decide the send is a duplicate.
+ *
+ * With a 60-second hop that is (every guest of every event in the next day)
+ * lookups per minute, and running all three tripled it. The dedupe made it
+ * CORRECT and did nothing about the cost.
+ *
+ * So the hop no longer does work by default. armReminderAlarm knows whether the
+ * moment it slept to is a real mark or just the one-minute re-read cap, and only
+ * a real mark reaches this function. When it does, all three still run: at that
+ * point the marks are close enough together that deciding which one arrived is
+ * bookkeeping that can be stale, and the two that are not due exit on their own
+ * windowed query.
+ *
+ * WHAT THIS GIVES UP: an event that is ALREADY past a mark when it appears —
+ * created, paid for, or re-dated to start within the next 24 hours — is invisible
+ * to nextDueAt, which asks for the next FUTURE crossing. The alarm never fires
+ * for it. It is served instead by the 15-minute sweep and the startup sweep,
+ * both of which run all three jobs, so the worst case is fifteen minutes rather
+ * than sixty seconds. Nobody perceives that on a reminder, and it is the correct
+ * trade against doing a full pass every minute forever.
+ */
 async function fireReminderAlarm() {
-  // A full sweep in flight already includes this job, and letting both run
+  // A full sweep in flight already includes these jobs, and letting both run
   // would have two workers competing over the same guests. Their dedupe keys
   // are UNIQUE indexes, so concurrent sends would not double-deliver — they
   // would collide and retry, which is wasted work and confusing logs for no
@@ -912,21 +1142,28 @@ async function fireReminderAlarm() {
 
   /* THE COST OF SHARING `running` WITH THE SWEEP, ACCEPTED DELIBERATELY.
      Holding the same flag means that if the fifteen-minute sweep fires while
-     this alarm is mid-send, the sweep skips ALL SIX jobs and waits another
+     this alarm is mid-send, the sweep skips ALL its jobs and waits another
      fifteen minutes — so an RSVP chase or a recap can be delayed by one cycle
      because a reminder happened to be going out.
 
-     Kept anyway: a second, finer-grained lock would let both run
-     jobEventReminders at once, and trading a rare fifteen-minute delay on soft
-     work for a routine race on charged messages is the wrong way round. The
-     collision window is the duration of one jobEventReminders call — seconds —
-     against a fifteen-minute period. */
+     Kept anyway: a second, finer-grained lock would let both run the same
+     reminder job at once, and trading a rare fifteen-minute delay on soft work
+     for a routine race on charged messages is the wrong way round. The collision
+     window is the duration of one reminder pass — seconds — against a
+     fifteen-minute period. */
   running = true;
   try {
-    const sent = await jobEventReminders();
-    if (sent) logger.info({ sent, trigger: 'alarm' }, '[email-scheduler] day-before reminders sent on the mark');
-  } catch (err) {
-    logger.warn({ err }, '[email-scheduler] day-before alarm run failed');
+    for (const alarm of ALARMS) {
+      try {
+        const sent = await alarm.job();
+        if (sent) logger.info({ sent, mark: alarm.name, trigger: 'alarm' }, '[email-scheduler] run-up reminders sent on the mark');
+      } catch (err) {
+        // One mark failing must not cost the other two their firing — the text
+        // at T-2h and the mail at T-24h are unrelated pieces of work that happen
+        // to share a clock.
+        logger.warn({ err, mark: alarm.name }, '[email-scheduler] run-up alarm job failed');
+      }
+    }
   } finally {
     running = false;
   }
@@ -945,8 +1182,35 @@ async function armReminderAlarm() {
   if (alarmStopped) return;
 
   let sleep = ALARM_MAX_SLEEP_MS;
+  /**
+   * Is the moment we are sleeping to a REAL MARK, or just the re-read cap?
+   *
+   * This is the whole reason the hop is now cheap. `alarmSleepMs` clamps to
+   * ALARM_MAX_SLEEP_MS, so a 60-second sleep means one of two very different
+   * things: "a mark lands in 60 seconds" or "nothing is close, wake up and
+   * re-read the database". Only the first deserves a full pass over every guest
+   * of every event in the next twenty-four hours — see fireReminderAlarm.
+   */
+  let markWithinHop = false;
+
   try {
-    sleep = alarmSleepMs(await nextEventReminderDueAt());
+    /**
+     * The EARLIEST of the three marks, so no mark is ever slept past.
+     *
+     * Taking the minimum is what makes one timer able to serve three promises.
+     * Arming for any single mark — the 24h one, say — would sleep straight
+     * through a 2h mark falling inside that gap, and the text would land
+     * whenever the next hop happened to wake instead of on its own mark.
+     *
+     * A null from any one query means "nothing approaching that mark", which is
+     * ordinary; filtered out rather than treated as zero, since Math.min over a
+     * null would return 0 and spin the timer.
+     */
+    const due = (await Promise.all(ALARMS.map((a) => nextDueAt(a.offsetMs))))
+      .filter((at) => typeof at === 'number' && Number.isFinite(at));
+    const next = due.length > 0 ? Math.min(...due) : null;
+    sleep = alarmSleepMs(next);
+    markWithinHop = next !== null && (next - Date.now()) <= ALARM_MAX_SLEEP_MS;
   } catch (err) {
     logger.warn({ err }, '[email-scheduler] could not read the next reminder mark — retrying next hop');
   }
@@ -955,7 +1219,9 @@ async function armReminderAlarm() {
   if (alarmStopped) return;
 
   alarmTimer = setTimeout(async () => {
-    await fireReminderAlarm();
+    // A capped hop with no mark in it does nothing but re-read. The sweep is
+    // what covers anything the .gt() in nextDueAt cannot see.
+    if (markWithinHop) await fireReminderAlarm();
     armReminderAlarm().catch(() => {});
   }, sleep);
   if (alarmTimer.unref) alarmTimer.unref();
@@ -1008,6 +1274,10 @@ module.exports = {
   start, stop, runOnce, notifyGuestsOfEventChange, NOTIFIABLE_RESPONSES, JOBS,
   // Exported for the timing tests: the alarm's accuracy is the whole point of
   // this module now, and it is not observable through start()/stop() alone.
-  nextEventReminderDueAt, fetchConfirmedParties, alarmSleepMs,
-  ALARM_MAX_SLEEP_MS, ALARM_GUARD_MS, EVENT_REMINDER_WINDOW_MS,
+  nextDueAt, fetchConfirmedParties, alarmSleepMs,
+  ALARM_MAX_SLEEP_MS, ALARM_GUARD_MS,
+  // The three marks, exported so reminderWindows.test.js can assert both their
+  // values AND their ordering — the nesting relationship between them is what
+  // makes each mark get crossed once, in sequence.
+  EVENT_REMINDER_WINDOW_MS, FINAL_CALL_WINDOW_MS, SMS_REMINDER_WINDOW_MS, ALARMS,
 };

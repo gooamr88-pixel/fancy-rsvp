@@ -86,13 +86,25 @@ test('the shared guest fetch selects only parties at yes', () => {
     'fetchConfirmedParties is the single audience filter for the guest sweeps');
 });
 
-test('the day-before reminder goes to confirmed guests only', () => {
-  // Carries the table AND the entry pass, so a leak here is the door case.
-  const body = fnBody(scheduler, 'async function jobEventReminders');
+test('every run-up reminder goes to confirmed guests only', () => {
+  /* All three carry the table AND the entry pass, so a leak here is the door
+     case. The audience is resolved once, in the sweep the three jobs share —
+     which is the point of them sharing it: three copies of this query were
+     three chances for one of them to widen. */
+  const body = fnBody(scheduler, 'async function sweepRunUpWindow');
   assert.match(body, /fetchConfirmedParties\(/,
-    'jobEventReminders must take its audience from the confirmed-only fetch');
+    'the run-up sweep must take its audience from the confirmed-only fetch');
   assert.doesNotMatch(body, /\.from\('rsvp_parties'\)/,
-    'jobEventReminders must not query guests directly — that bypasses the audience filter');
+    'the run-up sweep must not query guests directly — that bypasses the audience filter');
+
+  // And none of the three may go around it and resolve its own audience.
+  for (const job of ['jobEventReminders', 'jobFinalCallReminders', 'jobSmsEventReminders']) {
+    const jobBody = fnBody(scheduler, `async function ${job}`);
+    assert.match(jobBody, /sweepRunUpWindow\(/,
+      `${job} must take its audience from the shared confirmed-only sweep`);
+    assert.doesNotMatch(jobBody, /\.from\('rsvp_parties'\)/,
+      `${job} must not query guests directly`);
+  }
 });
 
 test('the RSVP nudge chases only guests who have not answered', () => {
@@ -136,13 +148,29 @@ test('the entry pass refuses a declined party', () => {
     'the QR must be refused loudly — it opens the door if it is ever delivered');
 });
 
-test('the full-detail confirmation text skips anyone who is not attending', () => {
+test('every text that names a table or a pass skips anyone who is not attending', () => {
+  /* This was one literal condition (`type === 'rsvp_confirmation' && …`). The
+     manual sender now covers four types, so the rule moved into the
+     MANUAL_SMS_TYPES table — and the assertion moved with it, because the
+     failure it guards is no longer "the detail text is ungated" but "a NEW
+     type was added to that table and nobody set requiresAttending".
+     signQrTicketForResponse mints nothing for a maybe or a no, so an ungated
+     type sends a message with an empty link where the pass should be. */
+  const { MANUAL_SMS_TYPES } = require('../services/invitationService');
   const src = read('services/invitationService.js');
-  assert.match(
-    src,
-    /type === 'rsvp_confirmation' && party\.response !== 'yes'/,
-    'the detail SMS must be gated on an accepted response',
-  );
+
+  assert.match(src, /if \(requiresAttending && party\.response !== 'yes'\)/,
+    'the attendance gate must still be enforced in the send loop');
+
+  for (const type of ['rsvp_confirmation', 'seating_reminder']) {
+    assert.equal(MANUAL_SMS_TYPES[type]?.requiresAttending, true,
+      `${type} names a table and carries a pass — it must be gated on an accepted response`);
+  }
+  // The other two are addressed to everyone invited, on purpose: an invitation
+  // precedes any answer, and a change of date must reach people who have not
+  // replied yet.
+  assert.equal(MANUAL_SMS_TYPES.invitation.requiresAttending, false);
+  assert.equal(MANUAL_SMS_TYPES.event_update.requiresAttending, false);
 });
 
 /* ── The two live submit paths ───────────────────────────────────────────── */

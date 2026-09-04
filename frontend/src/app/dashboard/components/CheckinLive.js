@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { apiFetch } from '../../utils/apiClient';
 import { toast } from '../../utils/toast';
 
@@ -91,7 +92,10 @@ export default function CheckinLive({ eventId }) {
         <p style={{ margin: '0 0 16px', color: C.stone, fontSize: '14px', lineHeight: 1.6 }}>
           {locked}
         </p>
-        <a
+        {/* next/link, not a bare anchor: /pricing is a route in this app, and a
+            full document load here throws away the dashboard the organizer is
+            standing in to reach a page they will come straight back from. */}
+        <Link
           href="/pricing"
           style={{
             display: 'inline-block', background: C.gold, color: C.white,
@@ -100,7 +104,7 @@ export default function CheckinLive({ eventId }) {
           }}
         >
           View plans
-        </a>
+        </Link>
       </div>
     );
   }

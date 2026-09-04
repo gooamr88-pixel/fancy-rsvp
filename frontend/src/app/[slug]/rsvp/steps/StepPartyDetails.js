@@ -51,14 +51,22 @@ export default function StepPartyDetails({
   // options exactly as the organizer typed them, regardless of guest language.
   const mealOptions = mealField?.options;
 
-  // Consent is about the phone number, not attendance. Now that the number is
-  // optional for everyone (Twilio TFV 30475), the checkbox appears only once a
-  // guest has actually volunteered one — asking a guest who gave no number
-  // whether they consent to texts is meaningless, and showing it to every
-  // attendee is what previously made the SMS program look like part of
-  // registering. Mirrors RsvpSection + the backend.
   const isAttending = attending === 'yes';
-  const showSmsConsent = !!(phone && phone.trim());
+
+  /**
+   * A DECLINE IS EXEMPT from the number and the consent box.
+   *
+   * Not a display nicety — it mirrors the validator in RsvpWizard exactly, and
+   * the two disagreeing is how a form ends up rejecting a submission for a
+   * field it never showed. The rationale (a decliner receives no table, no pass
+   * and no transactional message at all, so the disclosure under the checkbox
+   * would not apply to them) lives with the validator.
+   *
+   * `showSmsConsent` used to mean "has typed a number". It means "is not saying
+   * no" now, which is a different question with a different answer.
+   */
+  const isDeclining = attending === 'no';
+  const showSmsConsent = !isDeclining;
 
   const renderHostDetailsCard = (includeMeal = false) => {
     return (
@@ -159,11 +167,19 @@ export default function StepPartyDetails({
                   style={{ ...S.inputBase, ...(validationErrors.email ? { borderColor: '#ef4444' } : {}) }}
                   onFocus={e => inputFocus(e)} onBlur={e => inputBlur(e, !!validationErrors.email)} />
               </FormField>
-              {/* Always labelled optional (Twilio TFV 30475). A mandatory phone
-                  number made the SMS program's identifier a condition of
-                  registering; the label must say plainly that it is not. */}
-              <FormField label={`${t.phone_label}${isRTL ? ' (اختياري)' : ' (optional)'}`} error={validationErrors.phone}>
-                <CountryCodePhoneInput value={phone} onChange={setPhone} hasError={!!validationErrors.phone} />
+              {/* The label follows the RULE, it does not state a constant.
+                  Required for anyone not declining; optional for a decline. The
+                  one thing worse than a mandatory phone field is a mandatory one
+                  labelled optional — and the mirror image, an optional field
+                  marked with a red asterisk, sends a decliner hunting for a
+                  number they do not need to give. */}
+              <FormField
+                label={isDeclining
+                  ? `${t.phone_label}${isRTL ? ' (اختياري)' : ' (optional)'}`
+                  : `${t.phone_label} *`}
+                error={validationErrors.phone}
+              >
+                <CountryCodePhoneInput value={phone} onChange={setPhone} hasError={!!validationErrors.phone} isRTL={isRTL} />
               </FormField>
             </div>
 
@@ -182,35 +198,68 @@ export default function StepPartyDetails({
               />
             )}
 
-            {/* SMS opt-in consent — shown only when a phone number is actually
-                being collected (TCPA / Twilio TFV): always for attendees (phone
-                required) and for a decline only once a number is entered.
-                Persisted to rsvp_parties.sms_consent as a timestamped record.
+            {/* SMS opt-in consent — REQUIRED to submit, unless declining.
 
-                OPTIONAL by design. There is no validation error for leaving it
-                unticked — see RsvpWizard's matching comment. The independence
-                notice below sits OUTSIDE the <label> so that ticking the box
-                agrees to the SMS sentence and nothing else. */}
+                Rendered for everyone who is not saying no, and NOT gated on
+                having typed a number. It used to appear only once a guest
+                volunteered one, which was right while both were optional; with
+                both required, hiding it until the phone field is filled would
+                produce a form that grows a new mandatory control after you start
+                typing, and whose blocking requirement is invisible at the moment
+                you decide whether to fill it in.
+
+                A decline sees neither this nor a required number — see
+                `isDeclining` above.
+
+                The disclosure notice sits OUTSIDE the <label> so that ticking
+                the box agrees to the SMS sentence and nothing else. See
+                SmsConsentText.js for the full rationale and the Twilio re-filing
+                this requires. */}
             {showSmsConsent && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
               <div style={{
                 display: 'flex', alignItems: 'flex-start', gap: '10px',
                 padding: '12px 14px', borderRadius: '12px',
-                background: `${themeColor}0D`,
-                border: `1px solid ${themeColor}40`,
+                // The error state recolours the whole card, not just a message
+                // below it. A single unticked checkbox in a long form is very
+                // easy to miss when only a 12px line under it turns red.
+                background: validationErrors?.smsConsent ? '#FBF0F0' : `${themeColor}0D`,
+                border: `1px solid ${validationErrors?.smsConsent ? '#D98A8A' : `${themeColor}40`}`,
                 transition: 'all 0.2s ease',
               }}>
                 <input
                   type="checkbox"
                   id="sms-consent-checkbox"
                   checked={smsConsent}
-                  onChange={e => setSmsConsent(e.target.checked)}
+                  onChange={e => {
+                    setSmsConsent(e.target.checked);
+                    // Clear the error the moment they comply, rather than
+                    // leaving a red card until the next submit attempt.
+                    if (e.target.checked && setValidationErrors) {
+                      setValidationErrors(prev => { const n = { ...prev }; delete n.smsConsent; return n; });
+                    }
+                  }}
+                  // required + aria-invalid so the browser and a screen reader
+                  // both know this blocks submission. The visible asterisk below
+                  // is for everyone else.
+                  required
+                  aria-invalid={validationErrors?.smsConsent ? 'true' : undefined}
+                  aria-describedby={validationErrors?.smsConsent ? 'sms-consent-error' : undefined}
                   style={{ marginTop: '3px', width: '16px', height: '16px', accentColor: themeColor, cursor: 'pointer', flexShrink: 0 }}
                 />
                 <label htmlFor="sms-consent-checkbox" style={{ fontSize: '12px', color: '#5E5A52', lineHeight: 1.6, cursor: 'pointer', fontFamily: 'var(--font-sans)' }}>
                   <SmsConsentText isRTL={isRTL} />
+                  <span style={{ color: '#C0392B', marginInlineStart: '3px', fontWeight: 700 }} aria-hidden="true">*</span>
                 </label>
               </div>
+              {validationErrors?.smsConsent && (
+                <p id="sms-consent-error" role="alert" style={{
+                  margin: '2px 0 0', padding: '0 2px',
+                  fontFamily: 'var(--font-sans)', fontSize: '12px', color: '#B23B3B',
+                }}>
+                  {validationErrors.smsConsent}
+                </p>
+              )}
               <SmsConsentIndependence isRTL={isRTL} linkStyle={{ color: themeColor }} style={{ margin: '2px 0 0', padding: '0 2px' }} />
             </div>
             )}

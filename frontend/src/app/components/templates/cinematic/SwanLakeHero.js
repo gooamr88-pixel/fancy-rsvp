@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useReducedMotion } from 'framer-motion';
 import { getCinematicCopy } from './cinematicThemes';
 import HeroCardDownload from './HeroCardDownload';
@@ -39,19 +39,32 @@ export default function SwanLakeHero({
   const copy = getCinematicCopy(template, { isRTL, occasion });
   const reduceMotion = useReducedMotion();
 
-  /* Whether an opening has ever covered this hero. A ref, not state: it only
-     ever decides which branch the effect below takes, and re-rendering on it
-     would be a render that changes nothing. */
-  const sawOpening = useRef(openingActive);
-  const [embossed, setEmbossed] = useState(openingActive && !reduceMotion);
+  /* Whether the bloom has been handed to CSS yet. It starts released when
+     there is no opening to wait behind: an event with the opening turned off
+     never had an envelope to be embossed FROM, so it renders coloured from the
+     first frame rather than performing a transition out of a state the guest
+     never saw. */
+  const [released, setReleased] = useState(!openingActive);
+
+  /* An opening that comes BACK — the dashboard's replay button — re-arms the
+     bloom. Adjusted during the render that changes the prop, which is React's
+     documented shape for this and the only one that does not paint a frame of
+     the finished hero on the way back to embossed. */
+  const [openingWas, setOpeningWas] = useState(openingActive);
+  if (openingWas !== openingActive) {
+    setOpeningWas(openingActive);
+    if (openingActive) setReleased(false);
+  }
+
+  /* Reduced motion gets the finished picture, and gets it by derivation rather
+     than by an effect correcting the state afterwards: the bloom is
+     decorative, and a 2.2s filter animation across a full-bleed photograph is
+     exactly the kind of thing the preference is asking us not to do —
+     including for the one frame an effect would take to notice. */
+  const embossed = !reduceMotion && !released;
 
   useEffect(() => {
-    // Reduced motion gets the finished picture. The bloom is decorative and
-    // a 2.2s filter animation across a full-bleed photograph is exactly the
-    // kind of thing the preference is asking us not to do.
-    if (reduceMotion) { setEmbossed(false); return undefined; }
-    if (openingActive) { sawOpening.current = true; setEmbossed(true); return undefined; }
-    if (!sawOpening.current) { setEmbossed(false); return undefined; }
+    if (reduceMotion || openingActive) return undefined;
 
     /* Released on the next frame so the browser has a painted embossed state
        to interpolate FROM — clearing it in the same commit produces no
@@ -60,8 +73,8 @@ export default function SwanLakeHero({
        The timer is not redundant: requestAnimationFrame does not fire in a
        backgrounded tab, and a guest who opened the invitation and switched
        apps would come back to a permanently grey hero. */
-    const raf = requestAnimationFrame(() => setEmbossed(false));
-    const backstop = setTimeout(() => setEmbossed(false), 140);
+    const raf = requestAnimationFrame(() => setReleased(true));
+    const backstop = setTimeout(() => setReleased(true), 140);
     return () => { cancelAnimationFrame(raf); clearTimeout(backstop); };
   }, [openingActive, reduceMotion]);
 

@@ -86,23 +86,19 @@ data class RefreshResponse(
 )
 
 // ══════════════════════════════════════════════════════════════════
-// Event list and bundle (§7, §21.1)
+// Bundle (§7, §21.1)
 // ══════════════════════════════════════════════════════════════════
 
-@Serializable
-data class EventListResponse(val events: List<EventSummaryDto> = emptyList())
-
-@Serializable
-data class EventSummaryDto(
-    val id: String,
-    val name: String,
-    val venue: String? = null,
-    val startsAt: String? = null,
-    val timezone: String? = null,
-    val status: String? = null,
-    val isPaid: Boolean = false,
-    val tierName: String? = null,
-)
+/*
+ * `EventListResponse` and `EventSummaryDto` were here and are gone with
+ * CheckinApi.listEvents, the only thing that ever parsed them.
+ *
+ * A device is paired to exactly one event (§18.3), so it has no list to choose
+ * from — BundleRepository.refreshEvents reads that event's manifest instead,
+ * which is also the only response carrying the record count the pre-download
+ * storage check needs. GET /checkin/events remains on the server for the
+ * organizer's dashboard, which does have several events to show.
+ */
 
 @Serializable
 data class BundleManifestDto(

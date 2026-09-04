@@ -32,16 +32,72 @@ const SCHEDULER = read('services/emailScheduler.js');
 
 /* ── 1. The window, and the table that depends on it ─────────────────────── */
 
-test('the reminder sweep and the seating reveal use the SAME 24h window', () => {
-  /* They disagreed once: a 3-day sweep with a 24h reveal meant the only
-     reminder any guest received was the one that could not name their table,
-     because the second pass was swallowed by the (kind, ref) dedupe. */
-  assert.match(SCHEDULER, /const EVENT_REMINDER_WINDOW_MS = DAY;/,
-    'the reminder window is no longer exactly one day');
+test('no run-up message can fire before the seating chart is revealed', () => {
+  /* THE INVARIANT, NOT THE LITERAL.
+   *
+   * This used to assert the source text `const EVENT_REMINDER_WINDOW_MS = DAY;`
+   * against a single window. There are three now — T-24h email, T-6h email,
+   * T-2h text — and a string match would have to be rewritten every time one
+   * moves, which is how a test stops meaning anything.
+   *
+   * What actually has to hold is the RELATIONSHIP the original was protecting.
+   * These messages name the guest's table; `guestService.SEATING_REVEAL_WINDOW_MS`
+   * decides when the ticket page will show it. A window WIDER than the reveal
+   * sends a message promising a table against a page that still says "not yet",
+   * which is the disagreement that once meant the only reminder any guest
+   * received was the one that could not name their table.
+   *
+   * Asserted as a comparison, so retiming any mark is free and widening one
+   * past the reveal fails here. */
+  const {
+    EVENT_REMINDER_WINDOW_MS, FINAL_CALL_WINDOW_MS, SMS_REMINDER_WINDOW_MS,
+  } = require('../services/emailScheduler');
+  const { SEATING_REVEAL_WINDOW_MS } = require('../services/guestService');
 
-  const guestService = read('services/guestService.js');
-  assert.match(guestService, /SEATING_REVEAL_WINDOW_MS = 24 \* 60 \* 60 \* 1000/,
-    'the seating reveal window moved — the reminder can now promise a table the page will not show');
+  assert.ok(Number.isFinite(SEATING_REVEAL_WINDOW_MS) && SEATING_REVEAL_WINDOW_MS > 0,
+    'guestService no longer exports a seating reveal window to compare against');
+
+  for (const [name, ms] of [
+    ['EVENT_REMINDER_WINDOW_MS', EVENT_REMINDER_WINDOW_MS],
+    ['FINAL_CALL_WINDOW_MS', FINAL_CALL_WINDOW_MS],
+    ['SMS_REMINDER_WINDOW_MS', SMS_REMINDER_WINDOW_MS],
+  ]) {
+    assert.ok(ms <= SEATING_REVEAL_WINDOW_MS,
+      `${name} (${ms}ms) fires before the seating chart is revealed (${SEATING_REVEAL_WINDOW_MS}ms) — guests would be told a table the ticket page still hides`);
+  }
+});
+
+test('the three run-up marks are strictly ordered, widest first', () => {
+  /* Each sweep selects `event_date <= now + window`, so the windows NEST: the
+     2h one sits inside the 6h one, which sits inside the 24h one. That nesting
+     is what makes each mark get crossed exactly once, in order.
+     Mis-order them and the text arrives before the email that was meant to
+     precede it — no error, just the wrong sequence for every guest. */
+  const {
+    EVENT_REMINDER_WINDOW_MS, FINAL_CALL_WINDOW_MS, SMS_REMINDER_WINDOW_MS,
+  } = require('../services/emailScheduler');
+
+  assert.ok(EVENT_REMINDER_WINDOW_MS > FINAL_CALL_WINDOW_MS,
+    'the day-before email no longer precedes the final-call email');
+  assert.ok(FINAL_CALL_WINDOW_MS > SMS_REMINDER_WINDOW_MS,
+    'the final-call email no longer precedes the reminder text');
+});
+
+test('each run-up mark is served by its own job, on its own channel', () => {
+  /* The split is the point: one job sending both channels at one mark is what
+     this replaced. A single job regaining both would silently restore it. */
+  const { ALARMS } = require('../services/emailScheduler');
+  assert.deepEqual(ALARMS.map((a) => a.name), ['event_reminders', 'final_call', 'sms_reminders']);
+
+  const smsJob = SCHEDULER.slice(SCHEDULER.indexOf('async function jobSmsEventReminders'));
+  const smsBody = smsJob.slice(0, smsJob.indexOf('\n}\n'));
+  assert.doesNotMatch(smsBody, /dispatchWithRetry/,
+    'the T-2h job sends email again — the two channels were split on purpose');
+
+  const emailJob = SCHEDULER.slice(SCHEDULER.indexOf('async function jobEventReminders'));
+  const emailBody = emailJob.slice(0, emailJob.indexOf('\n}\n'));
+  assert.doesNotMatch(emailBody, /trySms|sendTransactionalSms/,
+    'the T-24h job texts again — the text moved to T-2h');
 });
 
 test('the day-before text uses a ref that cannot collide with the seating one', () => {

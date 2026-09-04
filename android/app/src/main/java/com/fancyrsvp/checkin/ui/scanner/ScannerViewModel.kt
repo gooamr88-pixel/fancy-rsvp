@@ -371,19 +371,19 @@ class ScannerViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Supervisor override for an already-arrived guest (§9.5).
+    /*
+     * `override()` was here and is gone.
      *
-     * Refused for an usher. This is a user-experience gate only — the server
-     * validates the acting staff identity against the roster, because a
-     * client-side role check must never be the sole gate on a privileged action
-     * (§18.2).
+     * It called `admit(party, party.arrived, isOverride = true)` — the guests who
+     * already hold a live check-in — and `CheckInRepository.checkIn` filters
+     * exactly those out before writing anything. Nothing was ever recorded, and
+     * the result screen dismissed as though it had been.
+     *
+     * `admit(isOverride = true)` is kept: METHOD_OVERRIDE is still the right
+     * label if a real override path is ever built, and the report already tells
+     * it apart from a scan. What is gone is the button that pretended to be one.
+     * See ResultVisual.Already in ScanResultScreen for what the door is told now.
      */
-    fun override(party: CheckInRepository.PartyView, guestIds: List<String>): Boolean {
-        if (!_operator.value.isSupervisor) return false
-        admit(party, guestIds, isOverride = true)
-        return true
-    }
 
     fun dismiss() {
         _outcome.value = null

@@ -78,6 +78,8 @@ fun GuestListScreen(
     val tableFilter by viewModel.tableFilter.collectAsState()
     val tables by viewModel.tables.collectAsState()
     val loading by viewModel.loading.collectAsState()
+    val query by viewModel.query.collectAsState()
+    val matchCount by viewModel.matchCount.collectAsState()
     val dimens = LocalDimens.current
 
     var undoTarget by remember { mutableStateOf<GuestListViewModel.Row?>(null) }
@@ -86,9 +88,44 @@ fun GuestListScreen(
 
     ScreenScaffold(
         title = stringResource(R.string.guests_title),
-        subtitle = stringResource(R.string.guests_showing, rows.size),
+        /*
+         * "Showing 500 of 2,100" once the page is capped, rather than a bare
+         * count that reads as the whole guest list. The list has always been
+         * limited to PAGE_LIMIT rows at offset 0; saying so is what stops
+         * somebody concluding a guest was never invited.
+         */
+        subtitle = if (matchCount > rows.size) {
+            stringResource(R.string.guests_showing_of, rows.size, matchCount)
+        } else {
+            stringResource(R.string.guests_showing, rows.size)
+        },
         onBackToScanner = onBackToScanner,
     ) {
+        /*
+         * The search this screen never had. Without it every guest past the
+         * page limit was unreachable — and because the guest list is the only
+         * surface offering undo, un-reversible too.
+         */
+        OutlinedTextField(
+            value = query,
+            onValueChange = viewModel::setQuery,
+            singleLine = true,
+            label = { Text(stringResource(R.string.guests_search_label)) },
+            textStyle = MaterialTheme.typography.bodyLarge,
+            trailingIcon = if (query.isNotEmpty()) {
+                {
+                    TextButton(onClick = { viewModel.setQuery("") }) {
+                        Text(stringResource(R.string.guests_search_clear))
+                    }
+                }
+            } else {
+                null
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        Spacer(Modifier.height(10.dp))
+
         LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             items(GuestListViewModel.Filter.entries.toList()) { option ->
                 Chip(
@@ -137,6 +174,11 @@ fun GuestListScreen(
                 onAction = {
                     viewModel.setFilter(GuestListViewModel.Filter.ALL)
                     viewModel.setTableFilter(null)
+                    // The search counts as a filter here: it is now the most
+                    // likely reason the list is empty, and leaving it set while
+                    // clearing the others produces a "clear filters" button that
+                    // visibly does nothing.
+                    viewModel.setQuery("")
                 },
             )
 

@@ -88,7 +88,11 @@ const fnBody = (decl) => {
 };
 
 test('the next-mark query looks past the window, not into it', () => {
-  const body = fnBody('async function nextEventReminderDueAt');
+  /* `nextDueAt`, not `nextEventReminderDueAt`. The query was parameterised by
+     offset when the single T-24h mark became three; the named function is now a
+     one-line wrapper around it, and pinning these assertions to the wrapper
+     would check a call site instead of the query they are about. */
+  const body = fnBody('async function nextDueAt');
   // `.gte` here would return an event already inside the window — a mark in the
   // past — and the alarm would re-arm to the guard delay forever, firing the
   // job every second for as long as that event existed.
@@ -97,14 +101,22 @@ test('the next-mark query looks past the window, not into it', () => {
 });
 
 test('the next-mark query takes the soonest event, not an arbitrary one', () => {
-  const body = fnBody('async function nextEventReminderDueAt');
+  /* `nextDueAt`, not `nextEventReminderDueAt`. The query was parameterised by
+     offset when the single T-24h mark became three; the named function is now a
+     one-line wrapper around it, and pinning these assertions to the wrapper
+     would check a call site instead of the query they are about. */
+  const body = fnBody('async function nextDueAt');
   assert.match(body, /\.order\('event_date', \{ ascending: true \}\)/,
     'without an ascending sort, .limit(1) returns whichever row Postgres felt like');
   assert.match(body, /\.limit\(1\)/);
 });
 
 test('the alarm only considers events that can actually send', () => {
-  const body = fnBody('async function nextEventReminderDueAt');
+  /* `nextDueAt`, not `nextEventReminderDueAt`. The query was parameterised by
+     offset when the single T-24h mark became three; the named function is now a
+     one-line wrapper around it, and pinning these assertions to the wrapper
+     would check a call site instead of the query they are about. */
+  const body = fnBody('async function nextDueAt');
   // A draft or unpaid event is skipped by jobEventReminders. If the alarm armed
   // for one, it would wake on the mark, send nothing, and the real next event
   // would still be waiting — the alarm and the job must agree on the audience.
@@ -131,24 +143,38 @@ test('the guest fetch is bounded so one event cannot exhaust memory', () => {
 
 /* ── Rescheduling ────────────────────────────────────────────────────────── */
 
-test('the dedupe key names the date it is about, on BOTH channels', () => {
-  const body = fnBody('async function jobEventReminders');
+test('the dedupe key names the date it is about, on ALL THREE marks', () => {
+  /* `rsvp:<party>` alone reads as "this guest has been reminded, ever". With a
+     UNIQUE (kind, ref) index behind it, that made the FIRST reminder the only
+     one a guest could ever receive — so moving an event that had already
+     crossed its mark told nobody about the new date.
 
-  // `rsvp:<party>` alone reads as "this guest has been reminded, ever". With a
-  // UNIQUE (kind, ref) index behind it, that made the FIRST reminder the only
-  // one a guest could ever receive — so moving an event that had already
-  // crossed its 24h mark told nobody about the new date.
-  assert.match(body, /ref: `rsvp:\$\{party\.id\}:\$\{dateKey\}`/,
-    'the email ref must carry the target instant');
-  assert.match(body, /ref: `evday:\$\{party\.id\}:\$\{dateKey\}`/,
-    'the text ref must carry it too — one channel moving without the other splits the guest list');
+     The three refs used to sit in one function. They are now in three, and all
+     three still have to carry the instant: an organizer who reschedules and
+     gets one channel resent but not another has half their guest list told,
+     split by which message each person happens to read. */
+  assert.match(fnBody('async function jobEventReminders'), /ref: `rsvp:\$\{party\.id\}:\$\{dateKey\}`/,
+    'the T-24h email ref must carry the target instant');
+  assert.match(fnBody('async function jobFinalCallReminders'), /ref: `fc:\$\{party\.id\}:\$\{dateKey\}`/,
+    'the T-6h email ref must carry the target instant');
+  assert.match(fnBody('async function jobSmsEventReminders'), /ref: `evday:\$\{party\.id\}:\$\{dateKey\}`/,
+    'the T-2h text ref must carry it too');
 
-  assert.doesNotMatch(body, /ref: `rsvp:\$\{party\.id\}`/, 'the bare per-party key must not come back');
-  assert.doesNotMatch(body, /ref: `evday:\$\{party\.id\}`/, 'the bare per-party key must not come back');
+  // Three distinct prefixes. Sharing one would collide the marks on the unique
+  // index and silently drop whichever arrived second.
+  const prefixes = ['rsvp', 'fc', 'evday'];
+  assert.equal(new Set(prefixes).size, 3);
+
+  for (const job of ['jobEventReminders', 'jobFinalCallReminders', 'jobSmsEventReminders']) {
+    const body = fnBody(`async function ${job}`);
+    assert.doesNotMatch(body, /ref: `(rsvp|fc|evday):\$\{party\.id\}`/,
+      `${job}: the bare per-party key must not come back`);
+  }
 });
 
 test('the date key is an instant, not its text', () => {
-  const body = fnBody('async function jobEventReminders');
+  // Computed once in the shared sweep the three jobs run through.
+  const body = fnBody('async function sweepRunUpWindow');
   // Postgres returns "…+00:00" and other paths produce "…000Z" for the same
   // moment. A string key would read those as two different dates and remind
   // every guest twice.
@@ -156,11 +182,13 @@ test('the date key is an instant, not its text', () => {
     'getTime() has exactly one representation; the ISO text does not');
 });
 
-test('the reminder still dedupes against itself on an unchanged date', () => {
-  const body = fnBody('async function jobEventReminders');
+test('the reminders still dedupe against themselves on an unchanged date', () => {
   // The key varies with the DATE, never with the run. Anything per-attempt in
   // there — a timestamp, a counter, a random — would defeat the unique index
   // and re-send on every sweep, which is worse than the bug being fixed.
-  assert.doesNotMatch(body, /ref: `[^`]*Date\.now\(\)/);
-  assert.doesNotMatch(body, /ref: `[^`]*Math\.random/);
+  for (const job of ['jobEventReminders', 'jobFinalCallReminders', 'jobSmsEventReminders']) {
+    const body = fnBody(`async function ${job}`);
+    assert.doesNotMatch(body, /ref: `[^`]*Date\.now\(\)/, `${job} re-sends on every sweep`);
+    assert.doesNotMatch(body, /ref: `[^`]*Math\.random/, `${job} re-sends on every sweep`);
+  }
 });

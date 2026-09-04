@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { setDocDirection } from '../../utils/frameDocument';
 
 /* ═══════════════════════════════════════════════════════════════════════════
    A real viewport for the preview.
@@ -182,11 +183,13 @@ export default function PreviewFrame({
     };
   }, []);
 
-  // The frame document's own direction, not the portal content's: RTL there
-  // is what flips `env(safe-area-inset-*)`-aware and logical-property layout.
+  /* Resolved from `mountNode` (which IS the frame document's body, published
+     by the effect above) rather than from `iframeRef`: the ref can hand back a
+     document the `load` handler is about to discard, whereas `mountNode` only
+     ever names one that has already been set up — and it is the dependency
+     this effect was already declaring. The effect below does the same. */
   useEffect(() => {
-    const doc = iframeRef.current?.contentDocument;
-    if (doc?.documentElement) doc.documentElement.dir = dir;
+    setDocDirection(mountNode, dir);
   }, [dir, mountNode]);
 
   useEffect(() => {

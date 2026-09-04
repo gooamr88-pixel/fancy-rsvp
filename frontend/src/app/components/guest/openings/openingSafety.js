@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 
 /* ═══════════════════════════════════════════════════════════════
    The rungs that stand between a guest and a cover they cannot get past.
@@ -155,15 +155,29 @@ export function watchOpeningVideo(video, { revealAt, onStart, onReveal, onFallba
  * tap indefinitely — hence the unconditional arm.
  */
 export function useMediaReadiness(mediaRef, { enabled = true, timings = OPENING_TIMINGS } = {}) {
-  const [ready, setReady] = useState(false);
+  const [armed, setArmed] = useState(false);
+
+  /* DISABLED MEANS READY, and it did not used to — this hook returned false
+     forever when `enabled` was false, while useImageReadiness below (which
+     documents itself as keeping this contract exactly) returned true.
+     Every caller passes `enabled: !reduceMotion`, so on Velvet Ring and Swan
+     Lake a guest with reduced motion turned on sat in front of a cover whose
+     hint read "Loading…" permanently — under a cover that was, in fact,
+     tappable the whole time, because `open()` skips the readiness check on
+     that path. Derived here rather than pushed in by the effect so it is true
+     on the FIRST render, with no frame of "Loading…" before it. */
+  const ready = armed || !enabled;
 
   useEffect(() => {
     if (!enabled) return undefined;
-    const el = mediaRef.current;
-    if (!el) { setReady(true); return undefined; }
 
     let settled = false;
-    const arm = () => { if (!settled) { settled = true; setReady(true); } };
+    const arm = () => { if (!settled) { settled = true; setArmed(true); } };
+
+    const el = mediaRef.current;
+    // No element to listen to — the same unconditional arm as everything
+    // below, for the same reason: a tap that does nothing is worse.
+    if (!el) { arm(); return undefined; }
 
     // Kick the fetch immediately rather than waiting for the first tap —
     // this buys the whole time the guest spends reading the cover.
@@ -210,13 +224,19 @@ export function useMediaReadiness(mediaRef, { enabled = true, timings = OPENING_
  * @param {{enabled?: boolean, timings?: object}} [options]
  */
 export function useImageReadiness(src, { enabled = true, timings = OPENING_TIMINGS } = {}) {
-  const [ready, setReady] = useState(false);
+  const [armed, setArmed] = useState(false);
+
+  /* "Nothing to wait for" is answered from the arguments during the render
+     that asks, not by an effect that flips a flag afterwards — same as
+     useMediaReadiness above. It used to cost one frame of "Loading…" on a
+     cover that was ready from the start. */
+  const ready = armed || !enabled || !src;
 
   useEffect(() => {
-    if (!enabled || !src) { setReady(true); return undefined; }
+    if (!enabled || !src) return undefined;
 
     let settled = false;
-    const arm = () => { if (!settled) { settled = true; setReady(true); } };
+    const arm = () => { if (!settled) { settled = true; setArmed(true); } };
 
     const img = new Image();
     /* An error arms too, deliberately. A 404'd sprite means the guest is
@@ -258,6 +278,20 @@ export function useScrollLock(active) {
   }, [active]);
 }
 
+/* Nothing writes this store from outside the opening that owns it, so there is
+   no change to publish. Module-level so the identity is stable — a new
+   function here on every render would make useSyncExternalStore resubscribe. */
+const NO_SUBSCRIBERS = () => () => {};
+
+const readOpeningSeen = (storageKey) => {
+  if (!storageKey) return false;
+  try {
+    return window.sessionStorage.getItem(storageKey) === '1';
+  } catch {
+    return false; // private mode — replay
+  }
+};
+
 /**
  * Remembers that this guest has already seen the opening, so a return visit
  * is not made to sit through it again.
@@ -269,29 +303,25 @@ export function useScrollLock(active) {
  */
 export function useOpeningMemory(sessionKey) {
   const storageKey = sessionKey ? `cine-opening:${sessionKey}` : null;
-  const [seen, setSeen] = useState(false);
 
-  // Read after mount, never during render: on the server this is always
-  // false, and a first client render that disagreed would be a hydration
-  // mismatch on the very first thing a guest sees.
-  useEffect(() => {
-    if (!storageKey) return;
-    try {
-      if (window.sessionStorage.getItem(storageKey) === '1') setSeen(true);
-    } catch { /* private mode — replay */ }
-  }, [storageKey]);
+  /* The server snapshot is `false` — that is the whole hydration contract, and
+     stating it here is why this is `useSyncExternalStore` and not a `useState`
+     that an effect corrects after mount. A first client render that disagreed
+     with the server would be a mismatch on the very first thing a guest sees.
 
-  const remember = () => {
+     Nothing subscribes: `remember()` is called from inside the opening the
+     guest is currently watching, and a notification there would be an
+     invitation to re-render mid-animation for a value nothing needs again. */
+  const seen = useSyncExternalStore(
+    NO_SUBSCRIBERS,
+    () => readOpeningSeen(storageKey),
+    () => false,
+  );
+
+  const remember = useCallback(() => {
     if (!storageKey) return;
     try { window.sessionStorage.setItem(storageKey, '1'); } catch { /* private mode */ }
-  };
+  }, [storageKey]);
 
   return [seen, remember];
-}
-
-/** Stable ref to the latest value — lets long-lived timers read fresh props. */
-export function useLatest(value) {
-  const ref = useRef(value);
-  ref.current = value;
-  return ref;
 }

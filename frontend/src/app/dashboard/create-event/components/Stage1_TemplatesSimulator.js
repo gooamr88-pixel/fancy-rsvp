@@ -381,9 +381,17 @@ export default function Stage1_TemplatesSimulator({
      one (Velvet Ring is engagements only). */
   const policy = occasionPolicyFor(templateType);
   const [previewOccasion, setPreviewOccasion] = useState(policy.occasion);
-  useEffect(() => {
-    setPreviewOccasion(occasionPolicyFor(templateType).occasion);
-  }, [templateType]);
+
+  /* Reset DURING the render that changes the template, not in an effect after
+     it. React's documented shape for "this state derives from a prop until the
+     organizer overrides it" — and here the difference is visible: an effect
+     paints one frame of the new template carrying the OLD template's occasion,
+     which the picker may not even offer (Velvet Ring is engagements only). */
+  const [occasionSetFor, setOccasionSetFor] = useState(templateType);
+  if (occasionSetFor !== templateType) {
+    setOccasionSetFor(templateType);
+    setPreviewOccasion(policy.occasion);
+  }
 
   /* Build props for PhoneSimulator. The Custom template renders the editable
      `custom` pattern driven entirely by the live builder config; the others

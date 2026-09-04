@@ -80,6 +80,15 @@
  * accident.
  */
 
+/* Module scope, and it has to be. `renderSmsBody` reaches for both partway
+   through its body, and a require() inside the function would sit in the
+   temporal dead zone of nothing — but would re-resolve the module on every
+   single send, which on a 2,000-guest campaign is 2,000 cache lookups to fetch
+   two functions that never change. No cycle: smsMergeTags reads the type
+   registry, and the type registry reads nothing from here. */
+const { renderTemplate } = require('./smsSegments');
+const { buildTagValues } = require('../config/smsMergeTags');
+
 const EN = 'en';
 const AR = 'ar';
 
@@ -186,8 +195,7 @@ const TEMPLATES = {
   },
 
   /**
-   * TABLE & ENTRY PASS. Fires twice in an event's life, from the same template:
-   * once when the organizer seats the guest, and again a day or two before.
+   * TABLE & ENTRY PASS. Fires once, two hours before the doors open.
    *
    * Three shapes, because three genuinely different things can be true:
    *   • seated, and the event is imminent  → date + table + pass
@@ -207,11 +215,17 @@ const TEMPLATES = {
      * duplicate and they keep believing the table it was sent to correct.
      *
      * It went when the seating text did. This type now fires from exactly one
-     * place — jobEventReminders, in the 24 hours before the event — and that is
-     * a guest's FIRST and only text about their table, so there is nothing for
-     * it to contradict. A move between now and then is carried by email, which
-     * has its own change wording. Re-adding a `changed` flag here without a
-     * caller that can set it would be dead copy the budget still pays for.
+     * scheduled place — jobSmsEventReminders, two hours before the event — and
+     * that is a guest's FIRST and only text about their table, so there is
+     * nothing for it to contradict. A move between now and then is carried by
+     * email, which has its own change wording. Re-adding a `changed` flag here
+     * without a caller that can set it would be dead copy the budget still pays
+     * for.
+     *
+     * It is also manually sendable (invitationService.MANUAL_SMS_TYPES), and
+     * that does not reintroduce the problem: an organizer pressing send is
+     * choosing to say this again, which is the case the retired wording existed
+     * to handle automatically and badly.
      */
     [EN]: ({ guestName, eventTitle, tableName, ticketUrl, dateLabel }) => {
       const who = clip(guestName, NAME_MAX);
@@ -384,10 +398,40 @@ const TEMPLATES = {
  * That is the correct behaviour and the caller must surface it: a resend of a
  * retired kind has to fail visibly rather than send an empty message. See
  * smsUsage.isResendable, which stops it reaching here at all.
+ *
+ * ── THE ORGANIZER'S OWN WORDING (`override`) ──
+ *
+ * `events.sms_templates[type][lang]`, when they have written one. It takes
+ * precedence over everything above, and the three things it does NOT get to
+ * change are the point of routing it through here rather than letting the
+ * dispatcher concatenate a string:
+ *
+ *  • The compliance footer. Appended by smsDispatch AFTER this returns, to
+ *    every body without exception, so no wording an organizer can type removes
+ *    the STOP/HELP language.
+ *  • The clip ceilings. Interpolated values go through the same `clip` and
+ *    `clipList` caps the built-in bodies use (config/smsMergeTags.buildTagValues
+ *    is handed both). Without that, a custom body would be the one path left
+ *    where a 60-character guest name still doubles the bill for the whole list.
+ *  • The type. An override is per (type, language) — it re-words a message, it
+ *    cannot invent a new one or send it to a different audience.
+ *
+ * An override that is absent, null, or renders to whitespace falls through to
+ * the built-in body. That is deliberate: "I cleared the box" must mean "go back
+ * to yours", not "send my guests an empty text".
  */
-function renderSmsBody(type, lang, context = {}) {
+function renderSmsBody(type, lang, context = {}, { override = null } = {}) {
   const byLang = TEMPLATES[type];
   if (!byLang) return null;
+
+  if (typeof override === 'string' && override.trim()) {
+    const values = buildTagValues(type, context, { clip, clipList });
+    const custom = renderTemplate(override, values);
+    // Whitespace-only after substitution means every tag they used resolved
+    // empty for this guest — a body of ", ." is worse than the built-in one.
+    if (typeof custom === 'string' && custom.trim()) return custom.trim();
+  }
+
   const build = byLang[lang === AR ? AR : EN] || byLang[EN];
   const body = build(context);
   return typeof body === 'string' && body.trim() ? body.trim() : null;

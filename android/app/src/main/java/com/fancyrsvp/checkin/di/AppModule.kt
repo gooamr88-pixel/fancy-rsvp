@@ -9,6 +9,7 @@ import com.fancyrsvp.checkin.data.remote.DeviceHealthInterceptor
 import com.fancyrsvp.checkin.data.remote.Envelope
 import com.fancyrsvp.checkin.data.remote.RefreshRequest
 import com.fancyrsvp.checkin.data.remote.RefreshResponse
+import com.fancyrsvp.checkin.data.remote.UpdateManifestApi
 import com.fancyrsvp.checkin.data.security.SecureStore
 import com.fancyrsvp.checkin.device.DeviceHealthProvider
 import dagger.Module
@@ -223,6 +224,34 @@ object AppModule {
     @Provides
     @Singleton
     fun checkinApi(retrofit: Retrofit): CheckinApi = retrofit.create(CheckinApi::class.java)
+
+    /**
+     * Reads the update manifest — the static JSON published beside the APK.
+     *
+     * On the credential-free [MediaClient], not the API client, for two reasons
+     * that are both about what would otherwise ride along:
+     *
+     *  • DeviceAuthInterceptor decides whether to attach the device token by
+     *    PATH SUFFIX (see its isUnauthenticatedPath). A static file on the web
+     *    server matches nothing it exempts, so this would be the one request in
+     *    the app that sends a device credential outside the API.
+     *  • DeviceHealthInterceptor puts battery, storage and queue-depth headers
+     *    on every request it sees. None of that belongs on a fetch for a file
+     *    the public download page serves to anyone.
+     *
+     * The baseUrl is required by Retrofit and never used — every call passes an
+     * absolute @Url, so a debug build pointed at a laptop still finds the real
+     * published release instead of 404-ing against a dev machine.
+     */
+    @Provides
+    @Singleton
+    fun updateManifestApi(@MediaClient client: OkHttpClient, json: Json): UpdateManifestApi =
+        Retrofit.Builder()
+            .baseUrl(BuildConfig.API_BASE_URL)
+            .client(client)
+            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+            .build()
+            .create(UpdateManifestApi::class.java)
 }
 
 /**

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getEventAnalytics, getMaybeGuests } = require('../controllers/analyticsController');
+const { getEventAnalytics } = require('../controllers/analyticsController');
 
 /**
  * Organizer analytics routes — mounted at /api/v1/events/:eventId/analytics
@@ -10,7 +10,7 @@ const { getEventAnalytics, getMaybeGuests } = require('../controllers/analyticsC
 // Full analytics dashboard data
 router.get('/', getEventAnalytics);
 
-// Maybe-response guests (for follow-up reminders)
-router.get('/maybe-guests', getMaybeGuests);
+// `GET /maybe-guests` was here and is gone — no caller anywhere, no test, no
+// screen. See the note in analyticsController.js.
 
 module.exports = router;

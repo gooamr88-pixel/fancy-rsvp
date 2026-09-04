@@ -3,6 +3,7 @@ package com.fancyrsvp.checkin.ui.guests
 import androidx.lifecycle.ViewModel
 import com.fancyrsvp.checkin.data.local.CheckinDatabase
 import com.fancyrsvp.checkin.data.repo.CheckInRepository
+import com.fancyrsvp.checkin.util.NameNormalizer
 import com.fancyrsvp.checkin.util.safeLaunch
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CoroutineDispatcher
@@ -92,6 +93,31 @@ class GuestListViewModel @Inject constructor(
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
 
+    /**
+     * The name being searched for, exactly as typed.
+     *
+     * ── WHY THE LIST NEEDED THIS ──
+     *
+     * The query asks for [PAGE_LIMIT] rows at offset 0 and the screen has no
+     * paging, so on a 2,000-guest event 1,500 people were not merely hard to
+     * find, they were unreachable — and this list is the ONLY surface in the app
+     * that offers undo, so a supervisor could not reverse anyone whose name
+     * sorted past the cap. The scanner has had a search since the beginning;
+     * this screen never did.
+     */
+    private val _query = MutableStateFlow("")
+    val query: StateFlow<String> = _query.asStateFlow()
+
+    /**
+     * How many guests match the current filters in total.
+     *
+     * Rendered beside the list so a capped page never presents itself as the
+     * whole guest list. Showing 500 of 2,100 and saying nothing is how someone
+     * concludes a guest was never invited.
+     */
+    private val _matchCount = MutableStateFlow(0)
+    val matchCount: StateFlow<Int> = _matchCount.asStateFlow()
+
     private var eventId: String? = null
 
     fun start(eventId: String) {
@@ -112,27 +138,72 @@ class GuestListViewModel @Inject constructor(
         safeLaunch { reload() }
     }
 
+    /**
+     * Search by name.
+     *
+     * Not debounced here on purpose: [reload] is now two queries rather than a
+     * thousand (see below), the database is local, and a debounce is the thing
+     * that makes a list feel laggy on a tablet when the query is already fast.
+     */
+    fun setQuery(text: String) {
+        _query.value = text
+        safeLaunch { reload() }
+    }
+
     private suspend fun reload() {
         val id = eventId ?: return
         _loading.value = true
 
         _rows.value = withContext(io) {
+            val category = if (_filter.value == Filter.VIP) VIP else null
+            val arrivedFilter = when (_filter.value) {
+                Filter.ARRIVED -> 1
+                Filter.NOT_ARRIVED -> 0
+                else -> null
+            }
+            /* Normalised with the SAME normaliser the scanner's manual search
+               uses, because the column it matches is the normalised one. That is
+               what makes أحمد findable by typing احمد, and it keeps the two
+               search surfaces from disagreeing about who exists. Blank means no
+               name filter at all, expressed as null rather than as `%%`. */
+            val needle = NameNormalizer.normalize(_query.value).takeIf { it.isNotBlank() }
+
+            _matchCount.value = db.guestDao().countFilteredGuests(
+                eventId = id,
+                category = category,
+                tableName = _tableFilter.value,
+                arrivedFilter = arrivedFilter,
+                needle = needle,
+            )
+
             val guests = db.guestDao().filteredGuests(
                 eventId = id,
-                category = if (_filter.value == Filter.VIP) VIP else null,
+                category = category,
                 tableName = _tableFilter.value,
-                arrivedFilter = when (_filter.value) {
-                    Filter.ARRIVED -> 1
-                    Filter.NOT_ARRIVED -> 0
-                    else -> null
-                },
+                arrivedFilter = arrivedFilter,
+                needle = needle,
                 limit = PAGE_LIMIT,
                 offset = 0,
             )
 
+            /*
+             * ── TWO QUERIES, NOT TWO PER ROW ──
+             *
+             * This called `partyDao().byId` and `checkInDao().liveRecordFor` once
+             * per guest. At the page limit that is 1,001 round trips to an
+             * SQLCipher database — every one of them decrypting — on every
+             * keystroke, filter tap and undo. It is a visible freeze on a tablet,
+             * and it happens while somebody is waiting at a door.
+             *
+             * The whole party set and the whole live check-in set are small (a
+             * few thousand short rows) and are read once, then indexed in memory.
+             */
+            val partiesById = db.partyDao().forEvent(id).associateBy { it.id }
+            val liveByGuest = db.checkInDao().liveForEvent(id).associateBy { it.guestId }
+
             guests.map { guest ->
-                val party = db.partyDao().byId(guest.partyId)
-                val record = db.checkInDao().liveRecordFor(id, guest.id)
+                val party = partiesById[guest.partyId]
+                val record = liveByGuest[guest.id]
                 Row(
                     guestId = guest.id,
                     fullName = guest.fullName,

@@ -10,6 +10,7 @@ import SeatingResultPanel from './SeatingResultPanel';
 import { getCelebrationPreset } from '../../../utils/patternCelebration';
 import { CelebrateIcon, CalendarIcon, EnvelopeIcon, MapPinIcon } from '../../../components/guest/RsvpIcons';
 import { RsvpDivider } from '../components';
+import CreateYourOwnEvent from '../../../components/guest/CreateYourOwnEvent';
 
 /** A theatrical "materializing" entrance for the pass card — a slight 3D
     tilt-and-land plus a one-shot light sweep, like the card catching the
@@ -321,6 +322,13 @@ export default function StepSuccess({
           </Link>
         </div>
       </FadeInUp>
+
+      {/* LAST on the screen, and after the "return to invitation" link on
+          purpose: the guest's own business with this event is finished by the
+          time they reach it. Renders nothing for a white-labelled event.
+          Shown for a decline as well as an acceptance — somebody who cannot
+          attend has still just seen what the product does. */}
+      <CreateYourOwnEvent event={event} themeColor={themeColor} isRTL={isRTL} />
     </div>
   );
 }

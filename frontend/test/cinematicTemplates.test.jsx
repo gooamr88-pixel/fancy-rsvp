@@ -257,6 +257,21 @@ describe('cinematic openings — reveal contract', () => {
     expect(window.HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
   });
 
+  it('reduced motion invites the tap instead of saying "Loading…" forever', () => {
+    /* The cover was tappable — the test above proves it — and told the guest it
+       was still loading for as long as they looked at it. `useMediaReadiness`
+       is passed `enabled: !reduceMotion`, and disabled used to leave `ready`
+       false permanently, while `open()` skips the readiness check on this
+       path. Both video covers had it; Sealed Letter's `useImageReadiness`
+       never did, which is why it only ever showed on two of the three.
+
+       The assertion the old test was missing is what the guest READS, so that
+       is what this one makes. */
+    reducedMotion = true;
+    render(<VelvetBoxOpening template={RING} names="Aria & Julian" onComplete={vi.fn()} />);
+    expect(screen.getByTestId('cine-opening-hint').textContent).toBe(RING.copy.en.hint);
+  });
+
   it('a sessionKey lets a returning guest straight through', async () => {
     window.sessionStorage.setItem('cine-opening:my-event', '1');
     const onComplete = vi.fn();
@@ -533,7 +548,23 @@ describe('organizer hero-video upload — fully retired', () => {
       });
     }
     const offenders = walk(path.join(process.cwd(), 'src')).filter((file) => {
-      const text = fs.readFileSync(file, 'utf8');
+      /* A file listed by the walk can be GONE by the time it is read.
+         parseCheck.test.js writes src/app/__parsecheck_decoy__.js, runs the
+         checker against it and deletes it in a finally — all while this file
+         runs in a sibling vitest worker over the same tree. Landing in that
+         window threw ENOENT and failed this test on a green codebase, which is
+         precisely the red-on-green flake the comment above this test argues
+         against; it just had a second cause nobody had hit yet.
+         A file that no longer exists cannot be an offender, so it is skipped
+         rather than reported. Only ENOENT is swallowed — a permissions error
+         or a genuinely unreadable file must still fail loudly. */
+      let text;
+      try {
+        text = fs.readFileSync(file, 'utf8');
+      } catch (err) {
+        if (err.code === 'ENOENT') return false;
+        throw err;
+      }
       return /HeroVideoBackground|ha_hero_video_url|heroVideoUploading|HERO_VIDEO_MAX/.test(text);
     });
     expect(offenders.map((f) => path.relative(process.cwd(), f))).toEqual([]);

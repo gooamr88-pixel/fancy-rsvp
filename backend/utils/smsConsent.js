@@ -11,8 +11,32 @@
  * Bump BOTH this constant and SMS_CONSENT_TEXT_VERSION in SmsConsentText.js
  * whenever the consent sentence changes, and archive the old wording in the
  * commit message.
+ *
+ * 2026-09-04: the checkbox became REQUIRED to submit an RSVP, and the
+ * disclosure below it was rewritten because its opening sentence ("SMS consent
+ * is voluntary and is not required to … RSVP …") stopped being true. The label
+ * — what the guest actually agrees to — is unchanged. The full rationale, the
+ * archived previous wording, and the required Twilio re-filing are documented
+ * in SmsConsentText.js; do not restate them here, but do not change this
+ * constant without reading them.
  */
-const SMS_CONSENT_TEXT_VERSION = '2026-08-04';
+const SMS_CONSENT_TEXT_VERSION = '2026-09-04';
+
+/**
+ * The ORGANIZER's own opt-in is a different document and is versioned apart.
+ *
+ * The guest sentence describes invitation links, RSVP confirmations and
+ * reminders. An organizer receives none of those — they get exactly one type, a
+ * headcount summary before their own event (`organizer_report` in
+ * utils/smsTemplates.js). Stamping an organizer's consent with the guest
+ * version recorded agreement to wording that does not describe what they were
+ * signed up for, and re-dated every organizer's consent whenever the guest
+ * sentence changed.
+ *
+ * Mirrors ORGANIZER_SMS_CONSENT_TEXT_VERSION in
+ * frontend/src/app/components/guest/SmsConsentText.js — bump both together.
+ */
+const ORGANIZER_SMS_CONSENT_TEXT_VERSION = '2026-09-01';
 
 // Whitelist of GUEST-facing opt-in surfaces the frontend may report (anything
 // else is coerced to the generic 'guest_form' rather than trusting client
@@ -94,6 +118,7 @@ function logSmsConsentDecision({
 
 module.exports = {
   SMS_CONSENT_TEXT_VERSION,
+  ORGANIZER_SMS_CONSENT_TEXT_VERSION,
   SMS_CONSENT_SOURCES,
   CONSENT_METHOD_GUEST,
   CONSENT_METHOD_HOST,

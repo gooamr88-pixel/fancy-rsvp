@@ -67,7 +67,11 @@ class SessionLockViewModel @Inject constructor(
         // working PIN pad, not a lock screen that took the process down.
         safeLaunch {
             _coverImagePath.value = withContext(io) {
-                db.eventDao().readyEvent()?.coverImagePath
+                // `now` decides which event counts as the imminent one — see
+                // EventDao.readyEvent. Read at call time rather than captured:
+                // this lock screen can be raised days after the ViewModel was
+                // built, on a tablet left on a shelf.
+                db.eventDao().readyEvent(System.currentTimeMillis())?.coverImagePath
             }
         }
     }

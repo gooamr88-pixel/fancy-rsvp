@@ -129,6 +129,21 @@ class SecureStore(context: Context) {
         get() = prefs.getString(KEY_PAIRED_EVENT, null)
         set(value) { prefs.edit().putString(KEY_PAIRED_EVENT, value).apply() }
 
+    /**
+     * The newest build this operator has said "Later" to, or 0 for none.
+     *
+     * Plaintext with the rest of the non-secret metadata: it is a version
+     * number, and hiding it would protect nothing.
+     *
+     * Deliberately NOT cleared by [clearDeviceCredentials]. Unpairing hands the
+     * tablet to another event, not to another world — the build installed on it
+     * is the same one the operator already declined, and asking again the moment
+     * it is re-paired would make "Later" mean nothing.
+     */
+    var dismissedUpdateVersionCode: Long
+        get() = prefs.getLong(KEY_DISMISSED_UPDATE, 0L)
+        set(value) { prefs.edit().putLong(KEY_DISMISSED_UPDATE, value).apply() }
+
     val isPaired: Boolean get() = accessToken != null && deviceId != null
 
     /**
@@ -179,5 +194,6 @@ class SecureStore(context: Context) {
         const val KEY_DEVICE_LABEL = "device_label"
         const val KEY_PAIRED_EVENT = "paired_event_id"
         const val KEY_DB_PASSPHRASE = "db_passphrase"
+        const val KEY_DISMISSED_UPDATE = "dismissed_update_version_code"
     }
 }

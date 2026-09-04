@@ -28,13 +28,50 @@ const { supabase } = require('../config/supabase');
 const tokenService = require('./tokenService');
 const deviceService = require('./checkinDeviceService');
 const logger = require('../utils/logger');
-const { formatCompanionMealCounts } = require('./guestService');
 
 /** Max records accepted in one batch. A device draining 500 sends 5 requests. */
 const MAX_BATCH = 100;
 
 /** Bundle page size. Tuned so a 2000-guest event is 4 requests, not 40. */
 const BUNDLE_PAGE_SIZE = 500;
+
+/** Rows per round trip when reading a whole set. Matches PostgREST's own default. */
+const READ_ALL_CHUNK = 1000;
+
+/** Hard stop, so a runaway query cannot hold a connection indefinitely. */
+const READ_ALL_CAP = 50_000;
+
+/**
+ * Reads an entire result set, in chunks.
+ *
+ * ── WHY NOT JUST SELECT IT ──
+ *
+ * PostgREST applies a server-side row ceiling (`db-max-rows`). When a query
+ * exceeds it the response is TRUNCATED and successful — no error, no flag the
+ * client sees. The bundle manifest read the full guest list and the full set of
+ * existing arrivals with no range at all, so on a large event it could silently
+ * publish a short list: `recordCount` would then disagree with what the paged
+ * bundle actually contains, and the seeded arrivals a device uses for its
+ * duplicate guard would be incomplete. A tablet would admit an already-arrived
+ * guest with no warning — the exact failure that seeding exists to prevent.
+ *
+ * @param build called once per chunk; must return a FRESH query builder, since
+ *   a Supabase builder cannot be awaited twice.
+ */
+async function readAll(build, { chunk = READ_ALL_CHUNK, cap = READ_ALL_CAP } = {}) {
+  const rows = [];
+  for (let from = 0; from < cap; from += chunk) {
+    const { data, error } = await build().range(from, from + chunk - 1);
+    if (error) throw error;
+    const page = data || [];
+    rows.push(...page);
+    // A short page means the set is exhausted. Equality would loop one extra
+    // time on an exact multiple, which is correct but wasteful.
+    if (page.length < chunk) return rows;
+  }
+  logger.warn({ cap }, '[checkinSync] readAll hit its cap — the set is larger than this bundle supports');
+  return rows;
+}
 
 /**
  * Returns an absolute HTTPS URL, or null for anything else.
@@ -407,40 +444,115 @@ async function undoCheckIn(eventId, clientCheckinId, {
  * `truncated` tells the device to immediately fetch again from the returned
  * `max_seq` rather than assuming it is caught up.
  */
+const DELTA_COLUMNS = 'id, guest_id, party_id, checked_in_at, method, server_seq, undo_seq, '
+  + 'deleted_at, staff_display_name, device_label, token_verified';
+
 async function getDelta(eventId, sinceSeq, { limit = 500, excludeDeviceId = null } = {}) {
   const since = Number.isFinite(Number(sinceSeq)) ? Math.max(Number(sinceSeq), 0) : 0;
 
-  let query = supabase
-    .from('check_ins')
-    .select('id, guest_id, party_id, checked_in_at, method, server_seq, undo_seq, deleted_at, staff_display_name, device_label, token_verified')
-    .eq('event_id', eventId)
-    .or(`server_seq.gt.${since},undo_seq.gt.${since}`);
+  /*
+   * ── ONE QUERY PER SEQUENCE COLUMN, MERGED HERE ──
+   *
+   * This was a single `.or(server_seq.gt.N,undo_seq.gt.N)` ordered by
+   * `server_seq`, and that ordering is wrong for a row that has been undone: it
+   * occupies the stream at its `undo_seq`, which can be far above its
+   * `server_seq`. Ordering the union by `server_seq` therefore does not order it
+   * by stream position at all, and a truncated page could not be given an
+   * honest watermark.
+   *
+   * Each branch IS correctly ordered by its own position, so they are fetched
+   * separately and merged. Both are index-backed — idx_check_ins_event_seq and
+   * idx_check_ins_event_undo_seq exist precisely because a delta is two branches
+   * (see 20260814000000) — and neither could use its index through the `.or()`
+   * anyway, so this is also the cheaper shape.
+   */
+  const branch = (column) => {
+    let q = supabase
+      .from('check_ins')
+      .select(DELTA_COLUMNS)
+      .eq('event_id', eventId)
+      .gt(column, since);
 
-  // Used only by the inline delta: a device does not need its own writes read
-  // back to it on the response that carried them up. During a rush that is most
-  // of the payload, on the connection least able to spare it.
-  //
-  // Expressed as an OR rather than .neq: SQL inequality against NULL is NULL,
-  // not true, so a plain .neq would also drop every web-kiosk check-in — those
-  // rows have no device_id — and silently starve devices of arrivals recorded at
-  // the desk. maxSeq is unaffected either way; it comes from the event cursor,
-  // so the watermark still advances past the rows skipped here.
-  if (excludeDeviceId) {
-    query = query.or(`device_id.is.null,device_id.neq.${excludeDeviceId}`);
-  }
+    // Used only by the inline delta: a device does not need its own writes read
+    // back to it on the response that carried them up. During a rush that is most
+    // of the payload, on the connection least able to spare it.
+    //
+    // Expressed as an OR rather than .neq: SQL inequality against NULL is NULL,
+    // not true, so a plain .neq would also drop every web-kiosk check-in — those
+    // rows have no device_id — and silently starve devices of arrivals recorded at
+    // the desk.
+    if (excludeDeviceId) {
+      q = q.or(`device_id.is.null,device_id.neq.${excludeDeviceId}`);
+    }
+    return q.order(column, { ascending: true }).limit(limit + 1);
+  };
 
-  const { data, error } = await query
-    .order('server_seq', { ascending: true })
-    .limit(limit + 1);
-  if (error) throw error;
+  const [created, undone] = await Promise.all([branch('server_seq'), branch('undo_seq')]);
+  if (created.error) throw created.error;
+  if (undone.error) throw undone.error;
 
-  const rows = data || [];
-  const truncated = rows.length > limit;
-  const page = truncated ? rows.slice(0, limit) : rows;
+  /** Where a row sits in the stream for THIS delta. */
+  const positionOf = (r) => (r.deleted_at ? (r.undo_seq ?? r.server_seq) : r.server_seq) ?? 0;
+
+  // A row can appear in both branches (created and undone since `since`). It is
+  // one event in the stream — the undo — so the undone branch wins.
+  const byId = new Map();
+  for (const r of created.data || []) if (!r.deleted_at) byId.set(r.id, r);
+  for (const r of undone.data || []) byId.set(r.id, r);
+
+  const merged = [...byId.values()].sort((a, b) => positionOf(a) - positionOf(b));
+
+  /*
+   * ── TRUNCATION IS A PROPERTY OF THE BRANCHES, NOT OF THE MERGE ──
+   *
+   * `merged.length > limit` alone is not enough, because a row can be returned
+   * by a branch and then drop out of the merge: a row with `deleted_at` set but
+   * `undo_seq` NULL — every reversal written by the old direct-UPDATE dashboard
+   * path, before 20260831000000 — is skipped by the `!r.deleted_at` filter above
+   * and cannot appear in the undo branch either, since `.gt` excludes NULL.
+   *
+   * With enough of those in one window, a branch could come back capped while
+   * the merge stayed under the limit. `truncated` would read false, the device
+   * would take the event cursor as its watermark, and it would jump past every
+   * row the cap had cut off — which is the exact bug this function was rewritten
+   * to fix, reintroduced through a side door.
+   *
+   * So a capped branch means truncated, whatever the merge came to. The cost of
+   * being wrong in this direction is one extra empty round trip; the cost of
+   * being wrong the other way is silently losing arrivals.
+   */
+  const branchCapped = (created.data || []).length > limit || (undone.data || []).length > limit;
+  const truncated = branchCapped || merged.length > limit;
+  const page = merged.length > limit ? merged.slice(0, limit) : merged;
 
   const { data: cursor } = await supabase
     .from('event_checkin_cursors').select('last_seq').eq('event_id', eventId).maybeSingle();
   const bundleVersion = await getBundleVersion(eventId);
+
+  /*
+   * ── THE WATERMARK, AND THE BUG IT FIXES ──
+   *
+   * This used to return the event cursor unconditionally — the highest number
+   * ever allocated — even when the page was truncated. The device applies what
+   * it received and then does `advanceAppliedSeq(maxSeq)`, so it jumped its
+   * cursor PAST every row that did not fit, then followed the `truncated` flag
+   * and was handed nothing. Those changes were never delivered to it again.
+   *
+   * A tablet offline across more than one page of activity therefore came back
+   * permanently short, with nothing anywhere indicating it. On a truncated page
+   * the watermark must be the position of the last row actually SENT: the merge
+   * above is ordered by stream position, so everything at or below it has been
+   * delivered, and the next fetch resumes exactly there.
+   *
+   * `page.length` is checked rather than assumed: a truncated response with an
+   * empty page would otherwise read `page[-1]` and throw. It should not be
+   * reachable — a capped branch always contributes at least its undeleted rows —
+   * but this runs on the path a tablet depends on, and `since` is the correct
+   * answer if it ever is: stay where we are and fetch again.
+   */
+  const maxSeq = truncated
+    ? Math.max(page.length ? positionOf(page[page.length - 1]) : since, since)
+    : (cursor?.last_seq ?? 0);
 
   return {
     changes: page.map((r) => ({
@@ -451,12 +563,12 @@ async function getDelta(eventId, sinceSeq, { limit = 500, excludeDeviceId = null
       checkedInAt: r.checked_in_at,
       method: r.method,
       // The position this row occupies in the stream for THIS delta.
-      serverSeq: r.deleted_at ? (r.undo_seq ?? r.server_seq) : r.server_seq,
+      serverSeq: positionOf(r),
       staffName: r.staff_display_name,
       deviceLabel: r.device_label,
       tokenVerified: r.token_verified,
     })),
-    maxSeq: cursor?.last_seq ?? 0,
+    maxSeq,
     bundleVersion,
     truncated,
   };
@@ -718,7 +830,7 @@ async function getBundlePage(eventId, { page = 1, limit = BUNDLE_PAGE_SIZE } = {
     .from('guests')
     .select(`
       id, party_id, full_name, category, meal_selection, dietary_notes, is_primary_contact,
-      rsvp_parties!inner(id, label, response, notes, side, companion_meal_counts,
+      rsvp_parties!inner(id, label, response, notes, side,
                          seating_assignments(tables(id, table_name, element_type)))
     `, { count: 'exact' })
     .eq('event_id', eventId)
@@ -748,18 +860,23 @@ async function getBundlePage(eventId, { page = 1, limit = BUNDLE_PAGE_SIZE } = {
       dietaryNotes: g.dietary_notes || null,
       partyNotes: party.notes || null,
       side: party.side || null,
-      // Party-level, not this guest's own choice: companions are names only, so
-      // their meals are a tally for the group. `mealSelection` above stays the
-      // named pick (in practice the primary contact's) and is null for a
-      // companion — which is accurate, not missing data. Sent as a ready string
-      // because it is displayed verbatim, and because a new String? field costs
-      // the Android side nothing while a Map would need a new serializable type.
-      //
-      // Safe to add: the bundle hash canonicalizes only [id, partyId, fullName,
-      // tableName, category] (canonicalizeGuests), and the app's Json is
-      // configured ignoreUnknownKeys precisely so the backend can add a field
-      // without breaking a tablet that has been offline for a week (AppModule.kt).
-      partyMealSummary: formatCompanionMealCounts(party.companion_meal_counts) || null,
+      /*
+       * `partyMealSummary` WAS sent here and is gone.
+       *
+       * Its comment said it "is displayed verbatim". It was not displayed at
+       * all: `BundleGuestDto` (android/…/data/remote/ApiModels.kt) has no such
+       * field and never did, and the app's Json is configured
+       * `ignoreUnknownKeys`, so every bundle page carried a computed string that
+       * was parsed and dropped on arrival — silently, for every guest, on the
+       * one connection at a venue least able to spare the bytes.
+       *
+       * The guest-delta path never sent it either (checkin_guest_delta builds
+       * its own object), so even a consumer would have seen it blank itself the
+       * first time an organizer edited anything mid-event.
+       *
+       * It remains in checkinReportService, where it IS read — the attendance
+       * export renders it per party.
+       */
     };
   });
 
@@ -792,14 +909,18 @@ async function getBundleManifest(eventId) {
     throw err;
   }
 
-  // The hash must cover every guest, so this reads the whole set once. At the
-  // realistic ceiling (a few thousand) that is a single cheap query; §21.10
-  // explicitly rejects designing for 100k.
-  const { data: allGuests, error: guestErr } = await supabase
+  // The hash must cover EVERY guest, so this reads the whole set — in chunks,
+  // because an unranged select is silently capped by PostgREST and a short read
+  // here produces a manifest whose recordCount disagrees with the bundle the
+  // device then downloads (see readAll).
+  //
+  // Ordered by id so the chunks tile the set exactly once; without an explicit
+  // order, paging over an unordered result may repeat or skip rows.
+  const allGuests = await readAll(() => supabase
     .from('guests')
     .select('id, party_id, full_name, category, rsvp_parties!inner(seating_assignments(tables(table_name, element_type)))')
-    .eq('event_id', eventId);
-  if (guestErr) throw guestErr;
+    .eq('event_id', eventId)
+    .order('id', { ascending: true }));
 
   const flat = (allGuests || []).map((g) => {
     const sa = Array.isArray(g.rsvp_parties?.seating_assignments)
@@ -815,7 +936,9 @@ async function getBundleManifest(eventId) {
     };
   });
 
-  const [{ data: cursor }, { data: staff }, { data: tables }, { data: existingCheckIns }, bundleVersion] = await Promise.all([
+  // `existingCheckIns` is a plain array (readAll resolves the rows), the others
+  // are Supabase results that still carry a `data` envelope.
+  const [{ data: cursor }, { data: staff }, { data: tables }, existingCheckIns, bundleVersion] = await Promise.all([
     supabase.from('event_checkin_cursors').select('last_seq').eq('event_id', eventId).maybeSingle(),
     supabase.from('event_staff').select('id, display_name, role, pin_hash').eq('event_id', eventId).eq('is_active', true),
     /*
@@ -860,7 +983,11 @@ async function getBundleManifest(eventId) {
     // already recorded"). Without these a freshly-armed device does not know
     // who came in through the web kiosk before it existed, and would admit an
     // already-arrived guest with no duplicate warning at all.
-    supabase
+    //
+    // Read in chunks for that same reason: a device armed mid-event on a large
+    // guest list must receive ALL of them, and a silently capped read hands it a
+    // partial duplicate guard — which looks exactly like a working one.
+    readAll(() => supabase
       .from('check_ins')
       // `id` is the row's SERVER id, and it is what makes these reversible from
       // a tablet. A seeded arrival is reconstructed locally under an invented
@@ -868,7 +995,8 @@ async function getBundleManifest(eventId) {
       // one travels with it — see checkin_undo_by_ref.
       .select('id, guest_id, party_id, checked_in_at, method, server_seq, staff_display_name, device_label')
       .eq('event_id', eventId)
-      .is('deleted_at', null),
+      .is('deleted_at', null)
+      .order('id', { ascending: true })),
     getBundleVersion(eventId),
   ]);
 

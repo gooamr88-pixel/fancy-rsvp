@@ -38,10 +38,25 @@ const gateSmsChannel = (req, res, next) => {
   return requireSmsAddon(req, res, (err) => (err ? next(err) : requireSendLimit(req, res, next)));
 };
 
+/**
+ * The manually-sendable message types, read from the service rather than listed
+ * here.
+ *
+ * A validator with its own copy of this list fails in one of two ways, and the
+ * second is expensive: reject a type the service supports and the button returns
+ * a 400 nobody can explain; ACCEPT one it does not — `organizer_report` is the
+ * live example — and the request reaches a path that resolves its recipient from
+ * `organizations.sms_phone`, texting the organizer once per selected guest and
+ * billing every one.
+ */
+const MANUAL_SMS_TYPE_KEYS = Object.keys(require('../services/invitationService').MANUAL_SMS_TYPES);
+
 // Unified dispatch (email / sms / qr / detail-sms) — one endpoint, one response shape.
 router.post('/send', [
   body('channel').isIn(['email', 'sms', 'qr', 'detail-sms'])
     .withMessage('channel must be one of: email, sms, qr, detail-sms.'),
+  body('smsType').optional().isIn(MANUAL_SMS_TYPE_KEYS)
+    .withMessage(`smsType must be one of: ${MANUAL_SMS_TYPE_KEYS.join(', ')}.`),
   body('partyIds').optional().isArray({ max: 5000 }).withMessage('partyIds must be an array of at most 5000 guests.'),
   body('partyIds.*').optional().isUUID().withMessage('Each guest id must be a valid UUID.'),
   body('resend').optional().isBoolean().withMessage('resend must be a boolean.'),

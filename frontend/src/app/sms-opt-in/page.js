@@ -217,23 +217,29 @@ export default function SmsOptInPage() {
             <ol style={{ fontFamily: SANS, fontSize: "15px", color: BODY, lineHeight: 2, margin: "0 0 14px", paddingLeft: "20px" }}>
               <li>A guest opens their event’s public RSVP form (no account or login required).</li>
               <li>
-                The phone-number field is <strong style={{ color: INK }}>optional</strong> and is labelled as
-                such. A guest can complete their RSVP, be counted as attending, and come to the event without
-                ever entering a number — no part of the form requires one, and nothing is withheld from a guest
-                who leaves it blank.
+                A guest who <strong style={{ color: INK }}>declines</strong> is asked for neither a number nor
+                consent — neither field is shown to them, and neither is required to submit. We send no
+                messages at all to a guest who is not attending, so there is nothing for them to consent to.
               </li>
               <li>
-                Only if a guest chooses to enter a number does an{" "}
-                <strong style={{ color: INK }}>unchecked</strong> consent checkbox appear, with the exact
-                language shown below. It is never pre-checked, and never checked on the guest’s behalf. A guest
-                who gives no number is never shown it and is never asked about text messages at all.
+                A guest who <strong style={{ color: INK }}>accepts</strong> is asked for a mobile number and
+                shown an <strong style={{ color: INK }}>unchecked</strong> consent checkbox carrying the exact
+                language below. Directly above it the form states why the number is needed: the host sends that
+                guest their table assignment and entry pass by text, and uses the same channel to reach them if
+                the date or venue changes.
               </li>
               <li>
-                Ticking the box is <strong style={{ color: INK }}>entirely optional</strong>. A guest can leave
-                it unticked, submit the RSVP, and attend the event exactly as before — the form is accepted
-                either way. SMS opt-in is never a condition of responding, of attending, or of any purchase.
-                Because the number itself is optional too, a guest can stay outside the messaging programme
-                completely and still use every part of the service.
+                The checkbox is <strong style={{ color: INK }}>never pre-checked</strong> and is never ticked
+                on the guest’s behalf. Consent is never inferred from a guest providing a number, and it is
+                never collected by any other control, button, or agreement on the page.
+              </li>
+              <li>
+                For an accepting guest, both the number and the checkbox are{" "}
+                <strong style={{ color: INK }}>required to submit this form</strong>, and the form says so
+                before it is submitted. A guest who wishes to attend but not to receive text messages can ask
+                their host to add them to the guest list directly instead, without providing a number — and any
+                guest who has opted in can end all messages immediately by replying STOP, which never affects
+                their RSVP, their seat, or their attendance.
               </li>
               <li>
                 The guest’s choice is stored as a timestamped record tied to their response, alongside an
@@ -302,18 +308,29 @@ export default function SmsOptInPage() {
               Written for Twilio rejection code 30475 ("Consent for Messaging
               Cannot Be Part of Other Agreements"). Mirrors the notice rendered
               under every consent checkbox by SmsConsentIndependence — if that
-              component's wording changes, change this with it. */}
+              component's wording changes, change this with it.
+
+              REWRITTEN 2026-09-04, when the RSVP form's consent checkbox became
+              required to submit. This page is the disclosure a reviewer reads
+              ALONGSIDE that form, so every claim on it has to survive being
+              checked against the live page. Three sentences were removed
+              outright because they became false — "not required to … RSVP",
+              "never a condition of … submitting an RSVP", and "never bundled
+              into a submit action". What remains is the part that is still
+              true, stated plainly, plus an explicit description of what the
+              form now does. Do not restore the old wording without also
+              reverting the required checkbox. */}
           <div style={{ marginBottom: "44px" }}>
             <SectionTitle>SMS Consent Is Separate From Every Other Agreement</SectionTitle>
             <Card style={{ background: "#FCFAF5" }}>
               <P>
                 <strong style={{ color: INK }}>
-                  SMS consent is voluntary and is not required to register, RSVP, attend an event, or use
-                  FancyRSVP.
+                  SMS consent is collected by a single dedicated checkbox that asks about text messaging and
+                  nothing else.
                 </strong>{" "}
-                It is collected by a single dedicated checkbox that asks about text messaging and nothing else.
                 Ticking it agrees to receive texts — it does not accept our Terms of Service, our Privacy
-                Policy, or any other agreement, and no other agreement collects it on our behalf.
+                Policy, or any other agreement, and no other agreement collects it on our behalf. It is never
+                pre-checked, and it is never inferred from a guest simply providing a phone number.
               </P>
               <P>
                 A guest&rsquo;s decision about text messages is completely independent from acceptance of our
@@ -321,11 +338,22 @@ export default function SmsOptInPage() {
                 it, and accepting either has no effect on whether a guest receives texts. Equally, a guest who
                 opts in to texts is not required to accept either document.
               </P>
+              <P>
+                <strong style={{ color: INK }}>Where consent is required:</strong> when a guest{" "}
+                <strong style={{ color: INK }}>accepts</strong> an invitation through a host&rsquo;s RSVP form,
+                a mobile number and this checkbox are required to submit that form. The host uses text messages
+                to deliver that guest&rsquo;s table assignment and entry pass and to reach them if the date or
+                venue changes, and the form states this directly above the checkbox. A guest who{" "}
+                <strong style={{ color: INK }}>declines</strong> is asked for neither, and is shown neither,
+                because no message is ever sent to a guest who is not attending. A guest who wishes to attend
+                but not to receive texts can ask their host to be added to the guest list directly, without
+                providing a number.
+              </P>
               <P style={{ marginBottom: 0 }}>
-                Consent is never a condition of any purchase, of creating an account, of submitting an RSVP, or
-                of attending an event, and it is never pre-checked, bundled into a &ldquo;continue&rdquo; or
-                &ldquo;submit&rdquo; action, or inferred from a guest simply providing a phone number.
-                Withdrawing consent by replying STOP never affects a guest&rsquo;s RSVP or their attendance.
+                Opting in on this page is entirely voluntary and is not connected to any RSVP. Wherever consent
+                is given, it can be withdrawn at any moment by replying STOP — which stops every message from
+                every event immediately and permanently, and never affects a guest&rsquo;s RSVP, their seat, or
+                their attendance.
               </P>
             </Card>
           </div>

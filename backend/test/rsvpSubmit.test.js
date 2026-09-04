@@ -64,44 +64,57 @@ test('an additional guest without a name is rejected (400, no RPC)', async () =>
   assert.equal(mock.calls.some(c => c.op === 'rpc'), false);
 });
 
-// ── Conditional phone / SMS consent / email (attending vs decline) ──
+/* ── Phone and SMS consent: BOTH REQUIRED since 2026-09-04 ─────────────────
+ *
+ * These three tests previously asserted the opposite, and the inversion is
+ * deliberate rather than a regression. Between 2026-08-01 and 2026-09-04 a
+ * guest could RSVP with no number and an unticked consent box, so that
+ * "agreeing to receive messages" was genuinely optional under Twilio TFV 30475.
+ * On the product owner's explicit instruction both are now required to submit.
+ *
+ * The full context, the risk, and the required Twilio re-filing live in
+ * frontend/src/app/components/guest/SmsConsentText.js. Read it before inverting
+ * these back.
+ *
+ * What has NOT changed, and what the last test here pins: consent is still
+ * verified at SEND time by smsDispatch's gate chain. A required checkbox is a
+ * collection rule and must never become a substitute for that.
+ */
 
-// Twilio TFV 30475 ("agreeing to receive messages must be optional"). A phone
-// number is the identifier the SMS program runs on, so requiring one to RSVP
-// made the program a condition of registering — a guest had no way to attend
-// while staying out of it entirely. Attending with NO phone must succeed. Do not
-// "restore" a required-phone 400 here.
-test('an attending RSVP with NO phone is accepted (the number is optional)', async () => {
-  rpcResult({ success: true, party_id: 'r1', is_update: false, event_id: 'evt-1', event_title: 'W', response: 'yes', party_size: 1, guest_email: 'a@x.com', notification_preferences: { email: false } });
-  const { res } = await invoke(submitPublicRSVP, mockReq({ params: { slug: 'wedding' }, body: { guestName: 'Alice', response: 'yes', partySize: 1, email: 'a@x.com' } }));
-  assert.equal(res.statusCode, 201);
-  const rpc = mock.calls.find(c => c.op === 'rpc' && c.fn === 'submit_rsvp_v2');
-  assert.ok(rpc, 'the RSVP must be written');
-  assert.equal(rpc.params.p_phone, null, 'no number was given, so none is stored');
-  assert.equal(rpc.params.p_sms_consent, false, 'and no consent is implied by attending');
+test('an attending RSVP with NO phone is rejected (400, no RPC)', async () => {
+  mock.setResolver(() => ({}));
+  const { res } = await invoke(submitPublicRSVP, mockReq({ params: { slug: 'wedding' }, body: { guestName: 'Alice', response: 'yes', partySize: 1, email: 'a@x.com', smsConsent: true } }));
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.body.error, 'VALIDATION_ERROR');
+  assert.equal(mock.calls.some(c => c.op === 'rpc'), false, 'nothing may be written without a number');
 });
 
 test('a malformed phone is still rejected when one IS supplied (400, no RPC)', async () => {
   mock.setResolver(() => ({}));
-  const { res } = await invoke(submitPublicRSVP, mockReq({ params: { slug: 'wedding' }, body: { guestName: 'Alice', response: 'yes', partySize: 1, email: 'a@x.com', phone: 'not-a-number' } }));
+  const { res } = await invoke(submitPublicRSVP, mockReq({ params: { slug: 'wedding' }, body: { guestName: 'Alice', response: 'yes', partySize: 1, email: 'a@x.com', phone: 'not-a-number', smsConsent: true } }));
   assert.equal(res.statusCode, 400);
   assert.equal(res.body.error, 'VALIDATION_ERROR');
   assert.equal(mock.calls.some(c => c.op === 'rpc'), false);
 });
 
-// Twilio TFV / TCPA: SMS consent must be INDEPENDENT of the RSVP. This endpoint
-// used to reject a phone number supplied without consent, which — since a phone
-// is mandatory for attendees — made opting in to SMS a precondition of
-// attending. It must now accept the submission and record the refusal, which
-// smsDispatch.fetchRecipients enforces as a send-time exclusion. Do not
-// "restore" a 400 here.
-test('a supplied phone with SMS consent REFUSED is accepted, and the refusal is recorded', async () => {
-  rpcResult({ success: true, party_id: 'r1', is_update: false, event_id: 'evt-1', event_title: 'W', response: 'yes', party_size: 1, guest_email: 'a@x.com', notification_preferences: { email: false } });
+test('a phone with SMS consent REFUSED is rejected (400 SMS_CONSENT_REQUIRED, no RPC)', async () => {
+  mock.setResolver(() => ({}));
   const { res } = await invoke(submitPublicRSVP, mockReq({ params: { slug: 'wedding' }, body: { guestName: 'Alice', response: 'yes', partySize: 1, email: 'a@x.com', phone: '+15551234567', smsConsent: false } }));
-  assert.equal(res.statusCode, 201);
-  const rpc = mock.calls.find(c => c.op === 'rpc' && c.fn === 'submit_rsvp_v2');
-  assert.ok(rpc, 'submit_rsvp_v2 must still be called');
-  assert.equal(rpc.params.p_sms_consent, false, 'the refusal must be persisted, not silently dropped');
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.body.error, 'SMS_CONSENT_REQUIRED',
+    'its own error code, so the client can put the message under the checkbox rather than at the top of the form');
+  assert.equal(mock.calls.some(c => c.op === 'rpc'), false);
+});
+
+test('an ABSENT consent field is a refusal, not a pass', async () => {
+  // The case the check exists for: a client that simply omits the key. An
+  // `=== false` test would let this through and write a party the organizer
+  // believes is textable and never can be.
+  mock.setResolver(() => ({}));
+  const { res } = await invoke(submitPublicRSVP, mockReq({ params: { slug: 'wedding' }, body: { guestName: 'Alice', response: 'yes', partySize: 1, email: 'a@x.com', phone: '+15551234567' } }));
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.body.error, 'SMS_CONSENT_REQUIRED');
+  assert.equal(mock.calls.some(c => c.op === 'rpc'), false);
 });
 
 test('a supplied phone WITH SMS consent is accepted and records the opt-in', async () => {
@@ -112,11 +125,57 @@ test('a supplied phone WITH SMS consent is accepted and records the opt-in', asy
   assert.equal(rpc.params.p_sms_consent, true);
 });
 
-test('a decline with no phone/email/consent is accepted (consent only gates a supplied phone)', async () => {
+test('a DECLINE needs neither a number nor consent', async () => {
+  /* THE EXEMPTION, AND WHY IT IS NOT A LOOPHOLE.
+   *
+   * A guest who says no receives no table, no entry pass and no transactional
+   * message of any kind. Requiring consent from them would be a demand with no
+   * purpose, sitting under a disclosure that describes messages they will never
+   * get — and it would undercut the one argument that justifies requiring
+   * consent at all: that every message is transactional about an event the
+   * recipient chose to attend. */
   rpcResult({ success: true, party_id: 'r1', is_update: false, event_id: 'evt-1', event_title: 'W', response: 'no', party_size: 1, guest_email: null, notification_preferences: { email: false } });
   const { res } = await invoke(submitPublicRSVP, mockReq({ params: { slug: 'wedding' }, body: { guestName: 'Alice', response: 'no' } }));
   assert.equal(res.statusCode, 201);
-  assert.equal(mock.calls.some(c => c.op === 'rpc' && c.fn === 'submit_rsvp_v2'), true);
+  const rpc = mock.calls.find(c => c.op === 'rpc' && c.fn === 'submit_rsvp_v2');
+  assert.ok(rpc, 'the decline must be recorded');
+  assert.equal(rpc.params.p_phone, null, 'no number was given, so none is stored');
+});
+
+test('a decline that DOES volunteer a number still has it format-checked', async () => {
+  // Exempt from being required is not exempt from being valid: a decliner may
+  // leave a number for the host's records, and a malformed one helps nobody.
+  mock.setResolver(() => ({}));
+  const { res } = await invoke(submitPublicRSVP, mockReq({ params: { slug: 'wedding' }, body: { guestName: 'Alice', response: 'no', phone: 'not-a-number' } }));
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.body.error, 'VALIDATION_ERROR');
+  assert.equal(mock.calls.some(c => c.op === 'rpc'), false);
+});
+
+test("'maybe' is NOT exempt — they still get date and venue changes", async () => {
+  /* The exemption is for declines only. A maybe still receives change-of-date
+     and change-of-venue notices, and can convert to a yes and be seated, so the
+     transactional justification holds for them exactly as it does for a yes. */
+  mock.setResolver(() => ({}));
+  const { res } = await invoke(submitPublicRSVP, mockReq({ params: { slug: 'wedding' }, body: { guestName: 'Alice', response: 'maybe', email: 'a@x.com' } }));
+  assert.equal(res.statusCode, 400);
+  assert.equal(mock.calls.some(c => c.op === 'rpc'), false);
+});
+
+test('a required checkbox has NOT replaced the send-time consent gate', () => {
+  /* The regression this guards is subtle and expensive: "consent is required to
+     RSVP, so every party is consented, so the dispatcher can stop checking."
+     It cannot. A guest who replies STOP, or whose consent was revoked because
+     their number changed, is still in the table with sms_consent = true from
+     the day they submitted. */
+  const fs = require('fs');
+  const path = require('path');
+  const dispatch = fs.readFileSync(path.join(__dirname, '..', 'services', 'smsDispatch.js'), 'utf8');
+
+  assert.match(dispatch, /if \(!consented\) return skip\('NO_CONSENT'/,
+    'sendTransactionalSms must still verify consent per message');
+  assert.match(dispatch, /if \(await isOptedOut\(phone\)\) return skip\('OPTED_OUT'/,
+    'a STOP reply must still outrank the stored consent record');
 });
 
 // ── Defense-in-depth: allow_guest_edits (edits disabled at the API layer, not just hidden in the UI) ──

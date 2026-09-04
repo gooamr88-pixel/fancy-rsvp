@@ -311,15 +311,24 @@ test('the seating sweep sends NO text', () => {
   assert.doesNotMatch(body, /seat:\$\{/, 'the seat: SMS idempotency ref should be gone with it');
 });
 
-test('the day-before text still exists, and is the only one left', () => {
-  // Guards the other half: "remove the seating text" must not become "remove
-  // the table text", which would leave guests with no text about their table.
+test('the run-up text still exists, and is the only scheduled one left', () => {
+  /* Guards the other half: "remove the seating text" must not become "remove
+     the table text", which would leave guests with no text about their table.
+
+     It moved from jobEventReminders (T-24h) to jobSmsEventReminders (T-2h) when
+     the run-up reminders were split by channel. The `evday:` prefix stayed — it
+     reads like "event day" and no longer fires on the day before, but it is a
+     database value, not a label: renaming it would re-send this text to every
+     confirmed guest of every event currently in flight, at the organizer's
+     expense, because sms_log's (kind, ref) index would see every new key as
+     unsent. */
   const src = read('services/emailScheduler.js');
-  const start = src.indexOf('async function jobEventReminders');
+  const start = src.indexOf('async function jobSmsEventReminders');
+  assert.notEqual(start, -1, 'the scheduled table text is gone entirely');
   const body = src.slice(start, src.indexOf('\n}', start));
   assert.match(body, /type: 'seating_reminder'/);
   assert.match(body, /ref: `evday:\$\{party\.id\}:\$\{dateKey\}`/,
-    'the day-before ref is evday:<party>:<date>, and it is now the only ref this type uses');
+    'the ref is evday:<party>:<date>, and it is still the only ref this type uses on a schedule');
 });
 
 test('the per-channel move ledger is gone with the text it served', () => {

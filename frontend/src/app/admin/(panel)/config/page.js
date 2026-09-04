@@ -879,8 +879,13 @@ export default function ConfigPage() {
   // Server-computed margin preview. Deliberately not calculated in the browser:
   // a client-side copy of pricing maths is how an admin ends up tuning a margin
   // against numbers that quietly stopped matching what customers are charged.
-  const [smsPreview, setSmsPreview] = useState(null);
-  const [smsPreviewLoading, setSmsPreviewLoading] = useState(false);
+  /* Tagged with the inputs it was priced for. "Recalculating" is then a
+     comparison — these inputs vs. the ones the server last answered — rather
+     than a flag somebody has to remember to raise before the debounce and
+     lower in a `finally`. The last good numbers stay on screen while the next
+     ones are in flight, which is what stops the margin table blinking out on
+     every keystroke. */
+  const [smsPreviewResult, setSmsPreviewResult] = useState(null);
 
   // UI state
   const [activeTab, setActiveTab] = useState('pricing'); // 'pricing' | 'sms' | 'tiers' | 'payments' | 'stats'
@@ -925,10 +930,18 @@ export default function ConfigPage() {
      a loss on every event; showing cost, charge and margin side by side — computed
      by the same function that charges the customer — is what makes that visible
      before it is saved rather than after. */
+  const smsPreviewKey = useMemo(
+    () => (activeTab === 'sms' && smsPricing
+      ? JSON.stringify([smsRate, smsMarkupPercentage, smsPricing])
+      : null),
+    [activeTab, smsPricing, smsRate, smsMarkupPercentage],
+  );
+  const smsPreview = smsPreviewResult?.data ?? null;
+  const smsPreviewLoading = smsPreviewKey !== null && smsPreviewResult?.key !== smsPreviewKey;
+
   useEffect(() => {
-    if (activeTab !== 'sms' || !smsPricing) return;
+    if (smsPreviewKey === null) return undefined;
     let cancelled = false;
-    setSmsPreviewLoading(true);
     const timer = setTimeout(async () => {
       try {
         const res = await adminApi.post('/pricing/sms-preview', {
@@ -936,15 +949,13 @@ export default function ConfigPage() {
           smsMarkupPercentage: parseFloat(smsMarkupPercentage),
           smsPricingConfig: smsPricing,
         });
-        if (!cancelled) setSmsPreview(res);
+        if (!cancelled) setSmsPreviewResult({ key: smsPreviewKey, data: res });
       } catch {
-        if (!cancelled) setSmsPreview(null);
-      } finally {
-        if (!cancelled) setSmsPreviewLoading(false);
+        if (!cancelled) setSmsPreviewResult({ key: smsPreviewKey, data: null });
       }
     }, 400);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [activeTab, smsPricing, smsRate, smsMarkupPercentage]);
+  }, [smsPreviewKey, smsPricing, smsRate, smsMarkupPercentage]);
 
   /* Immutable-update helpers for the nested pricing model. */
   const patchSmsPricing = useCallback((patch) => {

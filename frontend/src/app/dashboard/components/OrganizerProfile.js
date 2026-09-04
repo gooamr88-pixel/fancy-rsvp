@@ -89,6 +89,18 @@ export default function OrganizerProfile({ events = [], forcePasswordReset = fal
   const [changingPassword, setChangingPassword] = useState(false);
   const [error, setError] = useState('');
 
+  /* The clock under the timezone picker. It used to call `Date.now()` straight
+     out of the JSX, which froze it at whatever minute that render happened in:
+     an organizer comparing "it's currently …" against their own watch while
+     they decide between two zones was reading a time that had stopped. Half a
+     minute is close enough for an hour:minute line, and this is the only thing
+     on the page that ticks. */
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
   const fetchProfile = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -516,7 +528,7 @@ export default function OrganizerProfile({ events = [], forcePasswordReset = fal
               see the same hours you type.
               {form.timezone && (
                 <> It&rsquo;s currently <strong style={{ color: COLORS.charcoal }}>
-                  {formatInZone(Date.now(), form.timezone, { hour: 'numeric', minute: '2-digit' })} {zoneAbbreviation(Date.now(), form.timezone)}
+                  {formatInZone(now, form.timezone, { hour: 'numeric', minute: '2-digit' })} {zoneAbbreviation(now, form.timezone)}
                 </strong> there.</>
               )}
               {' '}Changing it does not move events you have already created —

@@ -86,7 +86,11 @@ describe('GuestSendMenu', () => {
     expect(screen.getByRole('menu')).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('Entry pass & table'));
-    expect(onSend).toHaveBeenCalledWith('qr');
+    /* `{ channel, smsType }`, not a bare 'qr'. The menu grew items that share a
+       channel and differ only by which text they send, so the channel string
+       alone stopped identifying the action — the JSDoc had always documented an
+       object here while the implementation passed a string. */
+    expect(onSend).toHaveBeenCalledWith({ channel: 'qr', smsType: null });
   });
 
   it('a click on the page closes it', () => {
@@ -218,7 +222,27 @@ describe('GuestSendMenu on a phone', () => {
     render(<GuestSendMenu {...BASE} onSend={onSend} />);
     openMenu();
     fireEvent.click(screen.getByText('All their details'));
-    expect(onSend).toHaveBeenCalledWith('detail-sms');
+    // `detail-sms` keeps its own channel string rather than becoming
+    // { channel: 'sms', smsType: 'rsvp_confirmation' }: the dashboard keys its
+    // per-guest spinner off the channel it sent and the API echoes back, so a
+    // client mid-deploy that posts `detail-sms` has to keep getting it back.
+    expect(onSend).toHaveBeenCalledWith({ channel: 'detail-sms', smsType: null });
+  });
+
+  it('the two newly manual texts are offered, and carry their type', () => {
+    /* `seating_reminder` and `event_update` were send-on-a-schedule only. They
+       are the reason onSend carries an object: all three of these items are
+       channel 'sms' and are told apart by smsType alone. */
+    const onSend = vi.fn();
+    render(<GuestSendMenu {...BASE} onSend={onSend} />);
+    openMenu();
+
+    fireEvent.click(screen.getByText('Table & entry pass'));
+    expect(onSend).toHaveBeenCalledWith({ channel: 'sms', smsType: 'seating_reminder' });
+
+    openMenu();
+    fireEvent.click(screen.getByText('Something has changed'));
+    expect(onSend).toHaveBeenCalledWith({ channel: 'sms', smsType: 'event_update' });
   });
 
   it('opens upward when the trigger is near the bottom of the viewport', () => {

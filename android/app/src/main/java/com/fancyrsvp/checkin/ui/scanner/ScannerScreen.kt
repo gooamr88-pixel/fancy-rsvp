@@ -116,7 +116,10 @@ fun ScannerScreen(
 
     val outcome by viewModel.outcome.collectAsState()
     val status by viewModel.status.collectAsState()
-    val operator by viewModel.operator.collectAsState()
+    /* The `operator` collection was here and is gone with the override button —
+       it existed only to read `isSupervisor` for a control that recorded
+       nothing. `viewModel.operator` itself stays: the status strip renders the
+       signed-in name from it. */
     val noKidsAllowed by viewModel.noKidsAllowed.collectAsState()
     /** The venue layout for the seating plan. Empty when this event has none. */
     val venue by viewModel.venue.collectAsState()
@@ -441,7 +444,6 @@ fun ScannerScreen(
                 if (current != null) {
                     ScanResultScreen(
                         outcome = current,
-                        isSupervisor = operator.isSupervisor,
                         noKidsAllowed = noKidsAllowed,
                         // Empty whenever this event has no drawable layout, which
                         // is the normal case for an organizer who never made a
@@ -450,7 +452,6 @@ fun ScannerScreen(
                         // numeral alone in both, exactly as it always has.
                         venue = venue,
                         onAdmit = { party, ids -> viewModel.admit(party, ids) },
-                        onOverride = { party, ids -> viewModel.override(party, ids) },
                         onSearch = {
                             viewModel.dismiss()
                             showSearch = true

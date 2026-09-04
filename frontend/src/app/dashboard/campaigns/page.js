@@ -8,6 +8,8 @@ import PlanLock from '../components/PlanLock';
 import { startSmsCreditPurchase } from '../../utils/smsPurchase';
 import { useOrganizerTimeZone } from '../components/OrganizerClock';
 import { formatInZone } from '../../utils/timezone';
+import OrganizerSmsPanel from './OrganizerSmsPanel';
+import SmsTemplateStudio from './SmsTemplateStudio';
 
 /**
  * THE MESSAGES PAGE — balance, delivery log, and the four switches.
@@ -319,6 +321,30 @@ export default function MessagesPage() {
               </div>
             )}
           </Panel>
+
+          {/* ── The organizer's own number ───────────────────────────────────
+              TypeRow above tells anyone whose organizer alerts are switched on
+              to "add your own number below". Until now there was nothing below:
+              PATCH /campaigns/organizer-sms existed, the settings response
+              already carried `organizerSms`, and emailScheduler reads
+              organizations.sms_consent before every final report — but no
+              surface in the product could record that consent, so the
+              organizer_report message type had never once been able to fire. */}
+          <OrganizerSmsPanel
+            apiUrl={apiUrl}
+            eventId={eventId}
+            organizerSms={data.organizerSms}
+            onSaved={load}
+          />
+
+          {/* ── The words themselves ─────────────────────────────────────────
+              Directly under the switches, because the two answer consecutive
+              questions: "what is allowed to send itself?" and then "and what
+              does it say?". Loads its own data — the bodies, our defaults and
+              the worst-case cost of each are a much heavier payload than the
+              settings response, and an organizer who never opens this section
+              should not pay for it on every visit to the balance card. */}
+          <SmsTemplateStudio apiUrl={apiUrl} eventId={eventId} />
 
           {/* ── Delivery log ─────────────────────────────────────────────── */}
           <Panel

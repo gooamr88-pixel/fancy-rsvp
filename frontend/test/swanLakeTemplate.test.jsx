@@ -139,6 +139,17 @@ describe('wax envelope opening — the guest always gets through', () => {
     expect(screen.getByTestId('cine-opening-hint').textContent).toBe(SWANS.copy.en.loading);
   });
 
+  it('reduced motion invites the tap instead of saying "Loading…" forever', () => {
+    /* `useMediaReadiness` takes `enabled: !reduceMotion`, and disabled used to
+       leave `ready` false permanently — while `open()` skips the readiness
+       check on the reduced-motion path. So this cover was tappable the whole
+       time and told the guest it was still loading, on both video templates.
+       See the twin of this test in cinematicTemplates.test.jsx. */
+    reducedMotion = true;
+    render(<WaxEnvelopeOpening template={SWANS} names="Adam & Mira" onComplete={vi.fn()} />);
+    expect(screen.getByTestId('cine-opening-hint').textContent).toBe(SWANS.copy.en.hint);
+  });
+
   it('starts music inside the tap, not after it', async () => {
     /* iOS grants audio to the gesture's own call stack. If onGesture were
        called from a timer or a promise callback the invitation would open

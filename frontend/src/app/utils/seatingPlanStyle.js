@@ -188,8 +188,11 @@ export const floorGrainStyle = (unitScale, screenScale = 1) => {
   const px = Math.max(screenScale, 0.001);
   const rule = Math.max(1, 1 / px);
 
-  let module = FLOOR_MODULE * unitScale;
-  for (let i = 0; i < 8 && module * px < 22; i += 1) module *= 2;
+  /* Not named `module`: that identifier is the CommonJS binding, and shadowing
+     it in a file Next also compiles for the server is a real footgun rather
+     than a style point (`@next/next/no-assign-module-variable`). */
+  let cell = FLOOR_MODULE * unitScale;
+  for (let i = 0; i < 8 && cell * px < 22; i += 1) cell *= 2;
 
   return {
     position: 'absolute',
@@ -198,7 +201,7 @@ export const floorGrainStyle = (unitScale, screenScale = 1) => {
     backgroundImage:
       `linear-gradient(rgba(${INK},0.05) ${rule}px, transparent ${rule}px), `
       + `linear-gradient(90deg, rgba(${INK},0.05) ${rule}px, transparent ${rule}px)`,
-    backgroundSize: `${module}px ${module}px`,
+    backgroundSize: `${cell}px ${cell}px`,
   };
 };
 

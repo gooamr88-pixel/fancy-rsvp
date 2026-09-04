@@ -32,6 +32,7 @@ import RSVPsTab from './components/RSVPsTab';
 import GuestsTab from './components/GuestsTab';
 import FeatureGate from './components/FeatureGate';
 import OrganizerOverview from './components/OrganizerOverview';
+import DataDeletionBanner from './components/DataDeletionBanner';
 import OrganizerProfile from './components/OrganizerProfile';
 import ReferralsTab from './components/ReferralsTab';
 import { formatInZone } from '../utils/timezone';
@@ -388,6 +389,46 @@ function DashboardPageInner() {
     const qs = q.toString();
     router.replace(`${pathname}${qs ? `?${qs}` : ''}`, { scroll: false });
   }, [router, pathname]);
+
+  /**
+   * THE SCHEDULED-DELETION BANNER'S DATA.
+   *
+   * Two-stage on purpose. The purge columns ride along on the events list
+   * (getEvents selects `*`), so WHETHER to show the banner costs nothing — but
+   * the signed archive and keep links have to be minted server-side, and doing
+   * that for every event in the list would be several JWTs per dashboard load
+   * to serve a bar that almost never appears.
+   *
+   * So the list answers "is anything scheduled?" and only then does this fetch
+   * the one event that is, for its links.
+   *
+   * The dependency is the DEADLINE STRING, not the events array. Depending on
+   * `events` would re-run this on every refresh of the list — including the ones
+   * this page does after a send — and re-mint tokens for no reason.
+   */
+  const activeEventForPurge = events.find((e) => e.id === eventId);
+  const purgeDeadline = activeEventForPurge?.purge_scheduled_at || null;
+  const purgeOptedOut = !!activeEventForPurge?.purge_opt_out;
+  const [retention, setRetention] = useState(null);
+
+  useEffect(() => {
+    if (!eventId || (!purgeDeadline && !purgeOptedOut)) {
+      setRetention(null);
+      return undefined;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${apiUrl}/events/${eventId}`, { credentials: 'include' });
+        const j = await res.json();
+        if (!cancelled && j?.success) setRetention(j.retention || null);
+      } catch {
+        /* The warning email already carried this notice and its links. A failed
+           fetch costs the organizer a reminder, not the information. */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [eventId, purgeDeadline, purgeOptedOut, apiUrl]);
 
   /* Whether this event can send texts at all, and its current per-send cap and
      balance — needed BEFORE the send modal opens so the RSVPs action bar can say
@@ -1200,6 +1241,27 @@ function DashboardPageInner() {
         </div>
 
         <div className="content-container fx-container fx-container--4xl fx-gutter fx-gutter--lg" style={{ paddingTop: '32px', paddingBottom: '32px' }}>
+
+          {/**
+            * "Everything for this event is deleted in …"
+            *
+            * Above the tab dispatch rather than inside one section, because it
+            * is true of the whole event: an organizer looking at Seating has as
+            * much need to know as one looking at Guests, and a notice that only
+            * appears on the tab you happen to open is a notice that gets missed.
+            *
+            * `retention` is fetched lazily and only for an event that actually
+            * has a deadline — see the effect that loads it.
+            */}
+          {retention && (
+            <DataDeletionBanner
+              deleteAt={retention.deleteAt}
+              eventTitle={activeEvent?.title || 'this event'}
+              archiveUrl={retention.archiveUrl}
+              keepUrl={retention.keepUrl}
+              optedOut={retention.optedOut}
+            />
+          )}
 
           {/**
             * One guard for every event-scoped section, checked before the section

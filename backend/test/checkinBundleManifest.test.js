@@ -22,12 +22,18 @@ t.beforeEach(() => mock.reset());
  * The `guests` table is queried twice with different shapes (once for the hash
  * over the full set, once per page), so this returns the manifest-shaped rows.
  */
+/** Honours a `.range(from, to)` the way PostgREST does; returns all rows without one. */
+const slice = (rows, range) => (range ? rows.slice(range[0], range[1] + 1) : rows);
+
 const manifestResolver = ({ guests = [], checkIns = [], staff = [], tables = [], changes = [], event = {} } = {}) => (s) => {
   if (s.table === 'events') {
     return { data: { id: EVENT, title: 'Nadia & Omar', event_date: '2026-08-01T18:00:00Z', location_name: 'Grand Hall', custom_colors: { primary: '#B8944F' }, no_kids_allowed: true, ...event } };
   }
-  if (s.table === 'guests' && s.op === 'select') return { data: guests };
-  if (s.table === 'check_ins' && s.op === 'select') return { data: checkIns };
+  // Sliced, because the manifest reads these two sets in .range() chunks —
+  // PostgREST silently truncates an unranged select, and a short read here
+  // would publish a recordCount the paged bundle cannot match.
+  if (s.table === 'guests' && s.op === 'select') return { data: slice(guests, s.range) };
+  if (s.table === 'check_ins' && s.op === 'select') return { data: slice(checkIns, s.range) };
   if (s.table === 'event_staff') return { data: staff };
   if (s.table === 'tables') return { data: tables };
   if (s.table === 'event_checkin_cursors') return { data: { last_seq: 7 } };
@@ -75,6 +81,37 @@ test('totalPages is derived from the record count, so a device knows when it is 
   const m = await svc.getBundleManifest(EVENT);
   assert.equal(m.integrity.pageSize, svc.BUNDLE_PAGE_SIZE);
   assert.equal(m.integrity.totalPages, Math.ceil(1200 / svc.BUNDLE_PAGE_SIZE));
+});
+
+/**
+ * ── THE BUG THIS TEST EXISTS FOR ──
+ *
+ * The manifest read the full guest list and the full set of existing arrivals
+ * with no range at all. PostgREST applies its own row ceiling and truncates
+ * SILENTLY — a successful response, no flag. On a large event the manifest
+ * would then publish a recordCount the paged bundle could never match, and the
+ * seeded arrivals the device uses for its duplicate guard would be short. A
+ * partial duplicate guard looks exactly like a working one, right up until a
+ * tablet admits somebody twice.
+ */
+test('a guest list larger than one chunk is read in full, not silently truncated', async () => {
+  const guests = Array.from({ length: 2300 }, (_, i) => guestRow(`g${i}`, `Guest ${i}`));
+  const checkIns = Array.from({ length: 1400 }, (_, i) => ({
+    id: `ci-${i}`, guest_id: `g${i}`, party_id: `p-g${i}`,
+    checked_in_at: '2026-08-01T19:00:00Z', method: 'qr_scan', server_seq: i + 1,
+  }));
+
+  let guestReads = 0;
+  mock.setResolver((s) => {
+    if (s.table === 'guests' && s.op === 'select') guestReads += 1;
+    return manifestResolver({ guests, checkIns })(s);
+  });
+
+  const m = await svc.getBundleManifest(EVENT);
+
+  assert.equal(m.integrity.recordCount, 2300, 'every guest must reach the hash');
+  assert.equal(m.existingCheckIns.length, 1400, 'every existing arrival must seed the duplicate guard');
+  assert.ok(guestReads > 1, 'a set this size cannot be read in one request');
 });
 
 test('an event with no guests still reports one page rather than zero', async () => {

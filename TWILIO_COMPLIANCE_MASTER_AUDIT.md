@@ -7,6 +7,84 @@
 **Audit date:** 2026-07-16
 **Audit basis:** Full static review of the repository at `fancy/fancy` (frontend, backend, Supabase migrations, deployment configs) + the Twilio rejection email from Isa Bell dated 2026-07-13. Every finding cites `file:line` evidence from the actual codebase. No files were modified.
 
+---
+
+## ⚠ MATERIAL CHANGE — 2026-09-04: SMS CONSENT IS NOW REQUIRED TO SUBMIT AN RSVP
+
+**Read this before re-filing anything.** Everything below this section describes the
+platform as it stood when consent was optional and unbundled. One of its central
+premises no longer holds.
+
+**What changed.** On the product owner's explicit instruction, the SMS consent
+checkbox on the guest RSVP form is now **required to submit**, and the mobile
+number field is **required** with it, for any guest who **accepts or answers
+"maybe"**.
+
+**A guest who DECLINES is exempt** — neither field is shown to them and neither
+is required. That exemption is load-bearing for the argument below, not a
+convenience: a decliner receives no table, no entry pass and no message of any
+kind, so demanding consent from them would be a requirement with no
+transactional purpose behind it, displayed underneath a disclosure describing
+messages they will never receive. "Maybe" is not exempt — they still receive
+change-of-date and change-of-venue notices and can convert to a yes.
+
+**Why the copy changed with it.** `SmsConsentIndependence` previously opened with
+the sentence filed verbatim against rejection 30475:
+
+> "SMS consent is voluntary and is not required to register, RSVP, attend an
+> event, or use FancyRSVP."
+
+That sentence became **false** the moment submission was blocked on the checkbox.
+A page that refuses to submit while displaying a notice saying it will not is
+worse than either choice made cleanly — it is a false statement inside the exact
+screenshot a reviewer takes. It has been removed, and the same claim has been
+removed or rewritten everywhere else it appeared:
+
+| Surface | File | Change |
+|---|---|---|
+| Consent notice under the checkbox | `frontend/src/app/components/guest/SmsConsentText.js` | "voluntary / not required to RSVP" deleted; replaced with why the number is needed + how to stop. `SMS_CONSENT_TEXT_VERSION` → `2026-09-04` |
+| Version mirror | `backend/utils/smsConsent.js` | bumped to match |
+| Public opt-in disclosure | `frontend/src/app/sms-opt-in/page.js` | "How a Guest Opts In" and the independence card rewritten to describe the required checkbox truthfully |
+| Terms of Service §5 | `frontend/src/app/terms/page.js` | "never a condition of … submitting an RSVP" removed; a new **Where SMS Consent Is Required** clause added |
+| Privacy Policy §3 | `frontend/src/app/privacy/page.js` | "the phone number itself is optional on every form we operate" removed; same replacement clause added |
+
+**What did NOT change, and must not.**
+
+* The checkbox is still **unchecked by default**, still **dedicated to SMS
+  alone**, and still **outside** any Terms/Privacy acceptance. Consent
+  independence *from other agreements* — which is what rejection 30475 is
+  actually about — is intact.
+* **STOP / HELP** are untouched. `sms_opt_outs` still suppresses a number
+  globally, across every event, permanently, and is still re-checked per message
+  at the final choke point in `backend/services/smsDispatch.js`.
+* The send-time gate is unchanged. A required checkbox is a *collection* rule and
+  has not been allowed to become a substitute for verifying consent at send time.
+
+### REQUIRED ACTION — the TFV must be re-filed
+
+The submitted document and the live page no longer match, and **the live page is
+what gets reviewed**. Re-file with the current wording before, or immediately
+after, this deploys.
+
+**This carries real risk and it should be stated plainly:** conditioning the
+primary service (responding to an invitation) on SMS consent is the pattern CTIA
+guidance and Twilio's TFV review are most likely to challenge, and it is adjacent
+to the ground the number was rejected on before. The strongest honest argument
+for the current design — and the one to make in the submission — is that all five
+message types are **transactional and informational about an event the recipient
+personally chose to attend**: their table, their entry pass, and changes of date
+or venue. There is no marketing content in the program, and consent is asked
+only of guests who will actually receive those messages — a declining guest is
+never asked, which is the point that makes the transactional characterisation
+literally true rather than merely arguable. The mitigation offered on every
+surface is that a guest who wants to attend but not receive texts can be added
+to the guest list by the host directly, without a number.
+
+**If the number is deregistered, SMS stops for every customer on the platform at
+once.** Section 20's operational checklist still applies.
+
+---
+
 > **REMEDIATION STATUS (updated 2026-07-16, same day):** Sections 1–19 describe the codebase **as audited** and are preserved unchanged as the point-in-time record. Since then, **every Critical, High, and Medium item implementable inside this repository has been implemented** (two batches, uncommitted/undeployed at the time of writing): public `/sms-opt-in` page; `?noreveal=1` reveal bypass; one canonical consent string (`SmsConsentText.js`) across both RSVP paths; full corporate identity (16941460 Canada Corp. o/a Via Marketing, Mississauga ON) on footer/terms/privacy/contact/JSON-LD; Ontario governing law; `/press` deleted and about/careers truthified; migration `20260809000000_sms_compliance.sql` (suppression table + attestation + consent provenance); inbound STOP/HELP webhook; suppression enforced in every send path; compliance footer on every outbound SMS; per-launch and per-import consent attestation; Privacy Policy truth fixes; robots/sitemap; Swagger gate; repo hygiene. **Section 20's checkboxes below track live status** — `[x]` = implemented in the repo; unchecked = ops/external/deploy-time work (toll-free number, Twilio Console webhooks, viamarketing.ca, DNS check, corporate documents, build+deploy, dry run).
 >
 > **CORRECTION (2026-07-16, from the full rejection email):** the opt-in URL actually submitted to Twilio was **`https://viamarketing.ca/`** — the "browser verification/interstitial" the reviewer hit was on the **corporate site's hosting**, not on fancyrsvp.com. The envelope-reveal analysis in §1/§11 remains a genuine secondary risk (and its `?noreveal=1` bypass is implemented), but the primary fixes are: (a) submit **`https://fancyrsvp.com/sms-opt-in`** as the opt-in URL next time, and (b) check viamarketing.ca's hosting/proxy for a bot-check interstitial before it's referenced anywhere in the submission. The reviewer also confirmed the only form found on fancyrsvp.com was the footer newsletter (email-only) — `/sms-opt-in` is now a **live** form (name + phone + consent checkbox + Submit, persisting a timestamped consent record via `POST /api/v1/public/sms-opt-in`), matching Twilio's reference web-form example. Twilio's agent (isa.bell@twilio.com) offered to pre-review the updated URL or screenshots before resubmission — use that.

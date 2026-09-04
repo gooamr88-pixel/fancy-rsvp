@@ -7,6 +7,7 @@ import { PageLoading } from '../../_components/Spinner';
 import { ErrorState } from '../../_components/ErrorState';
 import { T, card } from '../../_components/theme';
 import { money } from '../../_lib/format';
+import PendingCashPanel from './PendingCashPanel';
 
 /**
  * Financial Command Center (Master Plan §22). Reads GET /admin/finance/summary
@@ -126,50 +127,129 @@ function SmsProfitPanel({ sms, loading, error }) {
   );
 }
 
+/**
+ * CASH PAYMENTS WAITING FOR SOMEONE TO SAY YES.
+ *
+ * ── Why this exists ──
+ *
+ * Manual cash approval is a live feature: an organizer pays outside Stripe, a
+ * row lands in `event_payments` as pending/cash_manual, and an admin approves
+ * it — which runs `approve_event_cash` and marks the event paid. The approve
+ * half was reachable (POST /admin/manual-approve). The half that tells you
+ * WHICH payments are waiting was not: GET /admin/pending-payments shipped with
+ * its RBAC permission wired and no caller anywhere in the product.
+ *
+ * So the only way to find an unapproved cash payment was to already know it
+ * existed. An organizer who paid in cash sat unpaid until they complained.
+ *
+ * ── Why it is its own request ──
+ *
+ * Loaded separately from the summary, like the SMS panel above and for the same
+ * reason: this list is the actionable part of the page, and it must still
+ * render if the revenue rollup is unavailable.
+ */
+
 export default function FinancePage() {
-  const [fin, setFin] = useState(null);
-  const [sms, setSms] = useState(null);
-  const [smsLoading, setSmsLoading] = useState(true);
-  const [smsError, setSmsError] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  /* Each of these is one value tagged with the attempt it answers, rather than
+     a data/loading/error trio kept in step by hand. Both loaders used to raise
+     their own flag synchronously at the top of the effect — a whole extra
+     render before paint, and a flag that outlives its request the moment any
+     one of the three writes is missed. Read off the tag, "still loading" is
+     not a fact anything has to remember to update. */
+  const [finResult, setFinResult] = useState(null);
+  const [smsResult, setSmsResult] = useState(null);
+  const [cash, setCash] = useState(null);
+  const [cashLoading, setCashLoading] = useState(true);
+  const [cashError, setCashError] = useState(null);
+  const [approving, setApproving] = useState(null);
   // MOB-15: the native `title` attribute was the ONLY way to read a bar's
   // value — it never fires on touch. onClick doubles as a tap handler on
   // touch devices, so one handler covers both mouse and touch.
   const [activeDay, setActiveDay] = useState(null);
   const [retryTick, setRetryTick] = useState(0);
 
+  /* Below `retryTick`, and it has to be: these read it during render, so
+     declaring them up with the other state would be a temporal dead zone —
+     `ReferenceError` on every render of this page, not a lint opinion. */
+  const loading = finResult?.tick !== retryTick;
+  const fin = finResult?.data ?? null;
+  const error = finResult?.error ?? null;
+
+  const smsLoading = smsResult?.tick !== retryTick;
+  const sms = smsResult?.data ?? null;
+  const smsError = smsResult?.error ?? null;
+
   useEffect(() => {
     let ignore = false;
-    // Re-arm the loading spinner for a manual retry, not just the initial mount.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setLoading(true);
     (async () => {
       try {
         const res = await adminApi.get('/finance/summary');
-        if (!ignore) { setFin(res?.finance || null); setError(null); }
+        if (!ignore) setFinResult({ tick: retryTick, data: res?.finance || null, error: null });
       } catch (err) {
-        if (!ignore) setError(err.message || 'Failed to load financials');
-      } finally {
-        if (!ignore) setLoading(false);
+        if (!ignore) {
+          setFinResult({ tick: retryTick, data: null, error: err.message || 'Failed to load financials' });
+        }
       }
     })();
     return () => { ignore = true; };
   }, [retryTick]);
 
+  // Cash awaiting approval — its own request, so the actionable list still
+  // renders when the revenue rollup is unavailable.
+  useEffect(() => {
+    let ignore = false;
+    (async () => {
+      /* INSIDE the IIFE, not in the effect body: a bare setState there is a
+         synchronous cascading render and an error under
+         react-hooks/set-state-in-effect.
+
+         The two effects above answer the same problem the better way — one
+         value tagged with the attempt it belongs to, no flag at all. This one
+         keeps its flags because `approveCash` writes `cashError` from outside
+         any fetch, so there is a second writer with no attempt to tag. */
+      setCashLoading(true);
+      try {
+        const res = await adminApi.get('/pending-payments');
+        if (!ignore) { setCash(res?.payments || []); setCashError(null); }
+      } catch (err) {
+        if (!ignore) setCashError(err.message || 'Cash payments are unavailable.');
+      } finally {
+        if (!ignore) setCashLoading(false);
+      }
+    })();
+    return () => { ignore = true; };
+  }, [retryTick]);
+
+  const approveCash = async (payment) => {
+    setApproving(payment.id);
+    try {
+      await adminApi.post('/manual-approve', {
+        eventId: payment.events?.id,
+        amountCents: payment.amount_cents,
+      });
+      // Re-read rather than splicing the row out locally: approval also marks
+      // the event paid and moves money into the summary above, and both panels
+      // must agree with the database rather than with each other.
+      setRetryTick((t) => t + 1);
+    } catch (err) {
+      setCashError(err.message || 'Could not approve that payment.');
+    } finally {
+      setApproving(null);
+    }
+  };
+
   // Loaded separately from the main summary so a missing analytics migration
   // degrades one panel rather than blanking the whole Financial Command Center.
   useEffect(() => {
     let ignore = false;
-    setSmsLoading(true);
     (async () => {
       try {
         const res = await adminApi.get('/finance/sms');
-        if (!ignore) { setSms(res || null); setSmsError(null); }
+        if (!ignore) setSmsResult({ tick: retryTick, data: res || null, error: null });
       } catch (err) {
-        if (!ignore) setSmsError(err.message || 'SMS financials are unavailable.');
-      } finally {
-        if (!ignore) setSmsLoading(false);
+        if (!ignore) {
+          setSmsResult({ tick: retryTick, data: null, error: err.message || 'SMS financials are unavailable.' });
+        }
       }
     })();
     return () => { ignore = true; };
@@ -247,6 +327,17 @@ export default function FinancePage() {
           </div>
         )}
       </div>
+
+      {/* Above the SMS panel deliberately: this is the only section on the page
+          that asks for a decision, and money sits unrecognised until it is made. */}
+      <PendingCashPanel
+        rows={cash}
+        loading={cashLoading}
+        error={cashError}
+        approving={approving}
+        onApprove={approveCash}
+        onRetry={() => setRetryTick((t) => t + 1)}
+      />
 
       <SmsProfitPanel sms={sms} loading={smsLoading} error={smsError} />
     </div>

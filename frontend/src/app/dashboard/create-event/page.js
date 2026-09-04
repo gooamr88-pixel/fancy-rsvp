@@ -671,12 +671,22 @@ export default function CreateEventWizard() {
      Estimates are keyed by script; 'latin' is used because the event's language is
      a guest-facing choice made elsewhere. Arabic messages cost roughly double
      (UCS-2 caps a segment at 70 characters), which the card says plainly and the
-     slider lets the organizer act on. */
-  useEffect(() => {
-    if (!selectedTierName) return;
-    const recommended = smsEstimates?.[selectedTierName]?.latin?.recommendedSegments;
-    if (Number.isFinite(recommended)) setSmsAddonSegments(recommended);
-  }, [selectedTierName, smsEstimates]);
+     slider lets the organizer act on.
+
+     Seeded DURING the render that changes the tier rather than in an effect
+     after it, which is React's documented shape for "derived from a prop
+     until the organizer moves the slider". Two things it buys: the card never
+     paints one frame of the new plan next to the old plan's allowance, and
+     the seed is now tied to the TIER — so a later change to `smsEstimates`
+     cannot silently reset a number the organizer has since adjusted by hand. */
+  const recommendedSegments = selectedTierName
+    ? smsEstimates?.[selectedTierName]?.latin?.recommendedSegments
+    : undefined;
+  const [seededForTier, setSeededForTier] = useState(null);
+  if (Number.isFinite(recommendedSegments) && seededForTier !== selectedTierName) {
+    setSeededForTier(selectedTierName);
+    setSmsAddonSegments(recommendedSegments);
+  }
 
   /* ═══ Referral credit balance (preview-only — the backend is always the
      source of truth for what's actually charged; see StagePayment) ═══ */

@@ -19,6 +19,18 @@ const PURPOSES = {
   RSVP_INVITE: 'rsvp_invite',
   QR_TICKET: 'qr_ticket',
   RSVP_CLAIM: 'rsvp_claim',
+  /**
+   * The two links in the post-event data-deletion warning. Both are addressed to
+   * the ORGANIZER, both arrive by email, and both are deliberately separate
+   * purposes rather than one "event admin" token.
+   *
+   * They authorize very different things — one reads the entire guest list,
+   * the other cancels a scheduled deletion — and this file's whole design is
+   * one discriminator per capability, so a token minted to download an archive
+   * can never be replayed to keep the event alive, or the reverse.
+   */
+  EVENT_ARCHIVE: 'event_archive',
+  EVENT_KEEP: 'event_keep',
 };
 
 // Canonical human-facing verbs an invitation button may carry. mapIntentToResponse()
@@ -163,9 +175,57 @@ function signQrTicketForResponse({ response, partyId, eventId, tableName, partyS
   }
 }
 
+/* ─── Post-event data retention ─────────────────────────────────────────────
+ *
+ * Both of these are bearer links in an email, so the expiry is the whole
+ * security model and it is set from the grace window rather than a constant:
+ * a token that outlives the deletion it refers to authorizes a download of
+ * data that no longer exists (harmless) or a "keep" of an event already gone
+ * (confusing). Matching the window means both links stop working at exactly
+ * the moment they stop meaning anything.
+ *
+ * A generous floor and ceiling are applied because `graceMs` comes from an env
+ * variable an operator can set to anything.
+ */
+const clampGraceSeconds = (graceMs) => {
+  const seconds = Math.ceil((Number(graceMs) || 0) / 1000);
+  // 1 hour minimum: below that a warning email could arrive with a dead link
+  // simply because the mail sat in a queue. 30 days maximum, so a misconfigured
+  // grace window cannot mint a near-permanent credential.
+  return Math.min(30 * 24 * 3600, Math.max(3600, seconds));
+};
+
+/** Download-everything link. Read-only: it can produce the archive and nothing else. */
+function signEventArchive({ eventId, graceMs }) {
+  if (!eventId) throw new Error('eventId is required');
+  return sign(PURPOSES.EVENT_ARCHIVE, { eventId }, { expiresIn: clampGraceSeconds(graceMs) });
+}
+
+function verifyEventArchive(token) {
+  const decoded = verify(token, PURPOSES.EVENT_ARCHIVE);
+  if (!decoded.eventId) throw new Error('INVALID_TOKEN');
+  return decoded;
+}
+
+/** "Keep this event's data" link. Cancels the scheduled deletion, nothing else. */
+function signEventKeep({ eventId, graceMs }) {
+  if (!eventId) throw new Error('eventId is required');
+  return sign(PURPOSES.EVENT_KEEP, { eventId }, { expiresIn: clampGraceSeconds(graceMs) });
+}
+
+function verifyEventKeep(token) {
+  const decoded = verify(token, PURPOSES.EVENT_KEEP);
+  if (!decoded.eventId) throw new Error('INVALID_TOKEN');
+  return decoded;
+}
+
 module.exports = {
   PURPOSES,
   VALID_INTENTS,
+  signEventArchive,
+  verifyEventArchive,
+  signEventKeep,
+  verifyEventKeep,
   mapIntentToResponse,
   signRsvpInvite,
   verifyRsvpInvite,

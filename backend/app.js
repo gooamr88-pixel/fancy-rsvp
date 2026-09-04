@@ -253,6 +253,33 @@ if (RATE_LIMIT_DISABLED) {
   // 1000/15m limiter. They stay covered here; the one state-changing route among
   // them (/rsvp/respond) is additionally capped by publicWriteLimiter above.
   app.use('/api/v1/public/rsvp', publicReadLimiter);
+
+  /**
+   * The post-event retention links, capped far tighter than anything else.
+   *
+   * `/events/archive` is the most expensive public endpoint in the API: it walks
+   * up to 10,000 party rows, runs three more queries and builds a four-sheet
+   * workbook, all outside `requireAuth` — a signed token in an email is the only
+   * thing in front of it. The general 1000/15m budget would allow a thousand of
+   * those from one address, and that email can be forwarded or sit in a shared
+   * inbox for the whole 24-hour grace window.
+   *
+   * A real organizer presses "Download everything" once, maybe a few times if
+   * they misplace the file. Ten is generous for that and useless for a flood.
+   * Applied to the prefix so `/events/keep` is covered by the same ceiling; the
+   * mount is BEFORE the authed events router, exactly like the routes it caps.
+   */
+  const retentionLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: { success: false, error: 'TOO_MANY_REQUESTS', message: 'Too many download attempts. Please try again in a few minutes.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => skipInternal(req) || req.method === 'OPTIONS',
+    store: storeFor('retention'),
+  });
+  app.use('/api/v1/events/archive', retentionLimiter);
+  app.use('/api/v1/events/keep', retentionLimiter);
 }
 
 // Request logging middleware
@@ -333,6 +360,13 @@ app.use('/api/v1/events/:eventId/analytics', requireAuth, verifyEventOwner, anal
 app.use('/api/v1/checkin', checkinSyncRoutes);
 app.use('/api/v1/dashboard', requireAuth, dashboardRoutes);
 app.use('/api/v1/referrals', requireAuth, referralRoutes);
+/**
+ * The two links in the post-event data-deletion warning email. Token-authorized
+ * rather than session-authorized, so they MUST be mounted before the line below
+ * — which wraps the whole organizer router in `requireAuth`. See
+ * routes/eventRetentionRoutes.js.
+ */
+app.use('/api/v1/events', require('./routes/eventRetentionRoutes'));
 app.use('/api/v1/events', requireAuth, eventRoutes);
 
 // Mount super admin control routes

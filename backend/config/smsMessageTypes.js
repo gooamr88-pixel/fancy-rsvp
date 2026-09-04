@@ -70,7 +70,13 @@ const SMS_MESSAGE_TYPES = [
   {
     key: 'seating_reminder',
     label: 'Table & entry pass',
-    description: "Where they're sitting and the link to their check-in pass, sent in the 24 hours before the event.",
+    // "2 hours", not "24 hours". The text moved to the T-2h mark when the
+    // run-up reminders were split by channel (services/emailScheduler.js): the
+    // emails still go at T-24h and T-6h, and this is the last of the three,
+    // timed for the moment a guest is deciding whether to leave. An organizer
+    // reads this sentence to decide whether to switch the type off, so it has
+    // to name the time the message actually arrives.
+    description: "Where they're sitting and the link to their check-in pass, texted 2 hours before the event starts.",
     audience: 'guest',
     trigger: 'automatic',
     defaultEnabled: true,
@@ -81,10 +87,12 @@ const SMS_MESSAGE_TYPES = [
      * ONE send per guest, not two.
      *
      * This was 1.2 — priced as the heaviest guest type because it fired twice:
-     * once when the organizer seated someone, and again in the 24 hours before
-     * the event. The seating text has been retired (see the note on
-     * jobSeatingNotices), so only the day-before send remains and the estimate
-     * has to come down with it or every allowance is quoted high.
+     * once when the organizer seated someone, and again in the run-up to the
+     * event. The seating text has been retired (see the note on
+     * jobSeatingNotices), so only the run-up send remains — now at T-2h, from
+     * jobSmsEventReminders — and the estimate has to come down with it or every
+     * allowance is quoted high. Moving the mark changed WHEN it fires, not how
+     * many times, so the weight is unaffected by that.
      *
      * 1.0 puts it level with `invitation`, which is also exactly one message
      * per guest. Only the RATIOS matter here, not the absolute number.

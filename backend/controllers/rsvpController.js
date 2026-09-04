@@ -136,42 +136,78 @@ const submitPublicRSVP = async (req, res, next) => {
 
   const isAttending = response === 'yes';
 
-  // Phone is OPTIONAL for everyone, attending or not (Twilio TFV 30475).
-  //
-  // It used to be mandatory for attendees. That made the mobile number — the
-  // identifier the SMS program runs on — a precondition of registering for the
-  // event, with the SMS consent checkbox rendered in the same block. Even with
-  // the checkbox itself optional, a guest had no way to complete an RSVP while
-  // staying entirely outside the messaging program, which entangles consent with
-  // event registration. Twilio's requirement is that agreeing to receive
-  // messages be optional, and that is only true if declining to participate at
-  // all — by withholding the number — still lets the guest attend.
-  //
-  // Nothing operational depended on it: email is required for attendees and is
-  // the channel that actually carries confirmations, tickets, and logistics.
-  // Whenever a number IS volunteered it must still be valid E.164.
+  /**
+   * PHONE AND SMS CONSENT ARE REQUIRED — EXCEPT FROM A DECLINE.
+   *
+   * Both were optional between 2026-08-01 and 2026-09-04, deliberately, so that
+   * a guest could complete an RSVP while staying entirely outside the messaging
+   * program — which is what made "agreeing to receive messages" genuinely
+   * optional under Twilio TFV 30475. That was reversed on the product owner's
+   * explicit instruction; the full context, the risk and the required re-filing
+   * are documented once, in
+   * frontend/src/app/components/guest/SmsConsentText.js.
+   *
+   * ── THE DECLINE EXEMPTION ──
+   *
+   * A guest who says no receives no table, no entry pass, and no transactional
+   * message of any kind — there is nothing this platform will ever text them.
+   * Demanding consent from them would be a requirement with no purpose behind
+   * it, and it would sit directly beneath a disclosure ("your table number,
+   * your entry pass, and any change of date or venue are sent by text") that
+   * does not describe anything they will receive.
+   *
+   * It matters to the compliance case, not only to the copy: the entire
+   * argument for requiring consent is that every message is transactional about
+   * an event the recipient chose to attend. A form demanding it from somebody
+   * who has just said they are not attending contradicts that argument on the
+   * screen a reviewer is looking at.
+   *
+   * 'maybe' is NOT exempt — they still receive date and venue changes, and they
+   * can convert to a yes and be seated.
+   *
+   * ── WHY THIS IS ENFORCED HERE AND NOT ONLY IN THE FORM ──
+   *
+   * Two RSVP surfaces post to this endpoint (RsvpWizard and heritageArch's
+   * RsvpSection) and they have drifted apart before. More to the point, a
+   * client-side rule is a suggestion: this endpoint is public, and a submission
+   * that skipped the form entirely would otherwise write a party with no number
+   * and `sms_consent = false` — a guest the organizer believes is reachable by
+   * text and who can never be texted.
+   */
+  const isDeclining = response === 'no';
   const hasPhone = phone && String(phone).trim();
-  let normalizedPhone = null;
-  if (hasPhone) {
-    normalizedPhone = normalizeToE164(phone);
-    if (!normalizedPhone) {
-      return sendFail(res, { status: 400, error: 'VALIDATION_ERROR', message: 'Enter a valid phone number in international format (e.g. +1 555 123 4567).' });
-    }
+
+  if (!isDeclining && !hasPhone) {
+    return sendFail(res, { status: 400, error: 'VALIDATION_ERROR', message: 'A mobile number is required.' });
+  }
+  // Format-checked whenever one is supplied, including on a decline: a decliner
+  // may leave a number for the host's own records, and a malformed one helps
+  // nobody. `null` when genuinely absent, which only a decline can now reach.
+  const normalizedPhone = hasPhone ? normalizeToE164(phone) : null;
+  if (hasPhone && !normalizedPhone) {
+    return sendFail(res, { status: 400, error: 'VALIDATION_ERROR', message: 'Enter a valid phone number in international format (e.g. +1 555 123 4567).' });
   }
 
-  // TCPA / Twilio Toll-Free Verification: SMS consent is INDEPENDENT of the
-  // RSVP itself. This endpoint used to reject a phone number submitted without
-  // consent, which — since a phone is mandatory for attendees — made opting in
-  // to SMS a precondition of attending. Bundled consent of exactly that shape
-  // is what TFV review rejects.
-  //
-  // The submission is now accepted either way and `smsConsent` is persisted as
-  // given (submit_rsvp_v2 stamps sms_consent_at on every write, so an explicit
-  // `false` is itself a dated record of refusal). A phone number submitted
-  // without consent is stored for the host's guest list and nothing more — it is
-  // never treated as consent. Consent is enforced where it actually matters, at
-  // send time: smsDispatch.fetchRecipients requires sms_consent = true, and
-  // sendRecipient re-verifies it per message.
+  /**
+   * Consent must be an explicit `true`.
+   *
+   * `!smsConsent` rather than `smsConsent === false`, so an absent field is a
+   * refusal rather than a pass. A client that simply omits the key is exactly
+   * the case this check exists for.
+   *
+   * Everything downstream is unchanged: submit_rsvp_v2 still stamps
+   * sms_consent_at on every write, and consent is still re-verified at send
+   * time (smsDispatch's gate chain) rather than trusted from this record. A
+   * required checkbox is a collection rule; it is not, and must not become, a
+   * substitute for the send-time gate.
+   */
+  if (!isDeclining && !smsConsent) {
+    return sendFail(res, {
+      status: 400,
+      error: 'SMS_CONSENT_REQUIRED',
+      message: 'Please agree to receive event texts so we can send your table and entry pass.',
+    });
+  }
 
   // Email is required for attendees (confirmation + logistics), optional for a
   // decline; when present it must be valid either way.
@@ -291,12 +327,17 @@ const submitPublicRSVP = async (req, res, next) => {
     // the RSVP; sms_consent + sms_consent_at were already persisted atomically
     // by the RPC.
     //
-    // Written for a REFUSAL as well as an opt-in (it used to require
-    // `smsConsent`): now that the checkbox is optional, an unticked box is a
-    // dated, deliberate decline that smsDispatch enforces as an exclusion, so
-    // the record needs to show which wording was declined and where. The
-    // condition stays keyed on `normalizedPhone` because a guest who gave no
-    // number was never shown the checkbox at all.
+    // Both the number and the consent are validated above, so `normalizedPhone`
+    // is always set and `smsConsent` is always true by the time this runs. The
+    // condition is kept as a guard rather than simplified away: this is a
+    // best-effort write that must not throw on a party the RPC declined to
+    // create, and `result.party_id` is the half of it that can genuinely be
+    // absent.
+    //
+    // The stamp records WHICH wording was agreed to and on which surface — which
+    // matters more now, not less: the disclosure changed on 2026-09-04 and
+    // consent captured before and after that date is consent to two different
+    // notices (see utils/smsConsent.js).
     if (normalizedPhone && result.party_id) {
       const consentSource = normalizeConsentSource(req.body?.consentSource);
       supabase
@@ -560,7 +601,7 @@ const submitPublicRSVP = async (req, res, next) => {
       (async () => {
         const [{ data: ev }, { data: party }] = await Promise.all([
           supabase.from('events')
-            .select('id, title, slug, event_date, timezone, location_name, location_address, sms_addon_purchased_at, sms_settings')
+            .select('id, title, slug, event_date, timezone, location_name, location_address, sms_addon_purchased_at, sms_settings, sms_templates')
             .eq('id', eventId).single(),
           // Read the COMMITTED party rather than rebuilding it from the request
           // body: the RPC has already normalized names, party size and meals, and
@@ -1107,36 +1148,17 @@ const exportGuestsExcel = async (req, res, next) => {
   const sort = ['name', 'table'].includes(req.query.sort) ? req.query.sort : null;
 
   try {
-    // exportParties returns { rows, meta } — the row array plus a truncation flag.
-    const { rows, meta } = await guestService.exportParties(eventId, { attendingOnly, sort });
-
-    const { data: tables, error: tablesError } = await supabase.from('tables').select('*').eq('event_id', eventId);
-    if (tablesError) throw tablesError;
-
-    // The clock the arrival times are printed on. Fetched rather than derived
-    // from the organizer's current session: the export is a record of what
-    // happened at a venue, so it belongs on that venue's clock regardless of
-    // where the person downloading it happens to be.
-    const { data: exportEvent } = await supabase
-      .from('events').select('timezone').eq('id', eventId).maybeSingle();
-
-    // Live arrivals only. Undone check-ins are retained as evidence (soft
-    // delete, migration 20260814000000) but must never appear in the Check-in
-    // Log sheet as though the guest attended.
-    const { data: checkins, error: checkinsError } = await supabase
-      .from('check_ins').select('*, rsvp_parties(label)').eq('event_id', eventId).is('deleted_at', null);
-    if (checkinsError) throw checkinsError;
-
-    // Shape rows the way generateExcelExport expects (mirrors the pre-rebuild rsvp shape).
-    const guestRows = rows.map((r) => ({
-      guest_name: r.guest_name, email: r.email, phone: r.phone, response: r.response,
-      party_size: r.party_size, notes: r.notes, side: r.side,
-      rsvp_guests: (r.guests || []).map((g) => ({ meal_selection: g.meal_selection, is_primary: g.is_primary_contact })),
-      seating_assignments: r.table_name ? [{ tables: { table_name: r.table_name } }] : [],
-    }));
+    /**
+     * The four queries and the row-shaping that used to live here moved into
+     * guestService.buildEventExcelExport, so the post-event archive link can
+     * produce a byte-identical file. See that function for what the mapping is
+     * actually protecting — two of its three rules fail silently.
+     */
+    const { guestRows, tables, checkins, timezone, meta } =
+      await guestService.buildEventExcelExport(eventId, { attendingOnly, sort });
 
     const { generateExcelExport } = require('../utils/excelHelper');
-    const excelBuffer = await generateExcelExport(guestRows, tables || [], checkins || [], exportEvent?.timezone || null);
+    const excelBuffer = await generateExcelExport(guestRows, tables, checkins, timezone);
 
     const xlsxName = `event-${eventId}-${attendingOnly ? 'attending' : 'rsvps'}${sort ? '-by-' + sort : ''}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

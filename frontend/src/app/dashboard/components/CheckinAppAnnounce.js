@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { usePublicPricing } from '../../utils/usePublicPricing';
 import {
@@ -73,6 +73,33 @@ const FEATURE_LABEL = 'Fancy Check-in app (offline door scanner)';
 
 const DISMISS_KEY = 'fancy.checkinAppAnnounce.dismissed';
 
+/* ── The dismissal, read as what it is: a value that lives outside React ──
+   This used to be `useState(true)` plus an effect that read localStorage on
+   mount, with the initial `true` standing in for "assume hidden until we have
+   looked" — a duplicate of the stored value, and a comment explaining why the
+   duplicate starts out lying. `useSyncExternalStore` states the same contract
+   in code: the server (and the hydrating client) get `true`, so the markup
+   matches and nothing flashes; the browser gets the real answer. */
+const dismissListeners = new Set();
+const subscribeDismissed = (fn) => { dismissListeners.add(fn); return () => dismissListeners.delete(fn); };
+
+/* Closed for this page-load even where we could not write it down. Without
+   this, an organizer in a private window would click the X and watch the card
+   stay exactly where it was — the write throws, and the store would keep
+   answering "not dismissed". */
+let dismissedThisLoad = false;
+
+const readDismissed = () => {
+  if (dismissedThisLoad) return true;
+  try {
+    return window.localStorage.getItem(DISMISS_KEY) === '1';
+  } catch {
+    // Private mode, or storage disabled. Showing it is the safe default: the
+    // cost is a card somebody closes again, not a broken dashboard.
+    return false;
+  }
+};
+
 /** What the app does, in the three sentences that actually sell it. */
 const POINTS = [
   {
@@ -90,29 +117,19 @@ const POINTS = [
 ];
 
 export default function CheckinAppAnnounce() {
-  const [dismissed, setDismissed] = useState(true); // assume hidden until read
+  // `true` on the server and during hydration: hidden is the state whose
+  // markup is safe to be wrong about for one frame.
+  const dismissed = useSyncExternalStore(subscribeDismissed, readDismissed, () => true);
   const { tiers } = usePublicPricing();
 
-  /* Read AFTER mount. localStorage does not exist on the server, and reading
-     it during render would make the server markup disagree with the client's
-     — the card would flash in for anyone who had already dismissed it. */
-  useEffect(() => {
-    try {
-      setDismissed(window.localStorage.getItem(DISMISS_KEY) === '1');
-    } catch {
-      // Private mode, or storage disabled. Showing it is the safe default:
-      // the cost is a card somebody closes again, not a broken dashboard.
-      setDismissed(false);
-    }
-  }, []);
-
   const close = () => {
-    setDismissed(true);
+    dismissedThisLoad = true;
     try {
       window.localStorage.setItem(DISMISS_KEY, '1');
     } catch {
       // Nothing to do — it will be back next visit, which is survivable.
     }
+    dismissListeners.forEach((fn) => fn());
   };
 
   if (dismissed) return null;

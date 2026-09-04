@@ -33,12 +33,30 @@
  * breakage from ever getting that far.
  *
  *   node scripts/parseCheck.js        # exits non-zero on any parse error
+ *   node scripts/parseCheck.js DIR    # check DIR instead of src/
+ *
+ * ── WHY THE DIRECTORY IS AN ARGUMENT ──
+ *
+ * Only its own test uses it, and for a reason worth stating. That test proves
+ * the checker still FAILS on a file that cannot parse, which means writing a
+ * deliberately broken file somewhere the walk reaches. Writing it into the live
+ * `src/` tree worked, and raced: three other test files walk the same tree and
+ * read every file in it, in sibling vitest workers, and any of them landing
+ * between the decoy's creation and its deletion crashed with ENOENT — a red
+ * suite on a green codebase, on a schedule nobody could predict.
+ *
+ * With a root argument the decoy goes in a temp directory and touches nothing
+ * shared. The default is unchanged, so every caller keeps working.
  */
 const fs = require('node:fs');
 const path = require('node:path');
 const esbuild = require('esbuild');
 
-const ROOT = path.join(__dirname, '..', 'src');
+const CUSTOM_ROOT = Boolean(process.argv[2]);
+const ROOT = CUSTOM_ROOT
+  ? path.resolve(process.argv[2])
+  : path.join(__dirname, '..', 'src');
+const REPORT_BASE = CUSTOM_ROOT ? ROOT : path.join(__dirname, '..');
 
 function walk(dir, out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -64,7 +82,10 @@ for (const file of files) {
   } catch (err) {
     const first = (err.errors || [])[0];
     failures.push({
-      file: path.relative(path.join(__dirname, '..'), file).replace(/\\/g, '/'),
+      // Relative to the project when checking src/, relative to the given root
+      // otherwise — a custom root can be anywhere, and "../../../AppData/..."
+      // tells a reader nothing.
+      file: path.relative(REPORT_BASE, file).replace(/\\/g, '/'),
       line: first?.location?.line,
       text: first?.text || err.message,
     });

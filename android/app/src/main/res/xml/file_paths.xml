@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What the FileProvider may share, and nothing more.
+
+  One entry, naming the update directory explicitly. The tempting shorthand is
+
+      <files-path name="files" path="." />
+
+  which publishes the WHOLE of filesDir — and on this app that is the encrypted
+  guest database, the cached event photographs, and the crash log. A provider
+  exists to hand one file to the package installer; it has no business being able
+  to reach any of that.
+
+  `path` must match UpdateRepository.UPDATE_DIR.
+-->
+<paths>
+    <files-path
+        name="updates"
+        path="updates/" />
+</paths>

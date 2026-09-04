@@ -26,6 +26,11 @@ import com.fancyrsvp.checkin.ui.Routes
 import com.fancyrsvp.checkin.ui.session.SessionLockOverlay
 import com.fancyrsvp.checkin.ui.session.SessionManager
 import com.fancyrsvp.checkin.ui.theme.FancyCheckinTheme
+import com.fancyrsvp.checkin.ui.update.UpdateOverlay
+import com.fancyrsvp.checkin.ui.update.UpdateViewModel
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalContext
+import androidx.hilt.navigation.compose.hiltViewModel
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -109,10 +114,86 @@ class MainActivity : ComponentActivity() {
                         sessionManager = sessionManager,
                         navController = navController,
                     )
+                    // UpdateGate FIRST, SessionGate second: later children paint
+                    // on top, so the PIN lock always wins. An update offer that
+                    // could cover the lock screen would be a way past it.
+                    UpdateGate(navController)
                     SessionGate(sessionManager, navController)
                 }
             }
         }
+    }
+}
+
+/**
+ * Offers a newer build of the app, and only where it is safe to interrupt.
+ *
+ * ── Why this is gated on the route ──
+ *
+ * The app is sideloaded, so nothing else tells a tablet an update exists — but
+ * an update prompt at a door is worse than a stale build. Installing restarts
+ * the process, and the one moment that must never be interrupted is somebody
+ * standing at the entrance with a queue behind them.
+ *
+ * WELCOME and PREPARE are the two screens reached in an office, on wifi, before
+ * anyone travels — the same moment preparation already chooses to refuse a build
+ * the server considers too old. Every other route means the tablet is armed or
+ * working, so the overlay simply is not drawn.
+ *
+ * The queue is checked too, inside UpdateGate.evaluate: a tablet holding
+ * check-ins that exist nowhere else is not restarted for a version number.
+ */
+@Composable
+private fun UpdateGate(navController: NavHostController) {
+    val viewModel: UpdateViewModel = hiltViewModel()
+    val state by viewModel.state.collectAsState()
+    val currentEntry by navController.currentBackStackEntryAsState()
+    val context = LocalContext.current
+
+    val route = currentEntry?.destination?.route
+    val allowed = route == Routes.WELCOME || route == Routes.PREPARE
+
+    // Fires once per process; the ViewModel guards re-entry. Keyed on `allowed`
+    // rather than Unit so a tablet that starts on the scanner still checks when
+    // it later reaches preparation.
+    LaunchedEffect(allowed) { if (allowed) viewModel.checkOnce() }
+
+    /*
+     * ── ON_RESUME, and it has to be ──
+     *
+     * Granting "install unknown apps" happens in the Android Settings app, so
+     * the ONLY signal that the operator came back and may have granted it is
+     * this activity resuming.
+     *
+     * This was keyed on the nav back-stack entry, which sounds equivalent and is
+     * not: leaving for Settings and returning does not change the back stack at
+     * all, so the effect never re-ran. The operator granted the permission,
+     * returned, and sat on "Open settings" with no way forward — the feature
+     * dead at the last step, with a comment above it claiming this worked.
+     */
+    if (state is UpdateViewModel.State.NeedsPermission) {
+        val lifecycleOwner = LocalLifecycleOwner.current
+        DisposableEffect(lifecycleOwner) {
+            val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_RESUME) viewModel.recheckPermission()
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        }
+    }
+
+    if (allowed && state !is UpdateViewModel.State.Idle) {
+        UpdateOverlay(
+            state = state,
+            installedVersionName = viewModel.installedVersionName,
+            onUpdate = viewModel::download,
+            onLater = viewModel::dismiss,
+            // Stop is NOT Later. See UpdateViewModel.cancelDownload.
+            onStop = viewModel::cancelDownload,
+            onGrantPermission = { context.startActivity(viewModel.permissionIntent()) },
+            onInstall = { file -> context.startActivity(viewModel.installIntent(file)) },
+            onDismissFailure = viewModel::clearFailure,
+        )
     }
 }
 

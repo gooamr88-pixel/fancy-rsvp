@@ -374,7 +374,12 @@ export default function CheckInPage() {
       qrCheckInInFlight.current = false;
       setQrCheckInBusy(false);
     }
-  }, [eventId, fetchCheckInSummary, fetchWithRetry, isOnline]);
+    // `eventTimeZone` belongs here: the arrival time written into the log above
+    // is formatted in it. Omitted, this callback captured whatever the zone was
+    // when the scanner first mounted, so a page open from before the event's
+    // timezone resolved kept stamping arrivals in the stale one — invisible,
+    // because the times still look plausible.
+  }, [eventId, fetchCheckInSummary, fetchWithRetry, isOnline, eventTimeZone]);
 
   const handleQRScanSubmit = async (e) => { e.preventDefault(); if (!qrTokenInput.trim()) return; await handleQRScan(qrTokenInput); setQrTokenInput(''); };
 
