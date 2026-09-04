@@ -39,6 +39,43 @@ const DTO = path.join(
   'data', 'remote', 'UpdateManifest.kt',
 );
 
+/**
+ * `java` IS NOT THE PACKAGE ROOT INSIDE A GRADLE KOTLIN DSL SCRIPT.
+ *
+ * It is the JavaPluginExtension accessor the Java plugin contributes, so a
+ * fully-qualified `java.security.MessageDigest` parses as a property read on
+ * that extension and fails with "Unresolved reference: security" — and every
+ * value derived from it fails again with errors that point somewhere else
+ * entirely: an unresolved `it` inside an unrelated lambda, an "overload
+ * resolution ambiguity" on StringBuilder.append. One cause, five errors, none of
+ * them naming the real problem.
+ *
+ * This cost a failed deploy. It is worth a test because NOTHING else here can
+ * see it: build.gradle.kts is not in the Kotlin source set the static checks
+ * walk, there is no JDK on this machine to compile it, and the CI has no Android
+ * job — the first thing that ever type-checks this file is the build VPS, at the
+ * end of a five-minute upload.
+ *
+ * The fix is always the same: import the class at the top, as line 1 of that
+ * file already does for java.util.Properties.
+ */
+test('build.gradle.kts imports java types instead of qualifying them inline', () => {
+  const gradle = fs.readFileSync(GRADLE, 'utf8');
+
+  const offenders = gradle
+    .split('\n')
+    .map((line, i) => ({ line: line.trim(), n: i + 1 }))
+    // Imports are the correct form, and a comment explaining the trap has to be
+    // allowed to name it.
+    .filter(({ line }) => !line.startsWith('import ') && !line.startsWith('*') && !line.startsWith('//'))
+    .filter(({ line }) => /(?<![\w.])(java|javax)\.[a-z][\w]*\./.test(line))
+    .map(({ line, n }) => `${n}: ${line}`);
+
+  assert.deepEqual(offenders, [],
+    'a fully-qualified java.* reference in a Gradle Kotlin DSL script resolves against '
+    + 'the `java` plugin extension, not the package root — import the type instead');
+});
+
 /** Every key the Gradle task appends into the JSON it writes. */
 function keysWritten(gradleSource) {
   const task = gradleSource.slice(gradleSource.indexOf('val writeReleaseManifest'));

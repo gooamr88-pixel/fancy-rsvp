@@ -1,3 +1,19 @@
+/*
+ * IMPORTED, not written out as java.security.MessageDigest at the use site.
+ *
+ * Inside a Gradle Kotlin DSL script `java` is NOT the package root — it is the
+ * JavaPluginExtension accessor the Java plugin contributes. So a fully-qualified
+ * `java.security.MessageDigest` parses as a property read on that extension and
+ * fails with "Unresolved reference: security", and every value derived from it
+ * then fails again with a cascade of unrelated-looking errors (an unresolved
+ * `it` inside the lambda, an "overload resolution ambiguity" on StringBuilder
+ * .append). Five errors, one cause.
+ *
+ * `import java.util.Properties` on the next line was already doing this
+ * correctly; the manifest task simply did not follow it.
+ */
+import java.security.MessageDigest
+import java.time.Instant
 import java.util.Properties
 
 plugins {
@@ -387,7 +403,7 @@ val writeReleaseManifest by tasks.registering {
 
         // Streamed, not readBytes(): the APK is ~46 MB and a release build on a
         // 4 GB VPS has better uses for that memory.
-        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        val digest = MessageDigest.getInstance("SHA-256")
         apk.inputStream().use { input ->
             val buffer = ByteArray(64 * 1024)
             while (true) {
@@ -411,7 +427,7 @@ val writeReleaseManifest by tasks.registering {
                 .replace("\r", "")
                 .trim()
 
-        val released = java.time.Instant.now().toString()
+        val released = Instant.now().toString()
         val json = buildString {
             append("{\n")
             append("  \"versionCode\": ").append(code).append(",\n")

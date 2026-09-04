@@ -11,11 +11,27 @@ REM  Fancy check-in app  —  upload to the build VPS and build a release APK
 REM ============================================================================
 REM
 REM  Usage, from anywhere:
+REM      deploy-android.bat keys       set up passwordless login - RUN THIS FIRST
 REM      deploy-android.bat            upload everything, verify, build, install
 REM      deploy-android.bat src        upload app/src only, verify, build, install
 REM      deploy-android.bat check      verify what is on the server, no upload
 REM      deploy-android.bat install    pull the built APK and install it, no build
 REM      deploy-android.bat publish    republish the last built APK, no rebuild
+REM
+REM  ── Type the password ONCE, ever ──
+REM
+REM  A full run opens about ten separate ssh/scp connections and each one asks
+REM  for the password on its own. That is not a bug to work around with a wrapper
+REM  — it is what password authentication costs, and the fix is a key.
+REM
+REM  `deploy-android.bat keys` does the whole setup: makes an ed25519 key if
+REM  there isn't one, installs it on the server (the last password you type), and
+REM  proves passwordless login works before it claims success.
+REM
+REM  ControlMaster — one shared connection, which is how this is solved on Linux
+REM  and macOS — is NOT implemented in Windows OpenSSH. It needs Unix domain
+REM  sockets. Do not add ControlMaster/ControlPath options here expecting them to
+REM  work; they are silently ignored and the passwords keep coming.
 REM
 REM  A second argument is the RELEASE NOTE shown to tablets on the update screen:
 REM      deploy-android.bat full "Two-device undo fixed; guest search added"
@@ -51,7 +67,11 @@ REM      app/proguard-rules.pro        stale    -> R8 renames the JNI callbacks,
 REM                                               build goes green, scanner dead
 REM      app/build.gradle.kts          stale    -> orientation never changed
 REM
-REM  So this uploads all four paths and then VERIFIES each one landed before it
+REM      gradle.properties             stale    -> the build keeps the OLD memory
+REM                                               limits, so a fix for an OOM
+REM                                               kill silently does nothing
+REM
+REM  So this uploads all five paths and then VERIFIES each one landed before it
 REM  spends two minutes on a build. A silent scp failure is caught here, not
 REM  after the APK is on a tablet.
 REM
@@ -99,16 +119,32 @@ echo  Host   : %HOST%
 echo  Remote : %REMOTE%
 echo ============================================================
 
+if "%MODE%"=="keys" goto :keys
 if "%MODE%"=="check" goto :verify
 if "%MODE%"=="install" goto :install
 if "%MODE%"=="publish" goto :publish
+
+REM  ── Is key auth already working? ──
+REM
+REM  BatchMode=yes forbids every interactive prompt, so this either succeeds on a
+REM  key or fails instantly. It cannot hang waiting for a password, which is the
+REM  only reason it is safe to run before the real work.
+ssh -o BatchMode=yes -o ConnectTimeout=8 %HOST% "exit 0" >nul 2>&1
+if errorlevel 1 (
+    echo.
+    echo  [!] No SSH key on this server, so every step below will ask for the
+    echo      password separately - about ten times for a full run.
+    echo.
+    echo      Fix it once:   deploy-android.bat keys
+    echo.
+)
 
 REM ── 1. Sources ──────────────────────────────────────────────
 REM  app/src carries the Kotlin, the resources, AndroidManifest.xml AND the
 REM  native .so files (they live in src/main/jniLibs on purpose, so they ride
 REM  along with this one copy instead of being forgotten).
 echo.
-echo [1/4] app\src  (code, resources, manifest, jniLibs)
+echo [1/5] app\src  (code, resources, manifest, jniLibs)
 ssh %HOST% "rm -rf %REMOTE%/app/src"
 if errorlevel 1 goto :sshfail
 scp -r "android\app\src" %HOST%:%REMOTE%/app/
@@ -118,24 +154,39 @@ if "%MODE%"=="src" goto :gradleonly
 
 REM ── 2. Scanner SDK ──────────────────────────────────────────
 echo.
-echo [2/4] app\libs  (uart_scan_pro.jar - the scanner SDK)
+echo [2/5] app\libs  (uart_scan_pro.jar - the scanner SDK)
 ssh %HOST% "rm -rf %REMOTE%/app/libs"
 if errorlevel 1 goto :sshfail
 scp -r "android\app\libs" %HOST%:%REMOTE%/app/
 if errorlevel 1 goto :scpfail
 
 :gradleonly
-REM ── 3 and 4. The two files that live outside app/src ────────
+REM ── 3, 4 and 5. The three files that live outside app/src ───
 REM  Full destination FILENAMES, not a directory with a trailing slash:
 REM  OpenSSH 9's SFTP-backed scp rejects some directory destinations.
 echo.
-echo [3/4] app\build.gradle.kts
+echo [3/5] app\build.gradle.kts
 scp "android\app\build.gradle.kts" %HOST%:%REMOTE%/app/build.gradle.kts
 if errorlevel 1 goto :scpfail
 
 echo.
-echo [4/4] app\proguard-rules.pro
+echo [4/5] app\proguard-rules.pro
 scp "android\app\proguard-rules.pro" %HOST%:%REMOTE%/app/proguard-rules.pro
+if errorlevel 1 goto :scpfail
+
+REM  ── 5. gradle.properties — the FIFTH file outside app/src ──
+REM
+REM  Added after being caught by this script's own header warning. It carries
+REM  org.gradle.jvmargs and the Kotlin compiler execution strategy, i.e. how much
+REM  memory the build is allowed on a 4 GB box — so editing it locally and not
+REM  uploading it means the server keeps building with the old limits and the
+REM  change looks like it did nothing.
+REM
+REM  Note the destination: it sits beside the `android/` root on the server, NOT
+REM  under app/, because that is where Gradle reads it from.
+echo.
+echo [5/5] gradle.properties  (build memory limits)
+scp "android\gradle.properties" %HOST%:%REMOTE%/gradle.properties
 if errorlevel 1 goto :scpfail
 
 REM ── Verify before building ──────────────────────────────────
@@ -148,7 +199,7 @@ REM  Separated by ';' and closed with 'true', NOT chained with '&&'.
 REM  grep -c exits 1 when the count is zero, which would abort an && chain and
 REM  report it as an SSH failure - hiding the one number that actually told you
 REM  the R8 keep rules never arrived.
-ssh %HOST% "cd %REMOTE%; echo -n 'scanner jar (bytes): '; stat -c %%s app/libs/uart_scan_pro.jar 2>/dev/null || echo MISSING; echo -n 'native .so count   : '; find app/src/main/jniLibs -name '*.so' 2>/dev/null | wc -l; echo -n 'R8 keep rules      : '; grep -c com.tool app/proguard-rules.pro; echo -n 'orientation        : '; grep -o 'fullSensor\|fullUser\|userLandscape\|userPortrait\|sensorLandscape' app/build.gradle.kts | tail -1; echo -n 'kotlin files       : '; find app/src -name '*.kt' | wc -l; true"
+ssh %HOST% "cd %REMOTE%; echo -n 'scanner jar (bytes): '; stat -c %%s app/libs/uart_scan_pro.jar 2>/dev/null || echo MISSING; echo -n 'native .so count   : '; find app/src/main/jniLibs -name '*.so' 2>/dev/null | wc -l; echo -n 'R8 keep rules      : '; grep -c com.tool app/proguard-rules.pro; echo -n 'orientation        : '; grep -o 'fullSensor\|fullUser\|userLandscape\|userPortrait\|sensorLandscape' app/build.gradle.kts | tail -1; echo -n 'kotlin files       : '; find app/src -name '*.kt' | wc -l; echo -n 'gradle heap        : '; grep -o 'Xmx[0-9]*m' gradle.properties | head -1; echo -n 'kotlin strategy    : '; grep -o 'execution.strategy=.*' gradle.properties || echo '(default - separate daemon)'; true"
 if errorlevel 1 goto :sshfail
 
 REM  The kotlin count is computed from THIS tree rather than hard-coded.
@@ -162,6 +213,8 @@ for /f %%C in ('powershell -NoProfile -Command "(Get-ChildItem -Recurse -File 'a
 echo.
 echo  Expected: jar 61336 . so count 4 . keep rules 6 . kotlin %KTCOUNT%
 echo  ^(kotlin is this working tree's own count - the two must match^)
+echo  Expected: gradle heap Xmx2560m . kotlin strategy in-process
+echo  ^(sized for the 4 GB box - a separate Kotlin daemon is what OOMs it^)
 echo.
 if "%MODE%"=="check" goto :done
 
@@ -182,11 +235,33 @@ REM  build.gradle.kts and written into the update manifest by
 REM  :app:writeReleaseManifest, which assembleRelease finalizes. Single-quoted
 REM  because the note has spaces; %NOTES% was stripped of quotes at the top of
 REM  this script so it cannot close the string.
-ssh %HOST% "cd %REMOTE% && VERSION_CODE=$(( $(date +%%s) / 60 )) RELEASE_NOTES='%NOTES%' ./gradlew :app:testReleaseUnitTest :app:assembleRelease"
+REM  ── ServerAliveInterval, and why the build line needs it ──
+REM
+REM  A release build is SILENT for minutes: Kotlin compilation, KSP and R8
+REM  produce no output while they run. Any NAT or firewall between here and the
+REM  VPS sees an idle TCP connection and drops it, and ssh reports that as
+REM  "client_loop: send disconnect: Connection reset" — which reads exactly like
+REM  a build failure and is not one. Worse, SIGHUP then kills the build, so a
+REM  five-minute upload is thrown away by a router's idle timer.
+REM
+REM  30s keepalives, tolerating 10 misses: five minutes of genuine silence before
+REM  ssh gives up, which is longer than any single step here takes.
+ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=10 %HOST% "cd %REMOTE% && VERSION_CODE=$(( $(date +%%s) / 60 )) RELEASE_NOTES='%NOTES%' ./gradlew :app:testReleaseUnitTest :app:assembleRelease"
 if errorlevel 1 (
     echo.
     echo [X] BUILD FAILED - the compiler output above is the real answer.
     echo     Send it verbatim rather than summarising it.
+    echo.
+    REM  Two failures look identical from here and have opposite fixes, so name
+    REM  both rather than guessing. A compiler error prints an "e: file://" line;
+    REM  a kernel OOM kill prints nothing at all and just drops the connection.
+    echo     If the output above ends with "Connection reset" and NO compiler
+    echo     error, the build was killed rather than failed. Check which:
+    echo.
+    echo       ssh %HOST% "dmesg -T ^| grep -i -E 'killed process^|out of memory' ^| tail -5"
+    echo.
+    echo     Anything naming java or kotlin there is the 4 GB box running out of
+    echo     memory, not a problem with the code.
     exit /b 1
 )
 
@@ -282,6 +357,84 @@ REM  manifest advertising a versionCode that is no longer downloadable, and ever
 REM  tablet in the field would offer an update that installs the build they
 REM  already have.
 echo    ssh %HOST% "mv /var/www/apk/fancy-checkin.previous.apk /var/www/apk/fancy-checkin.apk; mv /var/www/apk/fancy-checkin.previous.json /var/www/apk/fancy-checkin.json"
+goto :done
+
+REM ══════════════════════════════════════════════════════════════
+REM  :keys — type the password one last time
+REM ══════════════════════════════════════════════════════════════
+REM  Public-key auth, set up end to end: make a key if there isn't one, install
+REM  it, then PROVE it works before saying so. The proof matters — the copy step
+REM  can appear to succeed and still leave a key nobody can log in with, usually
+REM  from ~/.ssh permissions the server refuses to trust.
+:keys
+echo.
+echo ------------------------------------------------------------
+echo  Setting up passwordless login to %HOST%
+echo ------------------------------------------------------------
+
+REM  Windows has no ssh-copy-id, so the public key is piped in by hand.
+set KEYFILE=%USERPROFILE%\.ssh\id_ed25519
+
+if not exist "%USERPROFILE%\.ssh" mkdir "%USERPROFILE%\.ssh"
+
+if exist "%KEYFILE%" (
+    echo.
+    echo  Using the key you already have: %KEYFILE%
+) else (
+    echo.
+    echo  Making a new key: %KEYFILE%
+    REM  -N "" is an EMPTY passphrase, deliberately. A passphrase would just move
+    REM  the typing from a password prompt to a passphrase prompt unless an
+    REM  ssh-agent is running, which is more machinery than this needs. The
+    REM  trade is real and worth stating: this file is now root on that VPS, so
+    REM  it is exactly as sensitive as the password it replaces.
+    ssh-keygen -t ed25519 -f "%KEYFILE%" -N "" -C "fancy-deploy-%COMPUTERNAME%"
+    if errorlevel 1 (
+        echo.
+        echo [X] Could not create the key. Is OpenSSH installed?
+        exit /b 1
+    )
+)
+
+echo.
+echo  Installing it on the server - THIS is the last password you type.
+echo.
+REM  chmod on both: sshd refuses an authorized_keys file, or a .ssh directory,
+REM  that other users can write to, and it refuses SILENTLY - the login just
+REM  falls back to asking for a password, which looks like the copy failed.
+type "%KEYFILE%.pub" | ssh %HOST% "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && sort -u -o ~/.ssh/authorized_keys ~/.ssh/authorized_keys"
+if errorlevel 1 (
+    echo.
+    echo [X] Could not install the key - wrong password, or host unreachable.
+    exit /b 1
+)
+
+echo.
+echo  Checking it actually works...
+REM  BatchMode=yes is the whole test: it forbids every interactive prompt, so
+REM  this can only pass on the key. Without it a still-broken setup would just
+REM  ask for the password again and report success.
+ssh -o BatchMode=yes -o ConnectTimeout=10 %HOST% "echo CONNECTED"
+if errorlevel 1 (
+    echo.
+    echo [X] The key was copied but the server still will not accept it.
+    echo     Almost always a permissions or ownership problem on the server.
+    echo     Log in with the password and check:
+    echo.
+    echo       ls -ld ~/.ssh ; ls -l ~/.ssh/authorized_keys
+    echo       # want: drwx------ for .ssh, -rw------- for authorized_keys
+    echo.
+    echo     If those look right, the server may have PubkeyAuthentication off:
+    echo       grep -i pubkey /etc/ssh/sshd_config
+    exit /b 1
+)
+
+echo.
+echo ------------------------------------------------------------
+echo  Done. No deploy will ask for a password again.
+echo.
+echo  Run the real thing now:   deploy-android.bat
+echo ------------------------------------------------------------
 goto :done
 
 REM ── Failure paths ───────────────────────────────────────────
