@@ -2,7 +2,62 @@ const rawApiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/
 export const API_URL = rawApiUrl.endsWith('/api/v1') ? rawApiUrl : `${rawApiUrl}/api/v1`;
 export const API_BASE_URL = API_URL.replace(/\/api\/v1$/, '');
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE DEMO ROUTER.
+
+   /demo mounts the real dashboard screens — OrganizerOverview and the
+   analytics page fetch their own data and cannot be fed by props — against a
+   sample event that exists nowhere. Rather than patch `window.fetch` (global,
+   shared with every other tab on this origin, and impossible to scope), the
+   ONE client every one of those screens goes through offers a slot.
+
+   A leak here would mean a paying organizer reading somebody's sample
+   wedding, so there are three independent guards and not one:
+
+     1. the /demo layout installs on mount and uninstalls on unmount;
+     2. `isDemoSurface()` is re-checked ON EVERY CALL, not at install time, so
+        a client-side navigation out of /demo stops the router even if the
+        uninstall never ran;
+     3. a router may DECLINE by returning undefined, and the call then goes to
+        the network exactly as it always did — which is how /public/* still
+        answers from the real API inside the demo.
+
+   Nothing writes. The router is a pure function of the URL; the demo has no
+   mutations to record.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+let demoRouter = null;
+
+/** True only on a real /demo page in a browser. */
+function isDemoSurface() {
+  return typeof window !== 'undefined'
+    && (window.location.pathname === '/demo' || window.location.pathname.startsWith('/demo/'));
+}
+
+/**
+ * Answer `apiFetch` from `router(path)` while the visitor is inside /demo.
+ *
+ * @param {(path: string) => any} router  return undefined to decline a path
+ * @returns {() => void} uninstall
+ */
+export function installDemoApi(router) {
+  demoRouter = typeof router === 'function' ? router : null;
+  return () => { if (demoRouter === router) demoRouter = null; };
+}
+
+/** Exported for the isolation test, which has to be able to prove the slot is
+ *  empty rather than trust that it is. */
+export function demoApiInstalled() {
+  return demoRouter !== null;
+}
+
 export async function apiFetch(path, options = {}) {
+  if (demoRouter && isDemoSurface()) {
+    const answer = demoRouter(path, options);
+    // undefined is a DECLINE, not an empty response — `{}` would be an answer.
+    if (answer !== undefined) return answer;
+  }
+
   const url = `${API_URL}${path}`;
   const headers = {
     ...options.headers,

@@ -151,6 +151,18 @@ export default function HeritageArchPage({
      conflating the two would have that preview POST a real submission to an
      event that does not exist yet. */
   readOnly = false,
+  /* The marketing demo's RSVP: validates, then completes WITHOUT a network
+     call, so a visitor reaches the real confirmation screen and the real
+     entry pass on an event that exists nowhere.
+
+     A third state, not a softening of `readOnly` — see the note on
+     `simulate` in useIdempotentRsvpSubmit. `readOnly` must keep meaning
+     "stop at validation", because the wizard preview that uses it has no
+     saved event to submit to. */
+  simulate = false,
+  /* Replaces the "Create your own event" block at the foot of the RSVP
+     confirmation. Only the marketing demo passes one. */
+  afterRsvpCta,
   // Rendered inside a frame (the organizer's preview) rather than as the
   // document. Only affects how the scroll container is sized — see SnapShell.
   embedded = false,
@@ -592,7 +604,7 @@ export default function HeritageArchPage({
         event={event} slug={slug} guestRsvp={guestRsvp} hasResponded={hasResponded}
         responseStatus={responseStatus} allowGuestEdits={allowGuestEdits} effectiveRsvpId={effectiveRsvpId}
         mealOptions={mealOptions} isRTL={isRTL} trackEvent={trackEvent}
-        readOnly={readOnly}
+        readOnly={readOnly} simulate={simulate} afterRsvpCta={afterRsvpCta}
       />
     ),
   });

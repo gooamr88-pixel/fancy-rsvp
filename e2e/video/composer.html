@@ -1,0 +1,771 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fancy — walkthrough composer</title>
+<!--
+  ═══════════════════════════════════════════════════════════════════════════
+  THE STAGE THE WALKTHROUGH VIDEO IS FILMED ON.
+
+  1920x1080, never scrolls. It holds a real, NATIVE-SIZE <iframe> of a screen
+  staged by frontend/test/shots/video*.dump.jsx, and paints the explanatory
+  layer around it.
+
+  ── The theme is the PRODUCT'S theme ──
+
+  Every colour, face and radius below is read from the app's own design system
+  in frontend/src/app/globals.css — not invented for the film:
+
+      --background        #FFFFFF     --card-border    #E8E2D6
+      --warm-ivory        #F8F4EC     --champagne-gold #B8944F
+      --deep-charcoal     #191B1E     --gold-cta       #8A6D34
+      --muted-stone       #5E5A52     --soft-champagne #D7BE80
+
+      headings  Aboreto        body  Google Sans        script  Great Vibes
+
+  Gold is an ACCENT here, the way the product uses it — a hairline, a rule, a
+  bracket — never a surface and never the subject. The film should look like a
+  page of the site, not a different product wearing its logo.
+
+  ── Why the iframe is never CSS-scaled ──
+
+  A `transform: scale()` on an iframe makes it paint only its own unscaled
+  surface; the bottom half of the capture comes out solid black. That is a
+  documented, repeat failure in this repo's screenshot work. So every screen
+  is composed at its true CSS size instead:
+
+      phone   390x844    browser 1440x900
+
+  Both fit 1920x1080 natively, so scaling is never needed and never used.
+
+  ── The one thing deliberately NOT done ──
+
+  Nothing ever travels across the screen — no glare, no sheen, no light sweep.
+  It would look expensive for one second and cost legibility for the rest,
+  which is the entire point of the film.
+
+  ── Layers, back to front ──
+
+     0  #bg          paper ground
+     8  #pool        the soft shadow the device sits in
+    10  #stage       the device shell + iframe
+    28  #focus       whitening veil + gold corner brackets
+    30  #caption     the explanation card  (ABOVE the veil, on purpose)
+    32  #tag #prog   chapter label, progress hairline
+    40  #cursor      pointer and click ripple
+    60  #title       full-frame chapter card
+
+  ── Driving it ──
+
+  record.js calls window.D.<method>() through page.evaluate. Every method
+  returns a promise that settles when its animation has finished, so the
+  recorder never guesses at timing with sleeps.
+  ═══════════════════════════════════════════════════════════════════════════
+-->
+<style>
+/* The real brand faces, lifted from the Next build by record.js and rewritten
+   to absolute file: URLs. */
+__FONTS__
+
+:root {
+  /* Straight from globals.css. */
+  --white:      #FFFFFF;
+  --ivory:      #F8F4EC;
+  --ivory-deep: #F1EADC;
+  --charcoal:   #191B1E;
+  --stone:      #5E5A52;
+  --stone-soft: #77736A;
+  --border:     #E8E2D6;
+  --gold:       #B8944F;
+  --gold-cta:   #8A6D34;
+  --gold-soft:  #D7BE80;
+
+  --display: 'Aboreto', Georgia, serif;
+  --sans:    'Google Sans', 'Montserrat', -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --script:  'Great Vibes', cursive;
+
+  --r-sm: 6px; --r: 8px; --r-md: 12px; --r-lg: 16px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0; width: 1920px; height: 1080px; overflow: hidden;
+  background: var(--ivory); color: var(--charcoal);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ═══ 0. Paper ground ════════════════════════════════════════════════════ */
+#bg { position: absolute; inset: 0; z-index: 0; background: var(--ivory); }
+
+/* Two soft warm lights on ivory. Enough shape that the frame is not a flat
+   fill — a perfectly flat light field bands under H.264 as badly as a dark
+   one does. */
+#bg::before {
+  content: ''; position: absolute; inset: 0;
+  background:
+    radial-gradient(62% 52% at 18% 8%,  #FFFFFF 0%, rgba(255,255,255,0) 62%),
+    radial-gradient(58% 50% at 88% 96%, rgba(215,190,128,.16) 0%, rgba(215,190,128,0) 64%);
+}
+/* A whisper of paper tooth. On a light ground this reads as stock rather than
+   noise — a quarter of the strength a dark theme would need. */
+#bg::after {
+  content: ''; position: absolute; inset: -120px; opacity: .30;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.055'/%3E%3C/svg%3E");
+}
+
+/* ═══ 8. The shadow the device sits in ═══════════════════════════════════ */
+#pool {
+  position: absolute; z-index: 8; pointer-events: none;
+  opacity: 0; transition: opacity 700ms ease;
+}
+#pool.on { opacity: 1; }
+#pool .contact {
+  position: absolute; left: 50%; bottom: -26px; width: 84%; height: 40px;
+  transform: translateX(-50%);
+  background: radial-gradient(50% 50% at 50% 50%, rgba(60,50,32,.20) 0%, transparent 72%);
+  filter: blur(14px);
+}
+
+/* ═══ 10. The screen under discussion ════════════════════════════════════ */
+#stage { position: absolute; inset: 0; z-index: 10; }
+
+.shell {
+  position: absolute; opacity: 0; transform: scale(.99);
+  transition: opacity 380ms ease, transform 520ms cubic-bezier(.2,.7,.25,1);
+}
+.shell.on { opacity: 1; transform: scale(1); }
+.shell iframe { display: block; border: 0; background: #fff; }
+
+/* ── Phone: a pale, light-room device, not a black slab ─────────────────── */
+.shell.phone {
+  padding: 12px; border-radius: 50px;
+  background: linear-gradient(160deg, #FFFFFF 0%, #EFE9DE 46%, #E2DACB 100%);
+  box-shadow:
+    0 0 0 1px var(--border),
+    0 1px 0 rgba(255,255,255,.9) inset,
+    0 20px 40px rgba(60,50,32,.10),
+    0 50px 90px rgba(60,50,32,.10);
+}
+.shell.phone iframe {
+  border-radius: 39px;
+  box-shadow: 0 0 0 1px rgba(120,105,75,.22);
+}
+.shell.phone::after {          /* side button */
+  content: ''; position: absolute; right: -2px; top: 188px; width: 3px; height: 72px;
+  border-radius: 2px; background: linear-gradient(#E6DED0, #CFC5B2);
+}
+
+/* ── Browser ────────────────────────────────────────────────────────────── */
+.shell.browser {
+  border-radius: var(--r-md); overflow: hidden; background: var(--white);
+  box-shadow:
+    0 0 0 1px var(--border),
+    0 20px 40px rgba(60,50,32,.10),
+    0 54px 100px rgba(60,50,32,.11);
+}
+.shell.browser .chrome {
+  height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 16px;
+  background: var(--ivory); border-bottom: 1px solid var(--border);
+}
+.shell.browser .dot { width: 11px; height: 11px; border-radius: 50%; }
+.shell.browser .url {
+  flex: 1; margin-left: 14px; height: 26px; border-radius: var(--r-sm);
+  background: var(--white); border: 1px solid var(--border);
+  display: flex; align-items: center; padding: 0 14px;
+  font-size: 12.5px; color: var(--stone-soft); letter-spacing: .01em;
+}
+
+/* ═══ 30. Caption ════════════════════════════════════════════════════════ */
+#caption {
+  /* Above #focus deliberately: the caption explains the highlight, so the veil
+     that dims everything else must never dim it too. */
+  position: absolute; z-index: 30; opacity: 0;
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 38px 44px 40px;
+  box-shadow: 0 18px 40px rgba(60,50,32,.10), 0 44px 90px rgba(60,50,32,.08);
+  clip-path: inset(0 100% 0 0);
+  transition: opacity 200ms ease, clip-path 560ms cubic-bezier(.22,.75,.2,1),
+              transform 560ms cubic-bezier(.22,.75,.2,1);
+  transform: translateY(8px);
+}
+#caption.on { opacity: 1; clip-path: inset(0 0 0 0); transform: translateY(0); }
+#caption.mid    { transform: translateY(calc(-50% + 8px)); }
+#caption.mid.on { transform: translateY(-50%); }
+
+/* The single gold gesture on the card: a hairline down the leading edge. */
+#caption::before {
+  content: ''; position: absolute; left: -1px; top: 18px; bottom: 18px; width: 3px;
+  border-radius: 3px;
+  background: linear-gradient(var(--gold-soft), var(--gold) 55%, var(--gold-cta));
+}
+
+#cap-eyebrow {
+  display: flex; align-items: center; gap: 12px;
+  font-size: 12.5px; font-weight: 600; letter-spacing: .28em; text-transform: uppercase;
+  color: var(--gold-cta); margin-bottom: 16px;
+}
+#cap-eyebrow i { display: block; height: 1px; width: 34px; flex: none; background: var(--gold-soft); }
+
+#cap-title {
+  font-family: var(--display); font-weight: 400;
+  font-size: 44px; line-height: 1.14; letter-spacing: .004em;
+  color: var(--charcoal); margin-bottom: 16px;
+}
+#cap-body { font-size: 21px; line-height: 1.62; color: var(--stone); }
+
+/* The side column beside a desktop screen is 592px, not 1004. Type that is
+   comfortable across the wide card becomes a wall in the narrow one. */
+#caption.narrow            { padding: 30px 34px 32px; }
+#caption.narrow #cap-title { font-size: 36px; margin-bottom: 14px; }
+#caption.narrow #cap-body  { font-size: 18.5px; line-height: 1.6; }
+#caption.narrow #cap-steps li { font-size: 17px; padding: 8px 0; }
+#cap-body b { color: var(--charcoal); font-weight: 600; }
+#cap-body em { font-style: normal; color: var(--gold-cta); font-weight: 600; }
+#cap-body code {
+  font-family: 'Cascadia Mono', Consolas, monospace; font-size: .85em;
+  background: var(--ivory); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 2px 7px; color: var(--gold-cta);
+}
+
+#cap-steps { margin: 20px 0 0; padding: 0; list-style: none; }
+#cap-steps li {
+  display: flex; gap: 14px; align-items: flex-start;
+  font-size: 19px; line-height: 1.5; color: var(--stone);
+  padding: 9px 0; border-top: 1px solid var(--border);
+}
+#cap-steps li:first-child { border-top: 0; }
+#cap-steps li .n {
+  flex: 0 0 26px; height: 26px; margin-top: 1px; border-radius: 50%;
+  /* Sans, tabular. An old-style "1" in a small disc reads as a small-cap I
+     rather than a number. */
+  font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--white); background: var(--gold-cta);
+}
+#cap-steps li.done .n { background: var(--charcoal); }
+
+/* ═══ 28. Focus — a whitening veil with a hole, plus gold brackets ═══════ */
+/* On a light theme "dim everything else" is a WASH, not a shadow. A dark scrim
+   here would punch a hole in the paper and look like a different application. */
+#focus {
+  position: absolute; z-index: 28; pointer-events: none; opacity: 0;
+  transition: opacity 300ms ease, all 460ms cubic-bezier(.2,.7,.25,1);
+}
+#focus.on { opacity: 1; }
+#focus .hole {
+  position: absolute; inset: 0; border-radius: var(--r);
+  box-shadow: 0 0 0 9999px rgba(248,244,236,.76);
+}
+#focus .br {
+  position: absolute; width: 22px; height: 22px;
+  border: 2.5px solid var(--gold-cta); border-radius: 2px;
+}
+#focus .br.tl { left: -6px; top: -6px;      border-right: 0; border-bottom: 0; }
+#focus .br.tr { right: -6px; top: -6px;     border-left: 0;  border-bottom: 0; }
+#focus .br.bl { left: -6px; bottom: -6px;   border-right: 0; border-top: 0; }
+#focus .br.br_{ right: -6px; bottom: -6px;  border-left: 0;  border-top: 0; }
+
+/* ═══ 32. Chapter tag + progress hairline ════════════════════════════════ */
+#tag {
+  position: absolute; left: 64px; top: 52px; z-index: 32;
+  display: flex; align-items: center; gap: 14px;
+  opacity: 0; transition: opacity 380ms ease;
+}
+#tag.on { opacity: 1; }
+#tag .mark { width: 24px; height: 24px; flex: none; }
+#tag .txt {
+  font-family: var(--display); color: var(--stone);
+  font-size: 14px; letter-spacing: .3em; text-transform: uppercase;
+}
+#tag .txt b { font-weight: 400; color: var(--gold-cta); }
+
+#prog {
+  position: absolute; left: 0; bottom: 0; height: 3px; z-index: 32;
+  width: 0%; background: linear-gradient(90deg, var(--gold-soft), var(--gold));
+  transition: width 700ms linear; opacity: 0;
+}
+#prog.on { opacity: 1; }
+
+/* ═══ 40. Cursor ═════════════════════════════════════════════════════════ */
+#cursor {
+  position: absolute; left: 0; top: 0; width: 30px; height: 30px; z-index: 40;
+  opacity: 0; pointer-events: none;
+  filter: drop-shadow(0 3px 6px rgba(40,32,18,.35));
+  transition: opacity 200ms ease;
+}
+#cursor.on { opacity: 1; }
+#cursor-halo {
+  position: absolute; width: 64px; height: 64px; margin: -32px 0 0 -32px; z-index: 39;
+  border-radius: 50%; pointer-events: none; opacity: 0;
+  background: radial-gradient(circle, rgba(184,148,79,.20), transparent 66%);
+  transition: opacity 240ms ease;
+}
+#cursor-halo.on { opacity: 1; }
+#ripple {
+  position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; z-index: 39;
+  border-radius: 50%; border: 2px solid var(--gold-cta); opacity: 0; pointer-events: none;
+}
+@keyframes rip { 0% { transform: scale(.35); opacity: .9; } 100% { transform: scale(5.5); opacity: 0; } }
+#ripple.go { animation: rip 560ms cubic-bezier(.2,.7,.3,1); }
+
+/* ═══ 60. Title card ═════════════════════════════════════════════════════ */
+#title {
+  position: absolute; inset: 0; z-index: 60; pointer-events: none;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity 420ms ease;
+  background:
+    radial-gradient(70% 58% at 50% 40%, #FFFFFF 0%, rgba(255,255,255,0) 72%),
+    var(--ivory);
+}
+#title.on { opacity: 1; }
+
+#title .mark { width: 66px; height: 66px; margin-bottom: 28px; opacity: 0; }
+#title.on .mark { animation: markIn 900ms cubic-bezier(.2,.7,.25,1) 80ms both; }
+@keyframes markIn { 0% { opacity: 0; transform: translateY(10px) scale(.94); } 100% { opacity: 1; transform: none; } }
+
+#title .kicker {
+  display: flex; align-items: center; gap: 18px;
+  font-family: var(--display); font-size: 16px; color: var(--gold-cta);
+  letter-spacing: .42em; text-transform: uppercase; margin-bottom: 24px; opacity: 0;
+}
+#title .kicker i { display: block; height: 1px; width: 0; background: var(--gold-soft); }
+#title.on .kicker { animation: fadeUp 620ms ease 200ms both; }
+#title.on .kicker i { animation: ruleOut 760ms cubic-bezier(.2,.7,.25,1) 300ms both; }
+@keyframes ruleOut { to { width: 56px; } }
+
+#title h1 {
+  font-family: var(--display); color: var(--charcoal); font-weight: 400;
+  font-size: 76px; line-height: 1.1; margin: 0; text-align: center; max-width: 1400px;
+  opacity: 0;
+}
+/* The tracking settles inward as it fades up — type ARRIVING rather than type
+   appearing, for the cost of one keyframe. */
+#title.on h1 { animation: settle 900ms cubic-bezier(.16,.72,.22,1) 260ms both; }
+@keyframes settle {
+  0%   { opacity: 0; letter-spacing: .16em; transform: translateY(8px); }
+  100% { opacity: 1; letter-spacing: .014em; transform: none; }
+}
+
+#title p {
+  font-size: 25px; line-height: 1.5; color: var(--stone);
+  margin: 24px 0 0; text-align: center; max-width: 1040px; opacity: 0;
+}
+#title.on p { animation: fadeUp 700ms ease 520ms both; }
+@keyframes fadeUp { 0% { opacity: 0; transform: translateY(10px); } 100% { opacity: 1; transform: none; } }
+</style>
+</head>
+<body>
+
+<div id="bg"></div>
+<div id="pool"><div class="contact"></div></div>
+
+<div id="stage">
+  <div class="shell" id="shellA"></div>
+  <div class="shell" id="shellB"></div>
+</div>
+
+<div id="focus">
+  <div class="hole"></div>
+  <div class="br tl"></div><div class="br tr"></div>
+  <div class="br bl"></div><div class="br br_"></div>
+</div>
+
+<div id="caption">
+  <div id="cap-eyebrow"></div>
+  <div id="cap-title"></div>
+  <div id="cap-body"></div>
+  <ul id="cap-steps"></ul>
+</div>
+
+<div id="tag">
+  <svg class="mark" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+    <defs><linearGradient id="tg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#D7BE80"/><stop offset=".5" stop-color="#B8944F"/><stop offset="1" stop-color="#8A6D34"/>
+    </linearGradient></defs>
+    <rect x="6" y="15" width="36" height="23" rx="2.5" fill="none" stroke="url(#tg)" stroke-width="1.6"/>
+    <path d="M6 17.5 L24 31 L42 17.5" fill="none" stroke="url(#tg)" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="M8 15 L24 4 L40 15" fill="none" stroke="url(#tg)" stroke-width="1.3" stroke-linejoin="round"/>
+    <path d="M24 6.5 L26.4 9.5 L24 12.5 L21.6 9.5 Z" fill="#B8944F"/>
+  </svg>
+  <div class="txt"></div>
+</div>
+
+<div id="prog"></div>
+
+<div id="cursor-halo"></div>
+<div id="ripple"></div>
+<svg id="cursor" viewBox="0 0 24 24" fill="none">
+  <path d="M5 2.5 L5 20 L9.4 15.8 L12.2 21.6 L15.1 20.2 L12.4 14.6 L18.6 14.4 Z"
+        fill="#FFFFFF" stroke="#191B1E" stroke-width="1.3" stroke-linejoin="round"/>
+</svg>
+
+<div id="title">
+  <svg class="mark" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+    <defs><linearGradient id="tm" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#D7BE80"/><stop offset=".5" stop-color="#B8944F"/><stop offset="1" stop-color="#8A6D34"/>
+    </linearGradient></defs>
+    <rect x="6" y="15" width="36" height="23" rx="2.5" fill="none" stroke="url(#tm)" stroke-width="1.4"/>
+    <path d="M6 17.5 L24 31 L42 17.5" fill="none" stroke="url(#tm)" stroke-width="1.4" stroke-linejoin="round"/>
+    <path d="M8 15 L24 4 L40 15" fill="none" stroke="url(#tm)" stroke-width="1.15" stroke-linejoin="round"/>
+    <path d="M24 6.5 L26.4 9.5 L24 12.5 L21.6 9.5 Z" fill="#B8944F"/>
+  </svg>
+  <div class="kicker"><i></i><span></span><i></i></div>
+  <h1></h1>
+  <p></p>
+</div>
+
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const W = 1920, H = 1080;
+
+  const shells = [$('#shellA'), $('#shellB')];
+  let front = 0;
+  const cursor = $('#cursor'), halo = $('#cursor-halo'), ripple = $('#ripple');
+  const focus = $('#focus'), cap = $('#caption'), pool = $('#pool');
+
+  let cur = { x: W * 0.62, y: H * 0.5 };
+  /* Which device the visible screen is in.
+     The caption used to default to 'phone', so a desktop chapter that forgot to
+     say `device: 'browser'` on every single caption got the phone's 1004px card
+     at the phone's x — hanging 700px off the right edge of the frame with the
+     text cut in half. Remembering it here makes the shot lists say it once, in
+     the `show`, where it is actually a property of the screen. */
+  let lastDevice = 'phone';
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  /* Two frames, not one.
+     Content is written, THEN the class that starts the entrance animations is
+     added. Do both in the same task and the very first card runs its
+     animations against a layout that has not resolved yet: the opening title
+     lost its heading and both rules, while every later card — by then warm —
+     was perfect. One rAF queues before style recalc; the second lands after. */
+  const nextFrame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+  /* Both devices are composed at TRUE size and sit LEFT, with the caption in
+     the column beside them.
+
+     The browser was 1440x900 with the caption underneath, which does not fit:
+     900 plus window chrome is 944 tall, so a card below it had 68px to live
+     in. 1120x860 is a real desktop width, matches what the dashboard screens
+     are already staged at, and leaves a 620px column for the explanation. */
+  const DEVICES = {
+    phone:   { w: 390,  h: 844, pad: 12, chrome: 0,  left: 214 },
+    browser: { w: 1120, h: 860, pad: 0,  chrome: 44, left: 78  },
+  };
+  const CAP_BOX = {
+    phone:   { left: 772,  top: '50%', width: 1004, mid: true },
+    browser: { left: 1266, top: '50%', width: 592,  mid: true },
+  };
+
+  function shellRect() {
+    const el = shells[front];
+    const r = el.getBoundingClientRect();
+    const pad = parseFloat(getComputedStyle(el).paddingLeft) || 0;
+    const chrome = el.querySelector('.chrome');
+    return { x: r.left + pad, y: r.top + pad + (chrome ? chrome.offsetHeight : 0) };
+  }
+
+  const D = {
+    /* ── Screens ──────────────────────────────────────────────────────── */
+    async show(url, opts = {}) {
+      const kind = opts.device || 'phone';
+      const dev  = DEVICES[kind];
+      const w = opts.width  || dev.w;
+      const h = opts.height || dev.h;
+      const outerW = w + dev.pad * 2;
+      const outerH = h + dev.pad * 2 + dev.chrome;
+      const left = opts.left != null ? opts.left : dev.left;
+      const top  = opts.top  != null ? opts.top  : (H - outerH) / 2;
+
+      lastDevice = kind;
+
+      const back = shells[1 - front];
+      back.className = 'shell ' + kind;
+      back.style.left = left + 'px';
+      back.style.top  = top + 'px';
+      back.innerHTML =
+        (kind === 'browser'
+          ? '<div class="chrome">'
+            + '<span class="dot" style="background:#E8B4AE"></span>'
+            + '<span class="dot" style="background:#E7D3A4"></span>'
+            + '<span class="dot" style="background:#BBD3B0"></span>'
+            + '<div class="url">' + (opts.url || '') + '</div></div>'
+          : '')
+        + '<iframe id="fr" scrolling="' + (opts.scroll === false ? 'no' : 'yes') + '"'
+        + ' style="width:' + w + 'px;height:' + h + 'px"></iframe>';
+
+      const fr = back.querySelector('iframe');
+      const loaded = new Promise((res) => {
+        fr.addEventListener('load', res, { once: true });
+        setTimeout(res, 9000);            // never hang the film on one frame
+      });
+      fr.src = url;
+      await loaded;
+      await wait(opts.settle == null ? 450 : opts.settle);
+
+      pool.style.left = left + 'px';  pool.style.top = top + 'px';
+      pool.style.width = outerW + 'px'; pool.style.height = outerH + 'px';
+      pool.classList.add('on');
+
+      back.classList.add('on');
+      shells[front].classList.remove('on');
+      front = 1 - front;
+      await wait(400);
+      shells[1 - front].innerHTML = '';  // never hold two heavy pages at once
+    },
+
+    /* ── Caption ──────────────────────────────────────────────────────── */
+    async caption(c = {}) {
+      const box = CAP_BOX[c.device || lastDevice] || CAP_BOX.phone;
+      if (cap.classList.contains('on')) { cap.classList.remove('on'); await wait(260); }
+
+      cap.classList.toggle('mid', !!box.mid);
+      cap.classList.toggle('narrow', box.width < 700);
+      cap.style.left  = box.left + 'px';
+      cap.style.top   = (typeof box.top === 'number' ? box.top + 'px' : box.top);
+      cap.style.width = box.width + 'px';
+
+      const eb = $('#cap-eyebrow');
+      eb.innerHTML = c.eyebrow ? '<i></i><span>' + c.eyebrow + '</span>' : '';
+      eb.style.display = c.eyebrow ? '' : 'none';
+      $('#cap-title').innerHTML = c.title || '';
+      $('#cap-title').style.display = c.title ? '' : 'none';
+      $('#cap-body').innerHTML = c.body || '';
+      $('#cap-body').style.display = c.body ? '' : 'none';
+      $('#cap-steps').innerHTML = (c.steps || [])
+        .map((s, i) => '<li class="' + (s.done ? 'done' : '') + '">'
+          + '<span class="n">' + (s.done ? '&#10003;' : i + 1) + '</span>'
+          + '<span>' + (s.text || s) + '</span></li>').join('');
+
+      await nextFrame();
+      cap.classList.add('on');
+      await wait(600);
+    },
+
+    async hideCaption() { cap.classList.remove('on'); await wait(260); },
+
+    /* ── Chapter furniture ────────────────────────────────────────────── */
+    async tag(text) {
+      const t = $('#tag');
+      if (!text) { t.classList.remove('on'); await wait(380); return; }
+      t.querySelector('.txt').innerHTML = text;
+      t.classList.add('on');
+      await wait(380);
+    },
+
+    async progress(frac) {
+      const p = $('#prog');
+      p.classList.add('on');
+      p.style.width = Math.max(0, Math.min(1, frac)) * 100 + '%';
+      await wait(40);
+    },
+
+    /* ── Cursor ───────────────────────────────────────────────────────── */
+    async moveTo(x, y, ms = 700) {
+      cursor.classList.add('on'); halo.classList.add('on');
+      const ease = 'cubic-bezier(.34,.02,.18,1)';
+      cursor.style.transition = `transform ${ms}ms ${ease}, opacity 200ms ease`;
+      halo.style.transition   = `transform ${ms}ms ${ease}, opacity 240ms ease`;
+      cursor.style.transform = `translate(${x}px,${y}px)`;
+      halo.style.transform   = `translate(${x}px,${y}px)`;
+      cur = { x, y };
+      await wait(ms + 60);
+    },
+
+    async moveToEl(sel, ms = 700, dx = 0, dy = 0) {
+      const p = D.locate(sel);
+      if (!p) return false;
+      await D.moveTo(p.cx + dx, p.cy + dy, ms);
+      return true;
+    },
+
+    async hideCursor() { cursor.classList.remove('on'); halo.classList.remove('on'); await wait(220); },
+
+    async click() {
+      ripple.style.left = cur.x + 'px'; ripple.style.top = cur.y + 'px';
+      ripple.classList.remove('go'); void ripple.offsetWidth; ripple.classList.add('go');
+      cursor.style.transition = 'transform 100ms ease';
+      cursor.style.transform = `translate(${cur.x}px,${cur.y + 3}px)`;
+      await wait(110);
+      cursor.style.transform = `translate(${cur.x}px,${cur.y}px)`;
+      await wait(440);
+    },
+
+    /* ── Focus ────────────────────────────────────────────────────────── */
+    locate(sel) {
+      const fr = shells[front].querySelector('iframe');
+      if (!fr || !fr.contentDocument) return null;
+      const el = fr.contentDocument.querySelector(sel);
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      if (!r.width && !r.height) return null;
+      const o = shellRect();
+      return { x: o.x + r.left, y: o.y + r.top, w: r.width, h: r.height,
+               cx: o.x + r.left + r.width / 2, cy: o.y + r.top + r.height / 2 };
+    },
+
+    async ring(sel, pad = 8) {
+      const p = D.locate(sel);
+      if (!p) return false;
+      /* Clamp to the screen the element lives on. A full-bleed control plus
+         padding otherwise puts the brackets outside the device, over the bezel
+         and the paper, which reads as a rendering fault. */
+      const fr = shells[front].querySelector('iframe');
+      const o = shellRect();
+      const l = Math.max(o.x, p.x - pad);
+      const t = Math.max(o.y, p.y - pad);
+      const r = Math.min(o.x + fr.clientWidth,  p.x + p.w + pad);
+      const b = Math.min(o.y + fr.clientHeight, p.y + p.h + pad);
+      focus.style.left = l + 'px'; focus.style.top = t + 'px';
+      focus.style.width = Math.max(0, r - l) + 'px';
+      focus.style.height = Math.max(0, b - t) + 'px';
+      focus.classList.add('on');
+      await wait(420);
+      return true;
+    },
+
+    /**
+     * Position the focus from a box measured OUTSIDE the page.
+     *
+     * `locate()` below reads the iframe's contentDocument, which is fine for a
+     * staged file: screen but null once the iframe holds the running app on
+     * http://localhost — a cross-origin document the composer may not touch.
+     * Playwright can measure it (it drives the browser, not the page), so in
+     * live mode record.js measures and passes the box in. Coordinates are
+     * already relative to this 1920x1080 frame.
+     */
+    async ringAt(x, y, w, h, pad = 8) {
+      const fr = shells[front].querySelector('iframe');
+      if (!fr) return false;
+      const r = fr.getBoundingClientRect();
+      const l = Math.max(r.left, x - pad);
+      const t = Math.max(r.top,  y - pad);
+      const rr = Math.min(r.right,  x + w + pad);
+      const bb = Math.min(r.bottom, y + h + pad);
+      focus.style.left = l + 'px'; focus.style.top = t + 'px';
+      focus.style.width = Math.max(0, rr - l) + 'px';
+      focus.style.height = Math.max(0, bb - t) + 'px';
+      focus.classList.add('on');
+      await wait(420);
+      return true;
+    },
+
+    async unring() { focus.classList.remove('on'); await wait(300); },
+
+    /* ── Scrolling ────────────────────────────────────────────────────── */
+    async scrollTo(y, ms = 1600) {
+      const fr = shells[front].querySelector('iframe');
+      if (!fr || !fr.contentWindow) return;
+      const win = fr.contentWindow;
+      const from = win.scrollY || win.document.documentElement.scrollTop || 0;
+      const dist = y - from;
+      const t0 = performance.now();
+      await new Promise((res) => {
+        const step = (t) => {
+          const k = Math.min(1, (t - t0) / ms);
+          const e = k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+          win.scrollTo(0, from + dist * e);
+          if (k < 1) requestAnimationFrame(step); else res();
+        };
+        requestAnimationFrame(step);
+      });
+      await wait(140);
+    },
+
+    async scrollToEl(sel, ms = 1400, frac = 0.34) {
+      const fr = shells[front].querySelector('iframe');
+      if (!fr || !fr.contentDocument) return false;
+      const el = fr.contentDocument.querySelector(sel);
+      if (!el) return false;
+      const top = el.getBoundingClientRect().top + (fr.contentWindow.scrollY || 0);
+      await D.scrollTo(Math.max(0, top - fr.clientHeight * frac), ms);
+      return true;
+    },
+
+    /** Scroll a whole page top to bottom in one continuous pass. */
+    async scrollTour(ms = 9000) {
+      const fr = shells[front].querySelector('iframe');
+      if (!fr || !fr.contentDocument) return false;
+      const doc = fr.contentDocument.documentElement;
+      await D.scrollTo(Math.max(0, doc.scrollHeight - fr.clientHeight), ms);
+      return true;
+    },
+
+    pageHeight() {
+      const fr = shells[front].querySelector('iframe');
+      return (fr && fr.contentDocument) ? fr.contentDocument.documentElement.scrollHeight : 0;
+    },
+
+    /* ── The staged page's own state machine ──────────────────────────── */
+
+    /**
+     * React is not running inside a staged screen, so a class it would have
+     * toggled has to be toggled here.
+     *
+     * This is not inventing a state: the class names are the component's own
+     * and the CSS answering them is the shipped stylesheet. What the recorder
+     * supplies is only the event React would have supplied.
+     */
+    async setClass(sel, cls, on = true) {
+      const fr = shells[front].querySelector('iframe');
+      if (!fr || !fr.contentDocument) return false;
+      const el = fr.contentDocument.querySelector(sel);
+      if (!el) return false;
+      el.classList[on ? 'add' : 'remove'](cls);
+      await wait(50);
+      return true;
+    },
+
+    async playVideo(sel, maxMs = 12000) {
+      const fr = shells[front].querySelector('iframe');
+      if (!fr || !fr.contentDocument) return false;
+      const v = fr.contentDocument.querySelector(sel);
+      if (!v || typeof v.play !== 'function') return false;
+      v.muted = true;                       // the whole film is silent by design
+      v.currentTime = 0;
+      try { await v.play(); } catch (e) { return false; }
+      await new Promise((res) => {
+        v.addEventListener('ended', res, { once: true });
+        setTimeout(res, maxMs);             // a stalled decode must not hang it
+      });
+      return true;
+    },
+
+    /* ── Title card ───────────────────────────────────────────────────── */
+    async titleShow(kicker, heading, sub) {
+      const t = $('#title');
+      t.classList.remove('on');
+      void t.offsetWidth;
+      t.querySelector('.kicker span').textContent = kicker || '';
+      t.querySelector('.kicker').style.display = kicker ? '' : 'none';
+      t.querySelector('h1').innerHTML = heading || '';
+      t.querySelector('p').innerHTML = sub || '';
+      t.querySelector('p').style.display = sub ? '' : 'none';
+      await nextFrame();
+      t.classList.add('on');
+      await wait(1250);                     // mark, rules and type all land
+    },
+
+    async titleHide() { $('#title').classList.remove('on'); await wait(440); },
+
+    async title(kicker, heading, sub, hold = 1200) {
+      await D.titleShow(kicker, heading, sub);
+      await wait(hold);
+      await D.titleHide();
+    },
+
+    async wait(ms) { await wait(ms); },
+  };
+
+  window.D = D;
+  window.__composerReady = true;
+})();
+</script>
+</body>
+</html>

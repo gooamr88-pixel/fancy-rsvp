@@ -192,31 +192,21 @@ WEDDING_VARIANT_TEMPLATES.forEach(key => {
    anything else. The lookup below falls back to the event's own occasion
    instead, which is the thing this label was always trying to name. */
 
-// The /demo-wedding route renders a fixed showcase event — fully
-// deterministic from the slug, so it's provided via lazy initial state
-// instead of a "fetch" that only ever synchronously resolves. (It used to
-// live inside fetchEvent's async body as a same-tick early-return, which is
-// exactly the "setState before any await" pattern that trips up an effect
-// calling that function — see the mount-fetch effect below.)
-const DEMO_SLUGS = new Set(['demo-wedding']);
-function getDemoEventData(slug) {
-  return {
-    id: 'demo-uuid',
-    title: 'Julian & Sophia\'s Wedding Gala',
-    title_ar: 'حفل زفاف جوليان وصوفيا الأنيق',
-    description: 'Join us as we celebrate our love and write the next chapter of our story together. An evening of elegance, dinner, and dancing will follow the ceremony.',
-    description_ar: 'يسعدنا انضمامكم إلينا لمشاركتنا فرحة العمر والاحتفال بعهد حبنا الجديد. تبدأ مراسم الزفاف يتبعها مأدبة عشاء فاخر وسهرة ممتعة.',
-    event_date: new Date(Date.now() + 1000 * 60 * 60 * 24 * 60).toISOString(),
-    location_name: 'The Glasshouse Chelsea',
-    location_address: '545 W 25th St, New York, NY 10001',
-    template_type: 'wedding',
-    dress_code: 'Black Tie Optional',
-    dress_code_ar: 'ملابس رسمية أنيقة (Black Tie)',
-    rsvp_deadline: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString(),
-    cover_image_url: 'https://images.unsplash.com/photo-1519741497674-611481863552?q=80&w=2070',
-    custom_colors: { primary: '#B8944F', secondary: '#D7BE80', accent: '#191B1E', background: '#F8F4EC' },
-  };
-}
+/* THE DEMO EVENT USED TO LIVE HERE, and deliberately does not any more.
+   `DEMO_SLUGS` / `getDemoEventData` served a fixed showcase wedding on
+   /demo-wedding: a hardcoded Julian & Sophia at a New York venue, rendered
+   with `isPreview` so every empty section filled with sample content.
+
+   Three things were wrong with keeping it. Nothing on the site linked to it
+   and it was not in the sitemap, so it was an unreachable second demo that
+   could drift from the real one. Its RSVP form was live but its event had no
+   row, so a submit would have posted into a 404. And this route is the guest
+   page — a branch here meant every real guest's render carried a check for a
+   slug that was only ever ours.
+
+   It is now /demo, which is the same idea done properly: the real components,
+   a shared fixture (app/demo/fixtures), and an RSVP that completes locally
+   without a network call. /demo-wedding 308s there from next.config.mjs. */
 
 function sanitizeFontName(name) {
   if (!name) return null;
@@ -305,10 +295,9 @@ export default function EventPageClient({
   const effectiveRsvpId = invitationRsvpId || invitationGuestId || deviceRememberedId;
 
   const [slug, setSlug] = useState(serverSlug || '');
-  const isDemoSlug = DEMO_SLUGS.has(slug);
-  const [event, setEvent] = useState(() => initialEvent || (isDemoSlug ? getDemoEventData(slug) : null));
+  const [event, setEvent] = useState(() => initialEvent || null);
   const [guestRsvp, setGuestRsvp] = useState(null);
-  const [loading, setLoading] = useState(() => !initialEvent && !isDemoSlug);
+  const [loading, setLoading] = useState(() => !initialEvent);
   const [error, setError] = useState(null);
   const [timeLeft, setTimeLeft] = useState({});
   const [lang, setLang] = useState('en');
@@ -731,8 +720,6 @@ export default function EventPageClient({
   }, [fetchEvent]);
 
   useEffect(() => {
-    // The demo event is set via lazy initial state above — nothing to fetch.
-    if (isDemoSlug) return;
     if (!slug) return;
     // `initialEvent` is the guest-agnostic SSR snapshot (backend payload cached up
     // to 60s, see page.js). It is used as the instant first paint, and it is now
@@ -755,7 +742,7 @@ export default function EventPageClient({
       if (initialEvent && !effectiveRsvpId) { setLoading(false); return; }
       await fetchEvent();
     })();
-  }, [slug, isDemoSlug, fetchEvent, initialEvent, effectiveRsvpId]);
+  }, [slug, fetchEvent, initialEvent, effectiveRsvpId]);
 
   /* ─── Countdown ─── */
   // Depends on the DATE, not the whole `event` object: keying this on `event` meant
@@ -1213,7 +1200,14 @@ export default function EventPageClient({
           invitationTheme={invitationTheme}
           invitationGuestName={invitationGuestName}
           invitationData={invitationData}
-          isPreview={isDemoSlug}
+          /* FALSE for every guest, always. `isPreview` fills empty sections
+             with curated sample content — hotels, an itinerary, a love story
+             nobody wrote — which is right when an organizer is judging a
+             template and catastrophic on a real invitation. Its only caller
+             here was the retired /demo-wedding slug; the marketing demo now
+             runs with it off, against a fixture that has real content of its
+             own. */
+          isPreview={false}
           /* Swan Lake's hero arrives embossed in ivory and blooms into colour
              as the cover dissolves. It mounts underneath the opening several
              seconds before the guest can see it, so it needs to know the cover

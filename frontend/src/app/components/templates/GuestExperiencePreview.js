@@ -123,6 +123,22 @@ export default function GuestExperiencePreview({
      because showing someone content they did not write is the mistake worth
      making harder. */
   showSampleContent = false,
+  /* Let the RSVP be COMPLETED — validated for real, then confirmed locally
+     with no network call — instead of stopping at the preview notice.
+     False everywhere in the organizer's wizard; true on the marketing demo,
+     which is the one surface whose whole purpose is that a stranger gets all
+     the way to the confirmation screen and their own entry pass.
+
+     It does not weaken the invariant below. `readOnly` refuses to submit and
+     `simulate` never leaves the browser, so neither writes anything — the
+     two are different answers to "and then what happens", not different
+     levels of permission. */
+  simulate = false,
+  /* Replaces the "Create your own event" block at the foot of the
+     confirmation screen. The demo hands the visitor on to the organizer's
+     side of the same wedding rather than to a signup form they are not ready
+     for; a real guest still gets the real block. */
+  afterRsvpCta,
   embedded = true,
   invitationPattern,
   invitationTheme,
@@ -199,9 +215,20 @@ export default function GuestExperiencePreview({
         invitationGuestName={addressee}
         invitationData={invitationData}
         isPreview={showSampleContent}
-        // Never negotiable, whichever surface mounts this: no preview may
-        // write. The event may not even exist on the server yet.
-        readOnly
+        /* Never negotiable, whichever surface mounts this: NOTHING HERE MAY
+           REACH THE NETWORK. The event may not even exist on the server yet.
+
+           Which of the two non-writing modes applies is the caller's choice.
+           `readOnly` stops at validation and says so — right for the wizard,
+           where the organizer is checking the form they built. `simulate`
+           carries on to a locally fabricated success — right for the demo,
+           where a stranger has to see what a guest sees after they answer.
+           They are mutually exclusive by construction: readOnly's early
+           return in RsvpSection would swallow the submit before simulate
+           could ever run. */
+        readOnly={!simulate}
+        simulate={simulate}
+        afterRsvpCta={afterRsvpCta}
         embedded={embedded}
         // So Swan Lake's hero blooms out of its embossed state as the cover
         // dissolves here too, rather than the organizer only ever seeing the

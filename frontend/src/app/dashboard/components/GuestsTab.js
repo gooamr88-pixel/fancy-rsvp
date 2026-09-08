@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo, useCallback, memo } from 'react';
 import { toast } from '../../utils/toast';
+import { demoBlocked } from '../../utils/demoNotice';
 import { smsReachability } from '../../utils/smsReachability';
 import { isAccepted, isDeclined, isMaybe } from '../../utils/responseHelpers';
 import { findMealField } from '../../utils/mealField';
@@ -371,6 +372,11 @@ export default function GuestsTab({
   // dashboard already holds them, and two fetches would eventually show two
   // different numbers on the same screen.
   smsAddonActive = false, smsRemaining = 0, smsPurchased = 0, smsCoverage = null,
+  /* The marketing demo. Rendering is untouched — this screen IS the guest
+     list — but export and delete talk to the API directly rather than
+     through a prop, so they cannot be made inert from outside and are
+     stopped here instead. See utils/demoNotice.js. */
+  demoMode = false,
 }) {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
@@ -405,6 +411,7 @@ export default function GuestsTab({
 
   const handleDownload = useCallback(async (format) => {
     if (downloading) return;
+    if (demoMode) { demoBlocked('Downloading the guest list'); return; }
     setDownloading(format);
     try {
       const path = format === 'excel' ? 'export-excel' : 'export';
@@ -440,7 +447,7 @@ export default function GuestsTab({
     } finally {
       setDownloading(null);
     }
-  }, [downloading, eventId, exportWho, exportSort]);
+  }, [downloading, eventId, exportWho, exportSort, demoMode]);
 
   /**
    * Delete one guest.
@@ -473,6 +480,7 @@ export default function GuestsTab({
 
   const handleDeleteGuest = useCallback(async (guestId) => {
     if (!guestId) return;
+    if (demoMode) { demoBlocked('Removing a guest'); setRemoving(null); return; }
     setDeletingId(guestId);
     try {
       const res = await fetch(`${apiUrl}/events/${eventId}/rsvps/${guestId}`, { method: 'DELETE', credentials: 'include' });
@@ -487,7 +495,7 @@ export default function GuestsTab({
     } finally {
       setDeletingId(null);
     }
-  }, [eventId, onRefresh]);
+  }, [eventId, onRefresh, demoMode]);
 
   /**
    * COUNTS — every tile in the same unit, so the row adds up.
@@ -664,7 +672,7 @@ export default function GuestsTab({
             </button>
           )}
           {rsvps.length > 0 && (
-            <button onClick={() => setClearOpen(true)} style={{
+            <button onClick={() => (demoMode ? demoBlocked('Clearing the guest list') : setClearOpen(true))} style={{
               padding: '9px 18px', minHeight: 'var(--fx-touch)', background: COLORS.white, color: '#C45E5E', border: '1px solid #FECACA',
               borderRadius: '8px', fontSize: '12px', fontWeight: 700, fontFamily: 'var(--font-sans)',
               cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px',
@@ -974,7 +982,7 @@ export default function GuestsTab({
               <GuestCard
                 key={guest.id} guest={guest} tables={tables} onAssignTable={onAssignTable}
                 customFields={customFields} event={event}
-                onEdit={setEditingGuest} onDelete={askRemoveGuest} deleting={deletingId === guest.id}
+                onEdit={demoMode ? () => demoBlocked('Editing a guest') : setEditingGuest} onDelete={askRemoveGuest} deleting={deletingId === guest.id}
               />
             ))}
           </div>

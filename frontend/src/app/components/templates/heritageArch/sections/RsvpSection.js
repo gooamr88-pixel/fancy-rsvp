@@ -192,7 +192,7 @@ function AttendanceChoice({ value, onSelect, C, isRTL }) {
   );
 }
 
-export default function RsvpSection({ event, slug, guestRsvp, hasResponded, responseStatus, allowGuestEdits, effectiveRsvpId, mealOptions: mealOptionsProp, isRTL, trackEvent, readOnly = false }) {
+export default function RsvpSection({ event, slug, guestRsvp, hasResponded, responseStatus, allowGuestEdits, effectiveRsvpId, mealOptions: mealOptionsProp, isRTL, trackEvent, readOnly = false, simulate = false, afterRsvpCta }) {
   const C = useFullPageTheme();
   // Whether this event's page is a dark theme (several style variants ship
   // dark backgrounds — marrakesh, saffron, orchid). Used below so the RSVP
@@ -315,6 +315,11 @@ export default function RsvpSection({ event, slug, guestRsvp, hasResponded, resp
   const [submittedPartyId, setSubmittedPartyId] = useState(null);
 
   const { submit, submitting } = useIdempotentRsvpSubmit({
+    /* The marketing demo. Everything above the network call runs for real —
+       validation, the meal tally, the companion rows — and then the response
+       is fabricated locally instead of posted. See the note in the hook for
+       why this is a separate mode from `readOnly` and not a relaxation of it. */
+    simulate,
     onSuccess: (data) => {
       if (data?.qrToken) setQrToken(data.qrToken);
       // Remember this device's party id so a return visit resolves to the
@@ -848,7 +853,11 @@ export default function RsvpSection({ event, slug, guestRsvp, hasResponded, resp
             as the closing note of this page rather than a full-bleed band.
             Renders nothing for a white-labelled event. */}
         <div style={{ width: '100%', maxWidth: '440px' }}>
-          <CreateYourOwnEvent event={event} themeColor={C.maroon} isRTL={isRTL} />
+          {/* The marketing demo replaces it outright: a visitor who has just
+              answered as a guest is handed on to the organizer's side of the
+              same wedding, which is the next thing they want, rather than to
+              a signup form. A real guest always gets the real block. */}
+          {afterRsvpCta ?? <CreateYourOwnEvent event={event} themeColor={C.maroon} isRTL={isRTL} />}
         </div>
       </SectionShell>
     );

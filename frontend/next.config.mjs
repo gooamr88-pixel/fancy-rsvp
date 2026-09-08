@@ -16,6 +16,16 @@ const nextConfig = {
   async redirects() {
     return [
       { source: '/templates', destination: '/', permanent: true },
+      /* /demo-wedding was a fixed showcase event served by the [slug] route
+         from a hardcoded object in EventPageClient. Nothing on the site ever
+         linked to it and it was never in the sitemap, so it had become a
+         second, dormant demo that could drift from the real one — and its
+         RSVP would have posted to an event with no row behind it.
+
+         It is now /demo, which is the same wedding, done properly. The
+         redirect covers what deleting the code cannot: anyone who has the
+         old URL. */
+      { source: '/demo-wedding', destination: '/demo/invitation', permanent: true },
     ];
   },
   async headers() {

@@ -269,6 +269,28 @@ export default function Navbar() {
               </Link>
             ))}
 
+            {/* ── The demo sits with the ACTIONS, not with NAV_LINKS ──
+                Two reasons, and the second one is the point. The list is
+                capped at seven by a test, and it is already at seven — a
+                cap that exists because eleven targets beside a logo is not a
+                navigation bar. And this is not a section of the site to be
+                browsed to; it is the thing the page is asking you to do,
+                which is what the right-hand cluster is for. */}
+            <Link
+              href="/demo/invitation"
+              className="desktop-nav-link"
+              style={{
+                fontFamily: "var(--font-sans)",
+                fontSize: "15px",
+                fontWeight: 600,
+                textDecoration: "none",
+                cursor: "pointer",
+              }}
+              id="nav-link-demo"
+            >
+              Try it
+            </Link>
+
             {!loading && !isLoggedIn && (
               <Link
                 href="/login"
@@ -444,6 +466,22 @@ export default function Navbar() {
               {item.label}
             </Link>
           ))}
+          {/* Same placement as the desktop bar: with the actions, below the
+              seven links, so both menus offer the same thing in the same
+              order. */}
+          <Link
+            href="/demo/invitation"
+            onClick={() => setMobileMenuOpen(false)}
+            style={{
+              fontFamily: "var(--font-sans)",
+              fontSize: "16px",
+              fontWeight: 600,
+              color: "#5C574E",
+              textDecoration: "none",
+            }}
+          >
+            Try it
+          </Link>
           {!loading && !isLoggedIn && (
             <Link
               href="/login"

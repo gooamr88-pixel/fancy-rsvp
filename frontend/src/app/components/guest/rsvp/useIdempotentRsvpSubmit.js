@@ -37,7 +37,41 @@ async function didResponseLand(partyId) {
   } catch { return null; }
 }
 
-export function useIdempotentRsvpSubmit({ onSuccess, onLocked, messages = {} } = {}) {
+/* ── SIMULATE ────────────────────────────────────────────────────────────
+   The marketing demo needs a guest to complete a real RSVP and land on the
+   real confirmation screen — celebration, entry pass and all — against an
+   event that exists nowhere.
+
+   It is a THIRD mode, deliberately separate from the organizer preview's
+   `readOnly`, and the two must never be merged. `readOnly` runs validation
+   and then STOPS: the wizard's event has no row on the server yet, so a
+   submit there would 404, and a preview that appeared to record a response
+   would be lying about the one thing it exists to demonstrate. `simulate`
+   goes the other way — it must reach success — and it is safe to do so only
+   because nothing it produces is ever sent.
+
+   Implemented here rather than in either form because there are TWO RSVP
+   render paths (RsvpSection for the full-page templates, RsvpWizard for the
+   legacy scroll layout) and they have drifted apart before. One submit path,
+   one flag, no third behaviour to keep in step.
+
+   The delay is not decoration. A submit that resolves in the same frame skips
+   the pending state on the button entirely, so the demo would never show the
+   thing a real guest sees while they wait. */
+const SIMULATED_ROUND_TRIP_MS = 700;
+
+const simulatedSuccess = (body) => ({
+  partyId: `demo-party-${Math.random().toString(36).slice(2, 10)}`,
+  response: body?.response || 'yes',
+  /* A plain opaque string. The entry pass draws its QR client-side with the
+     `qrcode` package from whatever it is handed — there is no signature to
+     forge and no image to fetch, which is the only reason a fabricated pass
+     is honest rather than a picture of one. */
+  qrToken: `demo-${Math.random().toString(36).slice(2, 12)}`,
+  simulated: true,
+});
+
+export function useIdempotentRsvpSubmit({ onSuccess, onLocked, messages = {}, simulate = false } = {}) {
   const [submitting, setSubmitting] = useState(false);
   const inFlight = useRef(false);
 
@@ -46,6 +80,18 @@ export function useIdempotentRsvpSubmit({ onSuccess, onLocked, messages = {} } =
     if (inFlight.current) return { ok: false, reason: 'IN_FLIGHT' };
     inFlight.current = true;
     setSubmitting(true);
+
+    if (simulate) {
+      try {
+        await new Promise((resolve) => { setTimeout(resolve, SIMULATED_ROUND_TRIP_MS); });
+        const payload = simulatedSuccess(body);
+        onSuccess?.(payload);
+        return { ok: true, simulated: true, data: payload };
+      } finally {
+        inFlight.current = false;
+        setSubmitting(false);
+      }
+    }
 
     try {
       const res = await fetch(`${API_URL}${url}`, {
@@ -113,7 +159,7 @@ export function useIdempotentRsvpSubmit({ onSuccess, onLocked, messages = {} } =
       inFlight.current = false;
       setSubmitting(false);
     }
-  }, [onSuccess, onLocked, messages.closed, messages.full, messages.failed]);
+  }, [onSuccess, onLocked, messages.closed, messages.full, messages.failed, simulate]);
 
   return { submit, submitting };
 }

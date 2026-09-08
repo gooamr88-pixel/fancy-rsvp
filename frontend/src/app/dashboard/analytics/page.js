@@ -67,7 +67,25 @@ const ENGAGEMENT_LABELS = {
   seating_searched: 'Looked up their seat',
 };
 
-export default function AnalyticsPage() {
+/**
+ * @param {object}  [props]
+ * @param {boolean} [props.embedded]
+ *   Rendered inside another shell — the marketing demo — rather than as its
+ *   own route. It drops exactly the chrome that belongs to a page and not to
+ *   a panel: the full-height wrapper and page background (the shell paints
+ *   its own), the "← Dashboard" link (which would navigate a visitor with no
+ *   session straight into a login redirect), the duplicate `<h1>`, and the
+ *   filter row.
+ *
+ *   The filter row goes for a reason worth stating: the demo answers every
+ *   range with the same figures, so leaving the buttons in would offer a
+ *   control that visibly does nothing. Hiding a control is honest; wiring one
+ *   to a constant is not.
+ *
+ *   Everything below it — every number, funnel, meter and chart — is the
+ *   organizer's real analytics screen, unchanged.
+ */
+export default function AnalyticsPage({ embedded = false }) {
   const isClient = useIsClient();
 
   const [events, setEvents] = useState([]);
@@ -177,18 +195,20 @@ export default function AnalyticsPage() {
   const activeEvent = events.find((e) => e.id === eventId);
 
   return (
-    <div style={{ minHeight: '100dvh', background: C.softBg, fontFamily: SANS }}>
+    <div style={embedded
+      ? { fontFamily: SANS }
+      : { minHeight: '100dvh', background: C.softBg, fontFamily: SANS }}>
       {/* This pinned --fx-pad-x inline at 22px, with a comment claiming it would
           "still taper on a phone". It would not: a fixed px is a constant, and
           pinning it actually DISABLES the fluid clamp on :root that does the
           tapering. Using the preset gets the real thing — 24px, dropping to 16px
           below lg, matching every other organizer screen. */}
       <div
-        className="fx-container fx-container--3xl fx-gutter fx-gutter--sm"
-        style={{ paddingTop: 28, paddingBottom: 72 }}
+        className={embedded ? undefined : 'fx-container fx-container--3xl fx-gutter fx-gutter--sm'}
+        style={embedded ? { paddingBottom: 8 } : { paddingTop: 28, paddingBottom: 72 }}
       >
 
-        <nav style={{ marginBottom: 18 }}>
+        {!embedded && <nav style={{ marginBottom: 18 }}>
           <Link href="/dashboard" style={{
             display: 'inline-flex', alignItems: 'center', gap: 7, textDecoration: 'none',
             color: C.stone, fontSize: 12.5, fontWeight: 600,
@@ -196,17 +216,17 @@ export default function AnalyticsPage() {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M15 18l-6-6 6-6" /></svg>
             Dashboard
           </Link>
-        </nav>
+        </nav>}
 
-        <header style={{ marginBottom: 22 }}>
+        {!embedded && <header style={{ marginBottom: 22 }}>
           <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, color: C.charcoal, letterSpacing: '-.01em' }}>Analytics</h1>
           <p style={{ margin: '6px 0 0', fontSize: 13, color: C.stone }}>
             How guests are responding to {activeEvent ? <strong style={{ color: C.charcoal, fontWeight: 600 }}>{activeEvent.title}</strong> : 'your event'}.
           </p>
-        </header>
+        </header>}
 
         {/* ─── One filter row, scoping everything below it ─── */}
-        <div style={{
+        {!embedded && <div style={{
           display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center',
           padding: '12px 14px', background: C.white, border: `1px solid ${C.border}`,
           borderRadius: 12, marginBottom: 20,
@@ -243,7 +263,7 @@ export default function AnalyticsPage() {
               >{r.label}</button>
             ))}
           </div>
-        </div>
+        </div>}
 
         {error && (
           <div style={{

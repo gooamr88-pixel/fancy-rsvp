@@ -134,30 +134,51 @@ export default function HeroSection() {
             Your guests don&rsquo;t get a link. They get an <em>arrival</em>.
           </h1>
 
+          {/* NAMES THE WHOLE PRODUCT, not just the picture above it. The
+              headline sells the arrival, which is the right thing to sell
+              first — but a reader who stops here should already know this is
+              not only an invitation. Replies, meals, seating and the door,
+              in that order, because that is the order the work happens in. */}
           <p className="hero-sub">
-            Every invitation opens on film before it becomes a page — then
-            quietly collects the replies, seats the room, and runs the door.
+            Every invitation opens on film. Behind it sits the whole event —
+            the replies, the meal counts, the seating chart, and the scanner at
+            the door.
           </p>
 
+          {/* ── The demo is the PRIMARY action, and that is the argument ──
+              This page spends its whole length insisting the product is an
+              experience rather than software. The button that follows that
+              claim should therefore be the experience, not a signup form —
+              and "Open the invitation" is a promise the very next screen
+              keeps in about two seconds, which "Try Fancy" is not: it is a
+              software verb, and it asks for effort without saying how much.
+
+              A signed-in organizer is the exception. They have already
+              bought the argument; what they want is their own event. */}
           <div className="hero-buttons">
-            <Link
-              href={signedIn ? "/dashboard" : "/register"}
-              className="hero-btn hero-btn--ink"
-              id="hero-cta-get-started"
-            >
-              {signedIn ? "Go to dashboard" : "Create your event"}
-            </Link>
-            <Link
-              href="/#invitations"
-              className="hero-btn hero-btn--ghost"
-              id="hero-cta-invitations"
-            >
-              See the invitations
-            </Link>
+            {signedIn ? (
+              <>
+                <Link href="/dashboard" className="hero-btn hero-btn--ink" id="hero-cta-get-started">
+                  Go to dashboard
+                </Link>
+                <Link href="/demo/invitation" className="hero-btn hero-btn--ghost" id="hero-cta-demo">
+                  Open the invitation
+                </Link>
+              </>
+            ) : (
+              <>
+                <Link href="/demo/invitation" className="hero-btn hero-btn--ink" id="hero-cta-demo">
+                  Open the invitation
+                </Link>
+                <Link href="/register" className="hero-btn hero-btn--ghost" id="hero-cta-get-started">
+                  Create your event
+                </Link>
+              </>
+            )}
           </div>
 
           <p className="hero-reassure">
-            Free plan to start · No credit card · Pay once per event, not monthly
+            The demo is real and takes a minute · No signup · Free plan to start
           </p>
 
           <TrustLine />

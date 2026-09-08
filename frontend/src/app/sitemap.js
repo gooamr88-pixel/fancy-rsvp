@@ -26,6 +26,16 @@ async function fetchBlogSlugs() {
 export default async function sitemap() {
   const routes = [
     '',
+    /* The working demo — and the URL listed is the STAGE, not /demo.
+
+       /demo is the address to paste into a message, but it is a redirect, and
+       listing a redirecting URL in a sitemap only tells a crawler to fetch a
+       page that immediately sends it somewhere else. That is the same mistake
+       the retired /templates entry was removed for, a few lines below.
+
+       Only the first stage. The other two are the same argument further along
+       and would compete with it for the same query. */
+    '/demo/invitation',
     '/about',
     '/careers',
     '/contact',

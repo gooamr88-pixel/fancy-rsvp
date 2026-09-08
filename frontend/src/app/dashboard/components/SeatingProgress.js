@@ -4,6 +4,27 @@ import { useMemo } from 'react';
 import Link from 'next/link';
 import { isAccepted } from '../../utils/responseHelpers';
 
+/* One definition, worn by both the link and the button, so the two can never
+   drift into looking like different controls. `border: none` matters: a
+   <button> inherits a UA border and a <a> does not, so without it the demo's
+   version would sit a pixel wider than the organizer's. */
+const floorPlanStyle = {
+  display: 'inline-flex', alignItems: 'center', gap: 8,
+  padding: '10px 20px', minHeight: 'var(--fx-touch)', borderRadius: 9, border: 'none',
+  background: 'linear-gradient(135deg, #D7BE80 0%, #B8944F 100%)',
+  color: '#FFFFFF', fontSize: 12.5, fontWeight: 700,
+  fontFamily: 'var(--font-sans)', cursor: 'pointer',
+  textDecoration: 'none', whiteSpace: 'nowrap',
+};
+
+function FloorPlanIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <rect x="3" y="3" width="18" height="18" rx="2" /><line x1="3" y1="9" x2="21" y2="9" /><line x1="9" y1="21" x2="9" y2="9" />
+    </svg>
+  );
+}
+
 /**
  * How far along the seating is, and where the map fits.
  *
@@ -31,7 +52,7 @@ import { isAccepted } from '../../utils/responseHelpers';
  * One sentence settles it, and the link carries the event so the map opens on the
  * one they are working on.
  */
-export default function SeatingProgress({ rsvps = [], tables = [], onShowUnseated, eventId }) {
+export default function SeatingProgress({ rsvps = [], tables = [], onShowUnseated, eventId, onOpenFloorPlan }) {
   const stats = useMemo(() => {
     const attending = rsvps.filter((r) => isAccepted(r.response));
     const heads = (list) => list.reduce((sum, r) => sum + (r.party_size || 1), 0);
@@ -124,21 +145,28 @@ export default function SeatingProgress({ rsvps = [], tables = [], onShowUnseate
             Show the {stats.unseatedParties} still to seat
           </button>
         )}
-        <Link
-          href={`/dashboard/seating-map${eventId ? `?event=${eventId}` : ''}`}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 8,
-            padding: '10px 20px', borderRadius: 9,
-            background: 'linear-gradient(135deg, #D7BE80 0%, #B8944F 100%)',
-            color: '#FFFFFF', fontSize: 12.5, fontWeight: 700,
-            textDecoration: 'none', whiteSpace: 'nowrap',
-          }}
-        >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <rect x="3" y="3" width="18" height="18" rx="2" /><line x1="3" y1="9" x2="21" y2="9" /><line x1="9" y1="21" x2="9" y2="9" />
-          </svg>
-          Open the floor plan
-        </Link>
+        {/* A LINK for an organizer, a BUTTON in the demo.
+
+            The floor plan is its own full-bleed route behind the dashboard's
+            auth middleware, so following this link from the public demo
+            lands a visitor on a login screen — a dead end that reads as the
+            product being broken rather than as a boundary. `onOpenFloorPlan`
+            lets the caller answer for it instead; every other caller passes
+            nothing and gets the link it always had. */}
+        {onOpenFloorPlan ? (
+          <button type="button" onClick={onOpenFloorPlan} style={floorPlanStyle}>
+            <FloorPlanIcon />
+            Open the floor plan
+          </button>
+        ) : (
+          <Link
+            href={`/dashboard/seating-map${eventId ? `?event=${eventId}` : ''}`}
+            style={floorPlanStyle}
+          >
+            <FloorPlanIcon />
+            Open the floor plan
+          </Link>
+        )}
       </div>
 
       <p style={{
