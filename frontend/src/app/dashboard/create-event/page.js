@@ -273,6 +273,12 @@ export default function CreateEventWizard() {
   // Which paid integrations are live right now (server-driven). Default OFF so the
   // UI is manual-first until the backend reports card/SMS are enabled.
   const [features, setFeatures] = useState({ stripeEnabled: false, smsEnabled: false });
+  /* The trial offer, or null when the platform has none configured — the
+     server answers null unless BOTH a trial plan and a free plan to land on
+     exist, which is the same check it makes before granting one. Null here
+     means the card is never rendered, so it can never promise something the
+     click would refuse. */
+  const [trial, setTrial] = useState(null);
   const [selectedTierName, setSelectedTierName] = useState('');
   /**
    * The stable key of the plan the organizer picked.
@@ -639,6 +645,7 @@ export default function CreateEventWizard() {
           if (firstBillable) setSelectedTierName(prev => prev || firstBillable.name);
           setManualMethods((data.config.manual_payment_methods || []).filter(m => m && m.is_active !== false));
           if (data.features) setFeatures(data.features);
+          setTrial(data.trial || null);
           // For the SMS credit-buy button's price preview (Stage3_Distribution) —
           // that button previously redirected to Stripe Checkout with no price
           // shown at all, unlike every other paid action in this wizard.
@@ -1433,6 +1440,37 @@ export default function CreateEventWizard() {
     }
   }, [apiUrl, eventId]);
 
+  /* Start the account's one free trial on this event. Publishes it live,
+     immediately, with no payment and no admin review — the same END STATE as
+     a successful payment or a redeemed promo code, which is why it updates
+     exactly the same four pieces of state they do. Returns { ok, message }
+     rather than throwing, so TrialCard can show the refusal inline; the
+     refusals are real and specific (already used, unverified email, no free
+     plan configured) and each deserves its own sentence rather than a generic
+     banner. */
+  const handleStartTrial = useCallback(async () => {
+    if (!eventId) return { ok: false, message: 'Event not ready yet — please try again in a moment.' };
+    try {
+      const res = await fetch(`${apiUrl}/payments/events/${eventId}/start-trial`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        return { ok: false, message: data.message || 'Could not start your free trial.' };
+      }
+      setEventIsPaid(true);
+      setCurrentTierName(data.event?.tier_name || '');
+      setCurrentTierMaxGuests(data.event?.tier_max_guests ?? null);
+      setPaymentConfirmed(true);
+      setPaymentNotice(data.message || 'Your event is live.');
+      return { ok: true, message: data.message };
+    } catch (err) {
+      return { ok: false, message: err.message || 'Could not start your free trial.' };
+    }
+  }, [apiUrl, eventId]);
+
   /* ═══ SMS credit balance + top-up (distribution step) ═══ */
   const fetchSmsCredits = useCallback(async () => {
     if (!eventId) return;
@@ -1702,6 +1740,9 @@ export default function CreateEventWizard() {
               stripeEnabled={features.stripeEnabled}
               referralCreditCents={referralCreditCents}
               onRedeemPromoCode={handleRedeemPromoCode}
+              onStartTrial={trial ? handleStartTrial : undefined}
+              trialDays={trial?.days || 7}
+              trialMaxGuests={trial?.maxGuests || 25}
             />
           </motion.div>
         )}

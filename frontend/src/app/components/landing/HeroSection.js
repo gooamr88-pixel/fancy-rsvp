@@ -145,16 +145,25 @@ export default function HeroSection() {
             the door.
           </p>
 
-          {/* ── The demo is the PRIMARY action, and that is the argument ──
-              This page spends its whole length insisting the product is an
-              experience rather than software. The button that follows that
-              claim should therefore be the experience, not a signup form —
-              and "Open the invitation" is a promise the very next screen
-              keeps in about two seconds, which "Try Fancy" is not: it is a
-              software verb, and it asks for effort without saying how much.
+          {/* ── TWO DOORS, AND THE ORDER IS THE WHOLE FUNNEL ──────────────
+              The demo (below) proves the product in a minute. It does not
+              create a reason to stay: a visitor who finishes it has admired
+              something. A visitor who spends an evening putting their own
+              guest list, their own invitation and their own seating chart
+              into Fancy has moved in, and a week later the cost of leaving is
+              their own work rather than our argument.
 
-              A signed-in organizer is the exception. They have already
-              bought the argument; what they want is their own event. */}
+              So the trial leads and the demo follows — for the visitor who is
+              not ready to hand over an email address yet, which is a real and
+              common state and not one to punish.
+
+              The primary label names the PRICE, not the product. "Create your
+              event" is an instruction; "free for 7 days" is the answer to the
+              question actually stopping them, and putting it inside the button
+              means they never have to go looking for it.
+
+              A signed-in organizer is the exception: they have already bought
+              the argument and want their own event. */}
           <div className="hero-buttons">
             {signedIn ? (
               <>
@@ -167,18 +176,24 @@ export default function HeroSection() {
               </>
             ) : (
               <>
-                <Link href="/demo/invitation" className="hero-btn hero-btn--ink" id="hero-cta-demo">
-                  Open the invitation
+                <Link href="/register" className="hero-btn hero-btn--ink" id="hero-cta-get-started">
+                  {/* Split so the phone can break the line between the action
+                      and the price instead of shrinking the whole label —
+                      "CREATE YOUR EVENT — FREE FOR 7 DAYS" at 0.2em tracking
+                      does not fit 280px on one line, and `white-space: nowrap`
+                      on .hero-btn means it would not wrap, it would overflow. */}
+                  <span className="hero-btn__do">Create your event</span>
+                  <span className="hero-btn__price">Free for 7 days</span>
                 </Link>
-                <Link href="/register" className="hero-btn hero-btn--ghost" id="hero-cta-get-started">
-                  Create your event
+                <Link href="/demo/invitation" className="hero-btn hero-btn--ghost" id="hero-cta-demo">
+                  Open the invitation
                 </Link>
               </>
             )}
           </div>
 
           <p className="hero-reassure">
-            The demo is real and takes a minute · No signup · Free plan to start
+            No card needed · Your invitation stays live when the trial ends
           </p>
 
           <TrustLine />
@@ -303,10 +318,27 @@ export default function HeroSection() {
           border-radius: 0;
           transition: background 0.35s ease, color 0.35s ease, border-color 0.35s ease;
         }
+        /* The primary label carries a price on a second line. A COLUMN rather
+           than one string: .hero-btn is nowrap (a two-line button label reads
+           as a mistake), so a single long label would overflow 320px rather
+           than wrap. Two stacked spans keep the nowrap promise per line. */
+        .hero-btn__do { display: block; }
+        .hero-btn__price {
+          display: block;
+          margin-top: 3px;
+          font-size: 9.5px;
+          font-weight: 500;
+          letter-spacing: 0.16em;
+          opacity: 0.7;
+        }
         .hero-btn--ink {
           background: ${C.ink};
           color: ${C.paper};
           border: 1px solid ${C.ink};
+          flex-direction: column;
+          text-align: center;
+          padding-top: 10px;
+          padding-bottom: 10px;
         }
         .hero-btn--ink:hover { background: transparent; color: ${C.ink}; }
         .hero-btn--ghost {

@@ -7,6 +7,7 @@ import { apiFetch } from '../../utils/apiClient';
 import { getAuthErrorMessage } from '../../utils/authErrors';
 import Toast from '../../components/Toast';
 import OtpBoxes from '../../components/OtpBoxes';
+import TurnstileWidget, { turnstileEnabled } from '../../components/guest/TurnstileWidget';
 
 // Mirrors the backend's passwordRegex (authController.js) so weak passwords are
 // caught before the round trip instead of only after a WEAK_PASSWORD rejection.
@@ -29,6 +30,19 @@ export default function RegisterPage() {
   const [toast, setToast] = useState(null);
   const [fieldErrors, setFieldErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  /* The signup captcha. `verifyTurnstile` now guards POST /auth/register on
+     the server, so a configured deployment REJECTS a registration with no
+     token — this is what supplies it. Both halves are no-ops until their env
+     var is set (NEXT_PUBLIC_TURNSTILE_SITEKEY here, TURNSTILE_SECRET there),
+     and they must be switched on together: a secret without a sitekey would
+     400 every signup on the platform.
+
+     It is mounted now because a free trial makes an account worth something
+     the moment it is created — a live event, a publishable invitation and a
+     daily email allowance — where before this it was worth nothing until
+     somebody paid. */
+  const [captchaToken, setCaptchaToken] = useState(null);
+  const turnstileRef = useRef(null);
   const [googleLoading, setGoogleLoading] = useState(false);
   const googleBtnRef = useRef(null);
   const googleInitRef = useRef(false);
@@ -102,7 +116,7 @@ export default function RegisterPage() {
       const name = `${firstName.trim()} ${lastName.trim()}`.trim();
       const data = await apiFetch('/auth/register', {
         method: 'POST',
-        body: JSON.stringify({ name, orgName, email, password, refCode })
+        body: JSON.stringify({ name, orgName, email, password, refCode, ...(captchaToken ? { captchaToken } : {}) })
       });
 
       if (data.success && data.requiresVerification) {
@@ -119,6 +133,9 @@ export default function RegisterPage() {
     } catch (err) {
       setToast({ message: getAuthErrorMessage(err, 'Registration failed. Please try again.'), kind: 'error' });
     } finally {
+      // Turnstile tokens are single-use, so a failed attempt must ask for a
+      // fresh one or the retry is refused for a reason the person cannot see.
+      if (turnstileEnabled) { turnstileRef.current?.reset(); setCaptchaToken(null); }
       setSubmitting(false);
     }
   };
@@ -133,7 +150,7 @@ export default function RegisterPage() {
       const name = `${firstName.trim()} ${lastName.trim()}`.trim();
       const data = await apiFetch('/auth/register', {
         method: 'POST',
-        body: JSON.stringify({ name, orgName, email, password, refCode })
+        body: JSON.stringify({ name, orgName, email, password, refCode, ...(captchaToken ? { captchaToken } : {}) })
       });
       if (data.success) {
         setOtp('');
@@ -441,7 +458,12 @@ export default function RegisterPage() {
           </div>
 
           <h1 className="auth-heading">Create Your Account</h1>
-          <p className="auth-subtext">Start planning your perfect event today</p>
+          {/* Names the offer at the point of the ask. The hero promised seven
+              free days; a signup form that then says something vaguer reads
+              as a bait-and-switch, and the second clause is the one that
+              actually removes the hesitation — nobody wants to hand over a
+              card to look at something. */}
+          <p className="auth-subtext">Your first event is free for 7 days — every feature, no card needed</p>
 
           {refCode && (
             <div style={{
@@ -510,6 +532,17 @@ export default function RegisterPage() {
               </div>
               <p id="reg-password-hint" className={fieldErrors.password ? 'auth-field-error' : 'auth-field-hint'}>{fieldErrors.password || PASSWORD_HINT}</p>
             </div>
+
+            {turnstileEnabled && (
+              <div style={{ margin: '4px 0 16px' }}>
+                <TurnstileWidget
+                  ref={turnstileRef}
+                  onVerify={setCaptchaToken}
+                  onExpire={() => setCaptchaToken(null)}
+                  onError={() => setCaptchaToken(null)}
+                />
+              </div>
+            )}
 
             <button type="submit" disabled={submitting} className="auth-submit-btn">
               {submitting ? (

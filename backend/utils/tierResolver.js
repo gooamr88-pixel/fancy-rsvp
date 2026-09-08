@@ -42,6 +42,7 @@
  */
 
 const { FREE_TIER_FEATURES, ALWAYS_ON_FEATURES } = require('../config/featureRegistry');
+const { fallbackTier, isTrialExpired, isOnTrialPlan, sanitizeTrialTier } = require('./trialTier');
 
 /**
  * The floor under every plan: what a tier grants no matter what its `features`
@@ -204,9 +205,49 @@ function tierSnapshot(tier) {
  * @returns {{ features: string[], source: 'tier'|'snapshot'|'none', tier: object|null, matchedBy: string|null }}
  */
 function entitledFeatures(tiers, event) {
+  /* ── AN EXPIRED TRIAL IS ANSWERED HERE, BEFORE ANYTHING ELSE ────────────
+     A trial event carries the trial plan's snapshot until a background sweep
+     rewrites it. That sweep is a convenience, not the authority: it can be
+     switched off, fall behind, lose its leader election, or simply not have
+     run yet. If entitlement were read from the snapshot, every one of those
+     would silently extend somebody's trial — and a downgrade that depends on
+     a cron having fired is not a downgrade, it is a hope.
+
+     So the DEADLINE decides, and it is read from the event on every request.
+     The sweep only makes the stored state agree with what the gates are
+     already enforcing. Same discipline as eventPurge's persisted deadline.
+
+     `isOnTrialPlan` is the second half and it protects the PAYING customer:
+     someone who upgrades on day 3 keeps the trial_ends_at that was stamped on
+     day 0 — the payment path rewrites the plan, not the trial columns — and
+     the deadline alone would downgrade them on day 8 having taken their money.
+     Buying a plan changes `tier_key`, which is all this asks about, so no
+     payment path needs to know that trials exist.
+
+     `fallbackTier` may be null if an admin has since deleted the free plan.
+     The event still keeps the baseline — it never falls below an unpaid one,
+     and it never goes offline, because `is_paid` and `status` are untouched
+     here. Locking features is a plan boundary; taking a live invitation away
+     from guests who never agreed to anything is not. */
+  if (isTrialExpired(event) && isOnTrialPlan(event, tiers)) {
+    const landing = fallbackTier(tiers);
+    return {
+      features: withBaseline(landing?.features || []),
+      source: 'trial_expired',
+      tier: landing,
+      matchedBy: null,
+    };
+  }
+
   const { tier, matchedBy } = resolveTier(tiers, { key: event?.tier_key, name: event?.tier_name });
   if (tier && Array.isArray(tier.features)) {
-    return { features: withBaseline(tier.features), source: 'tier', tier, matchedBy };
+    /* A trial plan is sanitised on the way through — see
+       TRIAL_EXCLUDED_FEATURES. `updatePricingConfig` already strips those keys
+       on save, so this is the belt for config written before that rule existed
+       or edited straight in the database. It is a no-op for every other plan
+       and for a trial that never carried one. */
+    const safe = sanitizeTrialTier(tier);
+    return { features: withBaseline(safe.features), source: 'tier', tier: safe, matchedBy };
   }
   const snapshot = Array.isArray(event?.tier_features) ? event.tier_features : null;
   if (snapshot && snapshot.length > 0) {
@@ -215,8 +256,15 @@ function entitledFeatures(tiers, event) {
   return { features: withBaseline([]), source: 'none', tier: null, matchedBy };
 }
 
-/** The columns every entitlement read needs. One list, so no caller under-selects. */
-const TIER_COLUMNS = 'tier_key, tier_name, tier_max_guests, tier_remove_watermark, tier_white_label, tier_features, tier_price_cents';
+/** The columns every entitlement read needs. One list, so no caller under-selects.
+ *
+ *  `trial_ends_at` is IN here, and that is the whole reason the ladder below
+ *  grew a rung: entitlement now depends on it, so every gate must select it —
+ *  and every gate must survive a database that has not been given it yet. */
+const TIER_COLUMNS = 'tier_key, tier_name, tier_max_guests, tier_remove_watermark, tier_white_label, tier_features, tier_price_cents, trial_ends_at';
+
+/** Everything except `trial_ends_at` — i.e. before 20260902000000_free_trial.sql. */
+const NO_TRIAL_TIER_COLUMNS = 'tier_key, tier_name, tier_max_guests, tier_remove_watermark, tier_white_label, tier_features, tier_price_cents';
 
 /** Everything except `tier_white_label` — i.e. before 20260830000003_white_label.sql. */
 const IDENTITY_TIER_COLUMNS = 'tier_key, tier_name, tier_max_guests, tier_remove_watermark, tier_features, tier_price_cents';
@@ -252,7 +300,7 @@ function isUndefinedColumnError(error) {
  * @param {string} baseColumns  the caller's own columns, without any tier_*
  */
 async function selectEventWithTier(supabase, eventId, baseColumns) {
-  // A LADDER, not a single fallback, and the middle rung is the point.
+  // A LADDER, not a single fallback, and the middle rungs are the point.
   //
   // Every column added to TIER_COLUMNS makes the full select fail on a database
   // that has not caught up — and a straight full→legacy fallback means the
@@ -261,9 +309,19 @@ async function selectEventWithTier(supabase, eventId, baseColumns) {
   // paid features. That is a big regression to pay for one boolean.
   //
   // So each rung drops exactly one migration's worth of columns. A deployment
-  // missing only `tier_white_label` keeps identity and snapshots; only a
+  // missing only `trial_ends_at` keeps white-label, identity and snapshots;
+  // one missing `tier_white_label` keeps identity and snapshots; only a
   // deployment missing the identity migration itself falls all the way back.
-  for (const columns of [TIER_COLUMNS, IDENTITY_TIER_COLUMNS]) {
+  //
+  // The trial rung is the one that has to be right. `trial_ends_at` is read by
+  // entitledFeatures on EVERY request through EVERY gate, so shipping the
+  // trial ahead of its migration without this rung would not fail on the
+  // trial — it would make every paid feature on the platform answer
+  // EVENT_NOT_FOUND, for every customer at once. That has happened here
+  // before, with tier_key, and it is what this whole function is for.
+  // Without the column the event simply has no deadline, isTrialExpired
+  // answers false, and the gates behave exactly as they did yesterday.
+  for (const columns of [TIER_COLUMNS, NO_TRIAL_TIER_COLUMNS, IDENTITY_TIER_COLUMNS]) {
     const attempt = await supabase
       .from('events').select(`${baseColumns}, ${columns}`).eq('id', eventId).single();
     if (!isUndefinedColumnError(attempt.error)) {
@@ -289,6 +347,7 @@ module.exports = {
   selectEventWithTier,
   isUndefinedColumnError,
   TIER_COLUMNS,
+  NO_TRIAL_TIER_COLUMNS,
   IDENTITY_TIER_COLUMNS,
   LEGACY_TIER_COLUMNS,
 };

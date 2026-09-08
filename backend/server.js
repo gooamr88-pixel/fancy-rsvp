@@ -85,6 +85,17 @@ const server = app.listen(PORT, () => {
   } catch (err) {
     logger.warn({ err }, 'Event purge failed to start (non-fatal)');
   }
+
+  // Free-trial sweep — warns two days out, then moves an expired trial onto
+  // the free plan. It does NOT enforce the trial: entitledFeatures reads the
+  // deadline off the event on every gated request, so an expired trial is
+  // already locked down whether or not this ever runs. OFF by default like the
+  // purge above, because it writes to live customer events.
+  try {
+    require('./services/trialExpiry').start();
+  } catch (err) {
+    logger.warn({ err }, 'Trial sweep failed to start (non-fatal)');
+  }
 });
 
 // Handle graceful shutdown
@@ -94,6 +105,7 @@ function gracefulShutdown(signal) {
   try { require('./services/revenueRollup').stop(); } catch { /* ignore */ }
   try { require('./services/draftCleanup').stop(); } catch { /* ignore */ }
   try { require('./services/eventPurge').stop(); } catch { /* ignore */ }
+  try { require('./services/trialExpiry').stop(); } catch { /* ignore */ }
   server.close(() => {
     logger.info('HTTP server closed — all connections drained');
     process.exit(0);

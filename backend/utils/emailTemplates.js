@@ -1442,6 +1442,46 @@ const getEventLiveTemplate = ({ orgName, eventTitle, eventUrl }) => emailShell({
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   THE FREE TRIAL — two letters, and the second one is the important one.
+
+   Both are addressed to the ORGANIZER and both are written around the same
+   fact: their invitation does not stop working. That is true (see
+   services/trialService.js — the landing update touches neither `is_paid` nor
+   `status`), and saying it plainly is what makes the second email an offer
+   rather than a threat. A trial notice that reads like a hostage note gets a
+   refund request and a bad review, not an upgrade.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/** Two days left. The one email in this pair that is allowed to sell. */
+const getTrialEndingTemplate = ({ orgName, eventTitle, daysLeft, upgradeUrl, endsOn }) => emailShell({
+  preheader: `${daysLeft} ${daysLeft === 1 ? 'day' : 'days'} left on your free trial`,
+  eyebrow: 'Your free trial',
+  heading: daysLeft === 1 ? 'One day left' : `${daysLeft} days left`,
+  contentHtml: `
+    ${greeting(orgName)}
+    ${para(`Your free trial on <strong style="color:${BRAND.charcoal};">${escapeHtml(eventTitle)}</strong> ends${endsOn ? ` on <strong>${escapeHtml(endsOn)}</strong>` : ' shortly'}.`)}
+    ${para('Nothing disappears when it does. Your invitation stays live, your guests can still reply, and every answer, table and seat you have set up is kept exactly as it is. What pauses is the tools — seating, the full analytics, exports and your branding — until you choose a plan.')}
+    ${button(upgradeUrl, 'Choose your plan')}
+    ${para('Pick the plan that matches your guest count and everything unlocks again, unchanged.', { size: 13, color: BRAND.stone, mb: 0 })}
+  `,
+});
+
+/** The day it ended. Leads with what still works, because most of it does. */
+const getTrialEndedTemplate = ({ orgName, eventTitle, eventUrl, upgradeUrl, planName }) => emailShell({
+  preheader: `Your invitation is still live — your trial has ended`,
+  eyebrow: 'Your free trial has ended',
+  heading: 'Your invitation is still live',
+  contentHtml: `
+    ${greeting(orgName)}
+    ${para(`The free trial on <strong style="color:${BRAND.charcoal};">${escapeHtml(eventTitle)}</strong> has ended, and your event has moved to the ${planName ? `<strong>${escapeHtml(planName)}</strong>` : 'free'} plan.`)}
+    ${noticeBox('Your invitation link still works and your guests can still reply. Nothing has been deleted.', 'neutral')}
+    ${para('Seating, the full analytics, guest exports and custom branding are locked until you choose a plan. Everything you built with them is untouched and comes straight back the moment you do.')}
+    ${button(upgradeUrl, 'Choose your plan')}
+    ${para(`Your event: <a href="${eventUrl}" style="color:${BRAND.gold}; word-break:break-all;">${escapeHtml(eventUrl)}</a>`, { size: 13, color: BRAND.stone, mb: 0 })}
+  `,
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
    GUEST LIFECYCLE — reminders & post-event
    ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -2104,4 +2144,6 @@ module.exports = {
   getCashPaymentApprovedTemplate,
   getStripePaymentReceiptTemplate,
   getEventLiveTemplate,
+  getTrialEndingTemplate,
+  getTrialEndedTemplate,
 };

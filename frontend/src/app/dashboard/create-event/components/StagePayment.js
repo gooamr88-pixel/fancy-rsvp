@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import Icon from '../../../components/icons/Icon';
+import TrialCard from './TrialCard';
 
 const C = {
   gold: '#B8944F', goldHover: '#a6833f',
@@ -417,6 +418,7 @@ export default function StagePayment({
   paymentConfirmed = false, paymentNotice = '', verifying = false, onRecheckPayment,
   isPaid = false, currentTierName = '', currentTierMaxGuests = null,
   stripeEnabled = true, referralCreditCents = 0, onRedeemPromoCode,
+  onStartTrial, trialDays = 7, trialMaxGuests = 25,
   // ── SMS add-on ──
   smsAddonEnabled = false, onToggleSmsAddon,
   smsAddonSegments = null, onChangeSmsAddonSegments,
@@ -712,6 +714,24 @@ export default function StagePayment({
             You have {fmt(referralCreditCents)} in referral credit — it will be applied automatically to your payment below.
           </span>
         </div>
+      )}
+
+      {/* The free trial — offered FIRST, and on the same terms as the promo
+          box below: only on a fresh, unpaid event, never mid-upgrade. An
+          already-live event moving up a tier is a real paid change, and a
+          trial there would be a downgrade dressed as an offer.
+
+          `onStartTrial` is absent when the platform has no trial plan
+          configured, or no free plan for one to land on — the server refuses
+          in both cases (services/trialService.js), so the card must not be
+          shown promising something that would be refused on the click. */}
+      {!showCurrentPlan && !showPendingPlan && !upgrading && onStartTrial && (
+        <TrialCard
+          onStartTrial={onStartTrial}
+          processing={processing}
+          days={trialDays}
+          maxGuests={trialMaxGuests}
+        />
       )}
 
       {/* Promo code — self-service alternative to paying at all. Only offered

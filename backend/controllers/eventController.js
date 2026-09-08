@@ -7,7 +7,9 @@ const { isAcceptedResponse, isDeclinedResponse, isMaybeResponse } = require('../
 const { getPlatformConfig } = require('../utils/configCache');
 const {
   resolveTier, tierRemovesWatermark, tierIsWhiteLabel, withBaseline, isUndefinedColumnError,
+  entitledFeatures,
 } = require('../utils/tierResolver');
+const { isTrialExpired } = require('../utils/trialTier');
 const { hashEventPassword, verifyEventPassword, isHashedEventPassword } = require('../utils/eventPassword');
 const {
   safeZone, wallClockToInstant, instantToWallClock, formatInZone, isValidTimeZone,
@@ -91,6 +93,47 @@ async function withResolvedTier(rawEvent) {
   // this list draws must match the 403s that list produces.
   if (!event.is_paid && !event.manual_override) {
     return { ...event, tier_features: withBaseline([]) };
+  }
+
+  /* ── AN EXPIRED TRIAL, ANSWERED THE SAME WAY THE GATES ANSWER IT ────────
+     This function does NOT call entitledFeatures — it re-derives the plan
+     itself, because it also heals the row and can fall back to the payment
+     record. That independence is the problem here: an expired trial still
+     carries the trial plan's snapshot, so without this branch the dashboard
+     would draw every paid feature unlocked while every one of those calls
+     403s. A surface that is visible and un-callable is worse than a padlock;
+     it turns a plan boundary into what looks like a broken product.
+
+     Delegating the one question both have to agree on — what does this event
+     get — keeps them from drifting. Returned before the self-heal below on
+     purpose: the stored snapshot is the SWEEP's job to rewrite, and healing
+     it from here would race a background job over the same row. */
+  if (isTrialExpired(event)) {
+    try {
+      const cfg = await getPlatformConfig();
+      const resolved = entitledFeatures(cfg.pricing_tiers, event);
+      if (resolved.source === 'trial_expired') {
+        return {
+          ...event,
+          tier_name: resolved.tier?.name || event.tier_name,
+          tier_key: resolved.tier?.key || event.tier_key,
+          tier_max_guests: Number.isFinite(resolved.tier?.max_guests) ? resolved.tier.max_guests : event.tier_max_guests,
+          tier_features: resolved.features,
+          /* The branding booleans too, or the dashboard keeps promising a
+             watermark-free invitation that the guest page has already stopped
+             delivering (see getPublicEventBySlug). Two surfaces disagreeing
+             about what a plan includes is how a support ticket starts. */
+          tier_remove_watermark: tierRemovesWatermark(resolved.tier),
+          tier_white_label: tierIsWhiteLabel(resolved.tier),
+          trial_expired: true,
+        };
+      }
+    } catch {
+      /* Config unavailable. Fall through to the normal path rather than
+         guessing — the SERVER gates fail closed on the same error, so the
+         worst case is a padlock that should not be there for one request,
+         never an unlocked control the API refuses. */
+    }
   }
 
   let tierName = event.tier_name || null;
@@ -571,7 +614,7 @@ function buildRetentionBlock(event) {
  * quietly missing a column the renderer needs, months later, on the one code
  * path nobody exercises until a deploy goes out of order.
  */
-const buildPublicEventColumns = (withWhiteLabel) => `
+const buildPublicEventColumns = (withWhiteLabel, withTrial = true) => `
   id,
   slug,
   template_type,
@@ -603,7 +646,7 @@ const buildPublicEventColumns = (withWhiteLabel) => `
   collect_dietary_restrictions,
   reveal_enabled,
   reveal_replay,
-  tier_remove_watermark,${withWhiteLabel ? '\n  tier_white_label,' : ''}
+  tier_remove_watermark,${withWhiteLabel ? '\n  tier_white_label,' : ''}${withTrial ? '\n  trial_ends_at,' : ''}
   updated_at,
   custom_form_fields(*)
 `;
@@ -629,18 +672,46 @@ const getPublicEventBySlug = async (req, res, next) => {
      * extra round trip on a misordered deploy and nothing at all on a correct
      * one, because the first attempt succeeds.
      */
-    const selectEvent = async (withWhiteLabel) => supabase
+    const selectEvent = async (withWhiteLabel, withTrial) => supabase
       .from('events')
-      .select(buildPublicEventColumns(withWhiteLabel))
+      .select(buildPublicEventColumns(withWhiteLabel, withTrial))
       .eq('slug', slug)
       .single();
 
-    let { data: event, error } = await selectEvent(true);
+    /* THREE RUNGS NOW, dropping one migration's worth of columns each, for
+       exactly the reason above: this select has to survive any deploy order.
+       `trial_ends_at` comes off first because it is the newest, and an absent
+       trial column simply means no event is on a trial — which is what was
+       true before the feature existed. */
+    let { data: event, error } = await selectEvent(true, true);
     if (isUndefinedColumnError(error)) {
-      ({ data: event, error } = await selectEvent(false));
+      ({ data: event, error } = await selectEvent(true, false));
+    }
+    if (isUndefinedColumnError(error)) {
+      ({ data: event, error } = await selectEvent(false, false));
       // The column is the entitlement here — absent means "not white-labelled",
       // which is the safe reading: the mark stays on until the migration lands.
       if (event) event.tier_white_label = false;
+    }
+
+    /* ── AN EXPIRED TRIAL DOES NOT KEEP ITS BRANDING ────────────────────────
+       The guest page reads these two booleans straight off the row, and the
+       row is only rewritten by the background sweep. Every OTHER part of an
+       expired trial is enforced from the deadline on each request precisely so
+       that a sweep which is switched off, behind, or has never run cannot
+       extend anybody's entitlement — and branding was the one thing still
+       trusting it. With TRIAL_ENABLED unset that is not a delay of one sweep
+       interval; it is permanent.
+
+       Cleared rather than resolved against the landing plan: this is the
+       public guest path, the hottest endpoint in the product, and it has no
+       config read of its own — adding one to decide a watermark would be the
+       wrong trade. Removing the mark is a PAID capability, a lapsed trial does
+       not have it, and no free plan grants it, so `false` is the correct
+       answer without asking. */
+    if (event?.trial_ends_at && new Date(event.trial_ends_at).getTime() <= Date.now()) {
+      event.tier_remove_watermark = false;
+      event.tier_white_label = false;
     }
 
     if (error || !event) {

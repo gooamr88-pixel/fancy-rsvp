@@ -71,7 +71,9 @@ sudo apt install certbot python3-certbot-nginx -y
 > the columns being absent and falls back to the old name matching, so a
 > mis-ordered deploy is not an outage — but the backfill window closes for good
 > the first time a plan is renamed.)
-3. Apply the migration files (found in `supabase/migrations/` folder) by copy-pasting their SQL code into the SQL Editor, in chronological order, to ensure the production schema is fully up to date. This list must be regenerated from `ls supabase/migrations/ | sort` before every deploy — it silently fell ~39 files behind the repo once before, so treat "matches `ls supabase/migrations/`" as the actual source of truth, not this file:
+3. Apply the migration files (found in `supabase/migrations/` folder) by copy-pasting their SQL code into the SQL Editor, in chronological order, to ensure the production schema is fully up to date. This list must be regenerated from `ls supabase/migrations/ | sort` before every deploy — it silently fell ~39 files behind the repo once, and had drifted 54 behind again by the time the free trial shipped, so treat "matches `ls supabase/migrations/`" as the actual source of truth, not this file. **Regenerated 119 files, 2026-09-08.**
+
+   Nothing here records what has already been applied — there is no `schema_migrations` table, because these are pasted by hand. Run `supabase/CHECK_WHAT_IS_APPLIED.sql` first and apply only what comes back MISSING; several files below are known to have been skipped (a version collision silently swallowed `tier_identity`, whose absence made every paid event report "Event not found"):
    - `20260607000000_init_schema.sql`
    - `20260607100000_schema_completion.sql`
    - `20260607100001_rls_hardening.sql`
@@ -119,6 +121,7 @@ sudo apt install certbot python3-certbot-nginx -y
    - `20260703000000_finance_rollup_fix.sql`
    - `20260704000000_submit_rsvp_phone_dedupe.sql`
    - `20260705000000_guest_experience_rebuild.sql`
+   - `20260705500000_fold_in_untracked_schema.sql`
    - `20260706000000_submit_rsvp_auto_merge.sql`
    - `20260707000000_profile_branding.sql`
    - `20260708000000_event_comp_reason.sql`
@@ -136,6 +139,60 @@ sudo apt install certbot python3-certbot-nginx -y
    - `20260718000000_rsvp_sms_consent.sql`
    - `20260719000000_marketing_forms.sql`
    - `20260720000000_seating_party_lock_fix.sql`
+   - `20260721000000_primary_guest_dietary_notes.sql`
+   - `20260722000000_guest_scoped_questions_for_primary.sql`
+   - `20260723000000_custom_field_show_condition.sql`
+   - `20260723010000_organizer_added_seating_reveal.sql`
+   - `20260724000000_deprecate_invitation_seal_images.sql`
+   - `20260725000000_fix_declined_guest_rematch.sql`
+   - `20260726000000_scrub_legacy_song_request_notes.sql`
+   - `20260727000000_backfill_pricing_tier_features.sql`
+   - `20260727000001_guest_analytics_composite_indexes.sql`
+   - `20260727100000_envelope_reveal_settings.sql`
+   - `20260728000000_drop_checkin_actor_fk.sql`
+   - `20260729000000_backfill_baseline_tier_features.sql`
+   - `20260730000000_contact_submissions_segments.sql`
+   - `20260731000000_testimonials.sql`
+   - `20260801000000_press_mentions.sql`
+   - `20260802000000_referral_program.sql`
+   - `20260803000000_referral_credit_holds.sql`
+   - `20260804000000_blog.sql`
+   - `20260805000000_landing_stats_live_source.sql`
+   - `20260806000000_contact_inquiries_admin.sql`
+   - `20260807000000_promo_codes.sql`
+   - `20260808000000_drop_auth_users_actor_fks.sql`
+   - `20260809000000_sms_compliance.sql`
+   - `20260810000000_sms_optin_submissions.sql`
+   - `20260811000000_pricing_tier_enterprise_plus.sql`
+   - `20260811010000_sms_consent_log.sql`
+   - `20260812000000_no_kids_allowed.sql`
+   - `20260812010000_host_sms_consent_attestation.sql`
+   - `20260813000000_collect_dietary_restrictions.sql`
+   - `20260814000000_checkin_offline_foundation.sql`
+   - `20260815000000_checkin_guest_delta_and_controls.sql`
+   - `20260816000000_seating_zone_shapes.sql`
+   - `20260817000000_rsvp_companions_name_only.sql`
+   - `20260818000000_sms_addon.sql`
+   - `20260818000002_tier_identity.sql`
+   - `20260819000000_sms_pricing_config.sql`
+   - `20260820000000_sms_usage_and_limits.sql`
+   - `20260821000000_sms_organizer_optin_and_perf.sql`
+   - `20260822000000_sms_rebuild.sql`
+   - `20260823000000_sms_rsvp_confirmation.sql`
+   - `20260824000000_retire_wedding_engagement_templates.sql`
+   - `20260825000000_printed_invitations.sql`
+   - `20260826000000_shop_usd_and_moq.sql`
+   - `20260827000000_shop_category_cover.sql`
+   - `20260828000000_organizer_timezone.sql`
+   - `20260829000000_seating_reminder_weight.sql`
+   - `20260830000000_assign_checkin_app_feature.sql`
+   - `20260830000001_assign_analytics_advanced_feature.sql`
+   - `20260830000002_reconcile_watermark_switches.sql`
+   - `20260830000003_white_label.sql`
+   - `20260830000004_checkin_undo_by_ref.sql`
+   - `20260831000000_checkin_web_upsert.sql`
+   - `20260901000000_sms_templates_and_event_purge.sql`
+   - `20260902000000_free_trial.sql`
 
 ---
 

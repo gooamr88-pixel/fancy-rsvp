@@ -33,6 +33,7 @@ import GuestsTab from './components/GuestsTab';
 import FeatureGate from './components/FeatureGate';
 import OrganizerOverview from './components/OrganizerOverview';
 import DataDeletionBanner from './components/DataDeletionBanner';
+import TrialBanner from './components/TrialBanner';
 import OrganizerProfile from './components/OrganizerProfile';
 import ReferralsTab from './components/ReferralsTab';
 import { formatInZone } from '../utils/timezone';
@@ -1253,6 +1254,20 @@ function DashboardPageInner() {
             * `retention` is fetched lazily and only for an event that actually
             * has a deadline — see the effect that loads it.
             */}
+          {/* Where the organizer stands on their trial. Above the tab dispatch
+              for the same reason the deletion notice is: it is true of the
+              whole event, and a notice that only shows on the tab you happen
+              to open is a notice that gets missed — which matters most in the
+              ENDED state, where the alternative explanation an organizer
+              reaches for is "my event has broken". Renders nothing at all for
+              an event that was never on a trial. */}
+          {activeEvent?.trial_ends_at && (
+            <TrialBanner
+              event={activeEvent}
+              upgradeHref={`/dashboard?event=${eventId}&tab=settings`}
+            />
+          )}
+
           {retention && (
             <DataDeletionBanner
               deleteAt={retention.deleteAt}

@@ -3,6 +3,7 @@ const { body } = require('express-validator');
 const rateLimit = require('express-rate-limit');
 const validate = require('../middleware/validate');
 const { requireAuth } = require('../middleware/auth');
+const { verifyTurnstile } = require('../middleware/captcha');
 const authController = require('../controllers/authController');
 
 const router = express.Router();
@@ -47,6 +48,22 @@ const otpVerifyLimiter = rateLimit({
 // Register new organizer (creates unverified account + sends OTP): POST /api/v1/auth/register
 router.post('/register', [
   signupLimiter,
+  /* THE CAPTCHA, WHICH WAS ALREADY WRITTEN AND NEVER MOUNTED HERE.
+     `verifyTurnstile` existed but guarded exactly one route: the public RSVP
+     submit. Registration had nothing but three-per-hour-per-IP — no captcha,
+     no device signal, no domain rules — which was proportionate while an
+     account was worth nothing until somebody paid.
+
+     A free trial changes what an account is worth. Signing up now grants a
+     live event, a publishable invitation and a daily email allowance, so the
+     signup form is the door that has to be watched.
+
+     It is a NO-OP until TURNSTILE_SECRET is set (captcha.js:66), so mounting
+     it changes nothing until the key is configured — deliberately, because a
+     half-configured captcha that rejected every signup would be a far worse
+     outage than the abuse it prevents. It also fails OPEN on a Cloudflare
+     outage, with a per-IP allowance. */
+  verifyTurnstile,
   body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
   body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
   body('name').trim().notEmpty().withMessage('Your name is required'),

@@ -1,6 +1,7 @@
 const express = require('express');
 const { requireAuth, verifyEventOwner } = require('../middleware/auth');
 const { createCheckoutSession, purchaseSMSCredits, stripeWebhook, verifyCheckoutSession, getPricingConfig, getOrganizerPricing, getPublicPricing, initiateManualPayment, redeemPromoCode } = require('../controllers/paymentController');
+const { startEventTrial } = require('../controllers/trialController');
 
 const router = express.Router({ mergeParams: true });
 
@@ -19,6 +20,11 @@ router.post('/events/:eventId/create-checkout', requireAuth, verifyEventOwner, c
 router.post('/events/:eventId/sms-credits', requireAuth, verifyEventOwner, purchaseSMSCredits);
 router.post('/events/:eventId/manual-payment', requireAuth, verifyEventOwner, initiateManualPayment);
 router.post('/events/:eventId/redeem-promo-code', requireAuth, verifyEventOwner, redeemPromoCode);
+
+// The third way to publish an event, beside paying and redeeming a code: the
+// account's one free trial. Same guard pair as the other two — the trial makes
+// an event publicly live, so it must never be reachable without ownership.
+router.post('/events/:eventId/start-trial', requireAuth, verifyEventOwner, startEventTrial);
 
 // Allow organizers to fetch platform licensing and SMS config
 // Organizer-facing pricing. Deliberately NOT getPricingConfig (the admin

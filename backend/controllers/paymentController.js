@@ -36,6 +36,7 @@ const { SMS_FEATURE_KEY } = require('../middleware/smsAddonGate');
 const {
   resolveTier, tierSnapshot, ensureTierKeys, tierRemovesWatermark, tierIsWhiteLabel,
 } = require('../utils/tierResolver');
+const { fallbackTier, trialDays, TRIAL_EXCLUDED_FEATURES } = require('../utils/trialTier');
 
 /**
  * How many of this org's OTHER paid events are already on `tier`?
@@ -334,6 +335,20 @@ const createCheckoutSession = async (req, res, next) => {
         success: false,
         error: 'CUSTOM_TIER',
         message: `The '${tier.name}' plan is custom-priced — please contact sales to activate it.`
+      });
+    }
+
+    /* The trial plan is not for sale, and the danger is exactly the one the
+       is_custom guard above describes. Its price_cents is 0, so a client
+       posting its key straight to a purchase endpoint would take the free-tier
+       shortcut and be activated PERMANENTLY on the trial's feature set — every
+       paid feature, no deadline, nothing paid. A trial is granted only by
+       /start-trial, which is the only path that writes a trial_ends_at. */
+    if (tier.is_trial === true) {
+      return res.status(400).json({
+        success: false,
+        error: 'TRIAL_TIER',
+        message: 'The free trial cannot be purchased. Start it from your event, or choose a plan.',
       });
     }
 
@@ -1396,6 +1411,21 @@ const updatePricingConfig = async (req, res, next) => {
       .map(t => {
         const features = Array.isArray(t.features) ? t.features : [];
         const { valid } = validateFeatureKeys(features);
+        /* THE TRIAL CANNOT HOLD `white_label`, and stripping it HERE is what
+           makes that true everywhere else for free. Every downstream grant
+           reads the stored plan: tierSnapshot writes `tier_white_label` from
+           `features.includes('white_label')`, and syncBrandingSnapshots pushes
+           that same boolean onto every event on the tier whenever pricing is
+           saved. Remove it once, at the source of truth, and none of those can
+           hand it out — including to events that are already running.
+
+           Silently rather than as a validation error: an admin ticking it is
+           making a reasonable-looking choice about a plan, not doing something
+           wrong, and the checkbox comes back unticked on the next load, which
+           says what happened. See TRIAL_EXCLUDED_FEATURES for why. */
+        const kept = t.is_trial === true
+          ? valid.filter((k) => !TRIAL_EXCLUDED_FEATURES.includes(k))
+          : valid;
         return {
           // THE IDENTITY. Passed straight through from the client, which
           // round-trips it from getPricingConfig — that is what makes a rename
@@ -1414,7 +1444,20 @@ const updatePricingConfig = async (req, res, next) => {
           remove_watermark: !!t.remove_watermark,
           recommended: !!t.recommended,
           is_custom: !!t.is_custom,
-          features: valid,
+          /* THE TRIAL PLAN. These two fields have to be in this whitelist or
+             they do not survive, and the way they fail is nasty: the trial
+             works perfectly until the next time anybody opens the pricing
+             screen and presses save, at which point this function rebuilds
+             every tier from the properties named here, `is_trial` is not one
+             of them, and the trial plan silently becomes an ordinary £0 plan
+             that grants its features FOREVER. Nothing errors and nothing logs.
+
+             `trial_days` is clamped rather than trusted: it is the length of a
+             promise this platform then has to keep, and a typo'd 700 would be
+             a two-year free plan. */
+          is_trial: !!t.is_trial,
+          trial_days: Math.min(90, Math.max(1, Math.round(Number(t.trial_days) || 7))),
+          features: kept,
           price_label: (t.price_label || '').toString().trim(),
           cta_label: (t.cta_label || '').toString().trim(),
           description: (t.description || '').toString().trim(),
@@ -1672,11 +1715,33 @@ const getOrganizerPricing = async (req, res, next) => {
       };
     }
 
+    /* THE TRIAL IS NOT A PLAN ON THE PAYMENT SCREEN.
+       `tiers` becomes the row of purchasable cards in the wizard, and the
+       trial's price_cents is 0 — so leaving it in would put a free card
+       carrying every paid feature next to the ones that cost money, and
+       clicking it would 400 (createCheckoutSession refuses is_trial). It is
+       offered as its own card instead, described by `trial` below. */
+    const trialPlan = tiers.find((t) => t && t.is_trial === true) || null;
+    const sellableTiers = tiers.filter((t) => t && t.is_trial !== true);
+
+    /* Offered only when there is somewhere for it to LAND — the server makes
+       the same check before granting one (resolveTrialPlans), so a card shown
+       without this would promise something the click would refuse. */
+    const landing = fallbackTier(tiers);
+    const trial = trialPlan && landing
+      ? {
+        days: trialDays(trialPlan),
+        maxGuests: Number(trialPlan.max_guests) || 25,
+        landingPlanName: landing.name || 'Free',
+      }
+      : null;
+
     return res.json({
       success: true,
+      trial,
       config: {
         // What the organizer is being sold, and how they may pay for it.
-        pricing_tiers: tiers,
+        pricing_tiers: sellableTiers,
         // Only the methods actually switched on — an inactive one is an
         // internal note about a bank account, not an offer.
         manual_payment_methods: (config.manual_payment_methods || []).filter((m) => m && m.is_active !== false),
@@ -1873,6 +1938,20 @@ const initiateManualPayment = async (req, res, next) => {
         success: false,
         error: 'CUSTOM_TIER',
         message: `The '${tier.name}' plan is custom-priced — please contact sales to activate it.`
+      });
+    }
+
+    /* The trial plan is not for sale, and the danger is exactly the one the
+       is_custom guard above describes. Its price_cents is 0, so a client
+       posting its key straight to a purchase endpoint would take the free-tier
+       shortcut and be activated PERMANENTLY on the trial's feature set — every
+       paid feature, no deadline, nothing paid. A trial is granted only by
+       /start-trial, which is the only path that writes a trial_ends_at. */
+    if (tier.is_trial === true) {
+      return res.status(400).json({
+        success: false,
+        error: 'TRIAL_TIER',
+        message: 'The free trial cannot be purchased. Start it from your event, or choose a plan.',
       });
     }
 
@@ -2204,7 +2283,15 @@ const getPublicPricing = async (req, res, next) => {
     // Keys are minted on the way out for a config saved before they existed, so
     // a client always has an identity to send back to checkout. The stored row
     // is left alone here; the first admin save persists them.
-    const tiers = ensureTierKeys(Array.isArray(config?.pricing_tiers) ? config.pricing_tiers : []);
+    /* The trial plan is filtered OUT before anything else.
+       It is not a plan anybody chooses on the pricing page — it is what
+       happens when they press "start free" on their own event — and leaving it
+       in the array would put a £0 plan carrying every paid feature at the top
+       of the public price list, where the plan finder would recommend it and
+       the comparison table would print it as the best value on offer. The
+       trial is advertised in prose, by the pages that explain it. */
+    const tiers = ensureTierKeys(Array.isArray(config?.pricing_tiers) ? config.pricing_tiers : [])
+      .filter((t) => t && t.is_trial !== true);
 
     const publicTiers = tiers.map((t) => {
       // `isSellableFeature`, not `isValidFeatureKey`: a key being in the registry

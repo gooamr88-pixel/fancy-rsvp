@@ -19,6 +19,7 @@ const crypto = require('crypto');
 const { supabase } = require('../config/supabase');
 const logger = require('../utils/logger');
 const { dispatch } = require('./emailService');
+const { remainingEmailBudget, budgetMessage } = require('../utils/emailBudget');
 const { getEventStats } = require('../utils/emailContext');
 const tokenService = require('./tokenService');
 const T = require('../utils/emailTemplates');
@@ -767,6 +768,21 @@ async function notifyGuestsOfEventChange(eventId, { includeSms = false, force = 
      * function runs ONCE per change. A 400-party event silently told 250 of them
      * their wedding had moved, and the other 150 never heard anything, ever.
      */
+    /* The daily email ceiling applies here too, and this is the ONE place it
+       has to be handled differently from an invitation send.
+       `sendEmailBulk` can truncate safely: the parties it holds back are still
+       un-invited in the ledger, so the next send resumes exactly where it
+       stopped. A CHANGE broadcast has no such ledger — half a guest list being
+       told the venue moved, with no record of which half, is the precise bug
+       the comment above describes and is worse than telling nobody.
+       So this one refuses as a whole rather than sending part of it, and says
+       so, leaving the organizer to try again tomorrow or upgrade. */
+    const budget = await remainingEmailBudget(eventId);
+    if (budget.allowed <= 0) {
+      logger.warn({ eventId, cap: budget.cap }, '[change-notice] refused — daily email ceiling reached');
+      return { sent: 0, texted: 0, blocked: true, message: budgetMessage(budget) };
+    }
+
     for (;;) {
       const { data: parties } = await supabase
         .from('rsvp_parties')

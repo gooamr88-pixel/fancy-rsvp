@@ -282,7 +282,11 @@ export function buildDemoEvent({
 
     reveal_enabled: true,
     is_paid: true,
-    plan_key: 'signature',
+    /* NO `plan_key`. It was here, and there is no such column: the schema
+       identifies a plan by `tier_key`, and nothing in the product reads
+       `plan_key` at all. A fixture that claims to be "the exact shape a saved
+       event arrives in" must not invent a field — that is how the next person
+       writes code against one. */
     tier_name: 'Premium',
     guest_limit: 300,
   };

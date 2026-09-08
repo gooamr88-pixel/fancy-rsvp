@@ -17,6 +17,7 @@ const { supabase } = require('../config/supabase');
 const logger = require('../utils/logger');
 const tokenService = require('./tokenService');
 const notificationService = require('../utils/notificationService');
+const { remainingEmailBudget, budgetMessage } = require('../utils/emailBudget');
 /**
  * `formatEventDate` is imported HERE, at module scope, and that matters.
  *
@@ -138,6 +139,28 @@ async function sendEmailBulk(eventId, { partyIds, resend = false } = {}) {
     return { queued: 0, sent: 0, skipped: 0, failed: 0, message: 'No parties with an email address were eligible for an invitation.' };
   }
 
+  /* ── THE DAILY CEILING ────────────────────────────────────────────────
+     Email is the one cost on this platform with no meter: no wallet, no
+     ledger, no 402. `resend: true` above re-mails every party with an
+     address, and until free trials existed the only thing standing between a
+     stranger and our Brevo bill was having to pay for the event first.
+
+     TRUNCATED, NOT REFUSED. A send that would exceed the allowance sends what
+     it can and says how many it held back — an organizer halfway through
+     inviting their guests should not be told "no" and left guessing which of
+     them received anything. The ones held back are still un-invited in the
+     ledger, so the next send picks them up exactly where this one stopped.
+     See utils/emailBudget.js for why this fails OPEN. */
+  const budget = await remainingEmailBudget(eventId);
+  let withheld = 0;
+  if (candidates.length > budget.allowed) {
+    withheld = candidates.length - budget.allowed;
+    candidates = candidates.slice(0, budget.allowed);
+  }
+  if (candidates.length === 0) {
+    return { queued: 0, sent: 0, skipped: 0, failed: 0, withheld, message: budgetMessage(budget) };
+  }
+
   let sent = 0, skipped = 0, failed = 0;
   const failures = [];
   const BATCH = 10;
@@ -156,7 +179,10 @@ async function sendEmailBulk(eventId, { partyIds, resend = false } = {}) {
     metadata: { channel: 'email', total: candidates.length, sent, skipped, failed },
   }).then(() => {}).catch(() => {});
 
-  return { queued: candidates.length, sent, skipped, failed, failures };
+  return {
+    queued: candidates.length, sent, skipped, failed, failures,
+    ...(withheld > 0 ? { withheld, message: budgetMessage(budget) } : {}),
+  };
 }
 
 /**
