@@ -24,6 +24,20 @@
    already photographed by templateShots.dump.jsx and already reviewed on its
    own — this probe covers the part that is NEW.
 
+   ── THE NAVIGATION LINKS COME OUT BLUE. THAT IS THIS HARNESS, NOT THE PAGE.
+
+   Navbar.js sets `:global(.desktop-nav-link) { color: #191815 }` inside a
+   <style jsx> block, and styled-jsx does not compile under vitest — so that
+   rule reaches the real build and never reaches a staged capture. The links
+   fall back to the browser's default link blue in every screenshot taken
+   here, on every page that renders the navbar.
+
+   Do not "fix" it, and do not read a capture as evidence the nav is broken.
+   If you want to check the navbar itself, navbarWidthProbe.dump.jsx measures
+   geometry (which IS faithful — layout comes from globals.css, not from
+   styled-jsx). The same caveat applies to any other styled-jsx component
+   pulled into a stage: colour and type set that way are simply absent.
+
      npx next build
      npx vitest run --config vitest.shots.config.mjs collectionProbe
 
@@ -65,28 +79,79 @@ const OUT = path.join(ROOT, '..', '.visual', 'collection');
 const STAGE = path.join(OUT, 'stage');
 const PUBLIC = path.join(ROOT, 'public').replace(/\\/g, '/');
 
-/* Verbatim from landingPageProbe.dump.jsx, and deliberately not imported from
-   it: a .dump.jsx is not a module anything should depend on, and vitest.shots
-   includes every one of them as a test file. The three asserts are what stop
-   this drifting into a lie — a missing font is invisible in a screenshot,
-   which is exactly how the homepage was once reviewed entirely in Georgia. */
+/* ── TWO SOURCES FOR THE STYLESHEET, AND THE PAGE SAYS WHICH IT USED ──────
+
+   BUILT is the truth and is preferred: it is the CSS the browser actually
+   receives, with next/font's self-hosted faces wired in. The three asserts on
+   that path are what stop it drifting into a lie — a missing font is
+   invisible in a screenshot, which is exactly how the homepage was once
+   reviewed entirely in Georgia.
+
+   SOURCE is the fallback, and it exists because `npx next build` on this
+   machine takes tens of minutes and has stalled outright, which in practice
+   meant these pages were going to be shipped having never been looked at —
+   and looking at them is the whole point of this file. It is honest for THESE
+   pages specifically, and that is a claim worth justifying rather than
+   assuming: everything they lean on from globals.css (--fx-w-*, --fx-pad-x,
+   .fx-container, .fx-grid, .fx-gutter) is plain CSS in a plain :root, using
+   plain var() and a plain clamp(). None of it is behind an @theme block or a
+   theme() call, so none of it needs PostCSS. Their own media queries are
+   pixel literals in their own <style> blocks. What IS lost: the seven
+   theme(--breakpoint-*) media queries elsewhere in globals.css, which these
+   pages do not use, and Tailwind's utility classes, which they do not use
+   either.
+
+   The faces come from Google Fonts over the network in that mode — real
+   Cormorant Garamond and real Aboreto, not a Georgia stand-in. If the network
+   is unavailable the banner in the staged page is what tells you the type is
+   not to be trusted; do not review type from a SOURCE capture without it. */
 function appCss() {
   const dir = path.join(ROOT, '.next/static/chunks');
-  if (!fs.existsSync(dir)) throw new Error('No .next build. Run `npx next build` first.');
-  const css = fs.readdirSync(dir).filter((f) => f.endsWith('.css'))
-    .map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
-  if (!css.includes('.fx-grid')) throw new Error('Built CSS has no .fx-grid — stale build.');
+  const built = fs.existsSync(dir)
+    && fs.readdirSync(dir).some((f) => f.endsWith('.css'));
 
-  /* URL-ENCODED. This repo lives under "C:/Users/yousef amr/", and a raw space
-     inside an unquoted CSS url() ends the token — the rule parses as garbage
-     and the font falls back silently. */
-  const media = encodeURI(path.join(ROOT, '.next/static/media').split(path.sep).join('/'));
-  const withFonts = css.replace(/url\(\.\.\/media\//g, 'url(file:///' + media + '/');
-  if (!/@font-face\{font-family:Aboreto;/.test(withFonts)) {
-    throw new Error('No Aboreto @font-face in the built CSS — the font pipeline moved.');
+  /* A PARTIAL BUILD IS NOT A BUILD, and this probe met one: an interrupted
+     `next build` leaves .next/static/chunks populated with CSS that has no
+     next/font @font-face rules in it at all. Both conditions are checked and
+     an unusable build DEGRADES to SOURCE with a reason on stdout rather than
+     throwing — the point of this file is to get a picture of the page, and
+     refusing to draw one because a stale artifact is lying is the wrong
+     trade. The banner in the staged page still says which was used, so a
+     silent downgrade is not possible. */
+  if (built) {
+    const css = fs.readdirSync(dir).filter((f) => f.endsWith('.css'))
+      .map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+
+    /* URL-ENCODED. This repo lives under "C:/Users/yousef amr/", and a raw
+       space inside an unquoted CSS url() ends the token — the rule parses as
+       garbage and the font falls back silently. */
+    const media = encodeURI(path.join(ROOT, '.next/static/media').split(path.sep).join('/'));
+    const withFonts = css.replace(/url\(\.\.\/media\//g, 'url(file:///' + media + '/');
+
+    const bad = [];
+    if (!css.includes('.fx-grid')) bad.push('no .fx-grid');
+    if (!/@font-face\{font-family:Aboreto;/.test(withFonts)) bad.push('no Aboreto @font-face');
+    if (bad.length === 0) return { mode: 'BUILT', css: withFonts };
+    // eslint-disable-next-line no-console
+    console.warn(`PROBE: .next exists but is unusable (${bad.join(', ')}) — `
+      + 'almost certainly a partial or interrupted build. Falling back to source CSS.');
   }
-  return withFonts;
+
+  const globals = fs.readFileSync(path.join(ROOT, 'src/app/globals.css'), 'utf8');
+  const cinematic = fs.readFileSync(path.join(ROOT, 'src/app/styles/cinematic.css'), 'utf8');
+  if (!globals.includes('.fx-grid')) throw new Error('globals.css has no .fx-grid.');
+  /* The two @import lines at the top would resolve to nothing from a file://
+     page and Tailwind is not needed here — see the header. Dropped so the
+     browser does not sit waiting on them. */
+  const css = globals.replace(/^@import\s+[^;]+;\s*$/gm, '') + '\n' + cinematic;
+  return { mode: 'SOURCE', css };
 }
+
+/** Real faces over the network, for the SOURCE path only. */
+const WEBFONTS = '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+  + '<link rel="stylesheet" href="https://fonts.googleapis.com/css2'
+  + '?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400'
+  + '&family=Aboreto&display=swap">';
 
 /* next/font emits its family names onto a class layout.js puts on <html>. The
    staged page has no such class, so var(--font-cormorant) would be UNDEFINED
@@ -136,11 +201,14 @@ async function stage(name, element, heights) {
     .replace(/src="\/templates\//g, 'src="templates/');
   const head = [...document.head.querySelectorAll('style')].map((s) => s.textContent).join('\n');
 
+  const { mode, css } = appCss();
+
   fs.mkdirSync(STAGE, { recursive: true });
   fs.writeFileSync(path.join(STAGE, `${name}.html`),
     `<!doctype html><html lang="en" dir="ltr"><head><meta charset="utf-8">
 <base href="file:///${PUBLIC}/">
-<style>${FONTS}</style><style>${appCss()}</style><style>${FONT_VARS}</style><style>${head}</style>
+${mode === 'SOURCE' ? WEBFONTS : ''}
+<style>${FONTS}</style><style>${css}</style><style>${FONT_VARS}</style><style>${head}</style>
 <style>
   /* Entrance animations run to their end state: this is a still. */
   *,*::before,*::after { animation-duration: 1ms !important; animation-delay: 0s !important; }
@@ -150,10 +218,17 @@ async function stage(name, element, heights) {
      capture shows the page as a reader scrolls it. */
   #main-navbar { position: static !important; }
 </style>
-</head><body>${html}</body></html>`, 'utf8');
+</head><body>
+<!-- WHICH STYLESHEET THIS CAPTURE USED. Says so IN THE PAGE, not only in a
+     console line that scrolls away: a SOURCE capture is trustworthy for
+     layout and colour and only as trustworthy for TYPE as the network was
+     when it was taken, and somebody reviewing the picture a week later has
+     no other way to know which they are looking at. -->
+<div style="position:fixed;z-index:99999;top:0;right:0;padding:3px 9px;font:11px/1.4 monospace;background:${mode === 'BUILT' ? '#1b5e20' : '#8a4b00'};color:#fff">CSS: ${mode}</div>
+${html}</body></html>`, 'utf8');
 
   // eslint-disable-next-line no-console
-  console.log(`PROBE staged ${name}.html bytes:`, html.length);
+  console.log(`PROBE staged ${name}.html [css=${mode}] bytes:`, html.length);
 
   /* A TRUE-WIDTH, UNSCALED iframe. Scaling one with a CSS transform yields
      half-black captures — density comes from --force-device-scale-factor. */

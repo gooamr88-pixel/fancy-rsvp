@@ -136,34 +136,34 @@ export default function CollectionGallery() {
           : `${shown.length} of ${COLLECTION.length} invitations`}
       </p>
 
-      {/* .fx-grid is auto-fit, so the track count is
-          floor((container + gap) / (--fx-col + gap)) and it walks down on its
-          own with no breakpoint here. A FIXED column count could not fit a
-          phone at all — see AGENTS.md on min-content width.
+      {/* A CENTRED FLEX ROW, NOT .fx-grid — and this is the one place on the
+          page that departs from the house primitive, so it is worth saying
+          why rather than leaving it to look like carelessness.
 
-          300px, INSIDE A --wide CONTAINER, and both halves of that were
-          chosen against the arithmetic rather than by eye:
+          .fx-grid is auto-fit, so its column count is
+          floor((container + gap) / (--fx-col + gap)) — a function of the
+          viewport. With FOUR items that is a trap, because the count lands on
+          three at some widths and the fourth invitation is then stranded
+          alone on a second row, hard against the left edge, reading as a
+          mistake rather than as a collection. That is not hypothetical: it is
+          what the first version of this page did at 1280, which is the most
+          common desktop width there is. Tuning --fx-col does not solve it,
+          it only moves it — 4-up at 1280 needs a column of 267px or less,
+          2-up at 1024 needs 294px or more, and no single value is both.
 
-            1400px container, ~59px gap  ->  4 tracks of 306px
-            976  (a 1024 laptop)         ->  2 tracks of 467px
-            720  (a tablet)              ->  2 tracks of 345px
-            phone                        ->  1
+          Wrapping and CENTRING removes the failure instead of relocating it.
+          A short last row sits in the middle of the page at every width, which
+          reads as composition; the plates keep one honest size instead of
+          stretching to fill whatever the track happens to be; and a 9:19.5
+          phone screen never gets so wide that its own height runs away (at a
+          467px track it would be over 1,000px tall).
 
-          Four items across four ladder steps with NO ORPHAN at any of them,
-          which is the whole reason not to take the obvious 280 in a --5xl
-          container: that lands on three tracks and leaves the fourth
-          invitation alone on a second row, reading as a mistake rather than
-          as a collection.
-
-          And the plates are deliberately NOT capped, unlike the homepage
-          band's (which pins them to 260px because three phone screens at full
-          track width is most of a desktop screen for one band). This is not a
-          band — it is the page those pictures came here to be looked at on,
-          so 306px against the teaser's 260 is the point. */}
-      <ul
-        className="col-plates fx-grid"
-        style={{ '--fx-col': '300px', '--fx-gap': 'clamp(40px, 4vw, 64px)' }}
-      >
+          It is still intrinsically responsive — the thing .fx-grid exists to
+          guarantee. A wrapping flex row's min-content width is the width of
+          its widest child, not the sum, so the 320px proof in AGENTS.md holds.
+          What it is NOT is a fixed-column grid, which is what that rule
+          actually forbids. */}
+      <ul className="col-plates">
         {shown.map((item, i) => <Plate key={item.key} item={item} index={i} />)}
       </ul>
 
@@ -225,13 +225,40 @@ export default function CollectionGallery() {
           opacity: 0.75;
         }
 
-        /* ── the plates ───────────────────────────────────────────────── */
+        /* ── the plates ─────────────────────────────────────────────────
+           See the note in the JSX for why this wraps and centres rather than
+           using .fx-grid. The measured budget at the widths that matter:
+
+             1280 viewport -> 1184 content, ~36px gap
+                              4 x 260 + 3 x 36 = 1148  (fits, 36px spare)
+             1024          ->  943 content, ~29px gap
+                              3 x 260 + 2 x 29 =  838  (fourth wraps, centred)
+             1480+         -> 1384 content, 44px gap
+                              4 x 260 + 3 x 44 = 1172  (fits, centred)
+
+           The basis never GROWS (flex-grow 0), so a plate is the same size on
+           a 1280 laptop and a 4K monitor and the row simply centres in more
+           space. A grown plate is a taller plate here, and these pictures are
+           already 2.16 times as tall as they are wide. */
         .col-plates {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: center;
+          gap: clamp(28px, 2.8vw, 44px);
           margin: 30px 0 0;
           padding: 0;
           list-style: none;
         }
-        .col-plate { min-width: 0; }
+        .col-plate {
+          flex: 0 1 260px;
+          max-width: 100%;
+          min-width: 0;
+        }
+        /* On a phone the plate is the screen. A 260px basis there would leave
+           a 45px moat down both sides of the one thing the page is for. */
+        @media (max-width: 639.98px) {
+          .col-plate { flex-basis: 100%; }
+        }
         .col-plate__link {
           display: flex;
           flex-direction: column;

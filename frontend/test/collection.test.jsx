@@ -146,11 +146,11 @@ describe('the key in the URL is an allowlist, not a parameter', () => {
        catalogue, never the raw value threaded through — and an unknown key
        must fall back to a real template rather than error, because the
        failure mode of a shared link is a typo. */
-    expect(DEMO_STAGE).toMatch(/COLLECTION_BY_KEY\[params\.get\('t'\) \|\| ''\] \|\| null/);
+    expect(stripComments(DEMO_STAGE)).toMatch(/collectionItem\(params\?\.get\('t'\) \|\| ''\)/);
     expect(DEMO_STAGE).toMatch(/chosen\?\.key \|\| 'swans'/);
     /* The raw parameter must never be what gets rendered. If this ever reads
        templateType={params.get(...)} the guard above has been bypassed. */
-    expect(DEMO_STAGE).not.toMatch(/templateType:\s*params\.get/);
+    expect(stripComments(DEMO_STAGE)).not.toMatch(/templateType:\s*params\??\.get/);
   });
 
   it('re-checks the key inside the component that builds the event', () => {
@@ -578,14 +578,34 @@ describe('it obeys the house rules the landing page learned the hard way', () =>
     });
   });
 
-  it('keeps the gallery grid intrinsically responsive', () => {
-    // A fixed-column grid cannot fit a 320px phone at all — see AGENTS.md on
-    // min-content width. .fx-grid walks its own column count down.
-    expect(GALLERY).toMatch(/className="col-plates fx-grid"/);
-    /* Stripped: AGENTS.md records that five of the old grep's "fixed grids"
-       were the text repeat(3, 1fr) inside a comment saying the grid had been
-       removed. */
+  it('keeps the gallery intrinsically responsive, and never orphans a plate', () => {
+    /* A fixed-column grid cannot fit a 320px phone at all — see AGENTS.md on
+       min-content width. This wraps and centres instead of using .fx-grid,
+       because auto-fit's column count is a function of the viewport and with
+       FOUR items it lands on three at 1280 and strands the fourth. A wrapping
+       flex row's min-content width is its widest child, so the 320px proof
+       still holds. */
     expect(stripComments(GALLERY)).not.toMatch(/repeat\(\d+,\s*1fr\)/);
+    expect(GALLERY).toMatch(/flex-wrap: wrap/);
+    expect(GALLERY, 'a short last row must centre, or it reads as a mistake')
+      .toMatch(/justify-content: center/);
+    // Never grows: a wider plate is a taller plate at 9:19.5.
+    expect(GALLERY).toMatch(/flex: 0 1 260px/);
+  });
+
+  it('fits the whole collection on one desktop row', () => {
+    /* Arithmetic, not a browser — AGENTS.md's rule, and the reason the first
+       version of this page shipped an orphan: nothing in the DOM shows the
+       wrap point, so the plate-count test passes just as happily with one
+       invitation stranded on a second row.
+       At the 1280 target: .fx-container--wide is capped by the viewport, so
+       the content box is 1280 less two --fx-pad-x gutters of 48. */
+    const basis = Number(GALLERY.match(/flex: 0 1 (\d+)px/)?.[1]);
+    const CONTENT = 1280 - 2 * 48;
+    const GAP = 36; // clamp(28, 2.8vw, 44) at 1280
+    const perRow = Math.floor((CONTENT + GAP) / (basis + GAP));
+    expect(perRow, `${basis}px fits ${perRow} plates, not ${COLLECTION.length}`)
+      .toBeGreaterThanOrEqual(COLLECTION.length);
   });
 
   it('honours prefers-reduced-motion everywhere it animates', () => {

@@ -618,7 +618,31 @@ export default function Navbar() {
            that matters: it was written for 7 links and there are now 9.
 
            If you add another link, re-run that probe. Do not re-derive this
-           number from the character-count budget above — that is what failed. */
+           number from the character-count budget above — that is what failed.
+
+           ── RE-RUN FOR "COLLECTION" (the eighth link) ────────────────────
+           Measured the same way, logged out, with the real component:
+
+             1024px → desktop nav hidden (width 0), as designed
+             1140px → hidden
+             1150px → shown, scrollWidth 1150, OVERFLOW: none
+             1152px → clean
+             1160px → clean
+             1200px → clean
+             1280px → clean
+
+           1150 SURVIVES THE EXTRA LINK and does not move. The nav box tracks
+           the viewport (853px of it at 1150, 972px at 1280) and its content —
+           eight links, Log In, Get Started — lands around 800px, so there is
+           roughly 50px inside the box and 44px of gutter beyond it.
+
+           Worth saying why that is not luck: the arithmetic budget above is
+           still written for SEVEN links and would have predicted trouble. It
+           is the thing this note already warns is untrustworthy. The measured
+           floor was 1120 with seven links and the breakpoint was set to 1150
+           for headroom; the eighth link ate the headroom and no more. There
+           is now very little left — the ninth link should raise this number,
+           and should be measured, not estimated. */
         @media (max-width: 1149.98px) {
           .desktop-nav {
             display: none !important;
