@@ -3,6 +3,7 @@ import Link from "next/link";
 import { TEMPLATES } from "../../utils/curatedTemplates";
 import { CINEMATIC_KEYS } from "../templates/cinematic/cinematicThemes";
 import { occasionPolicyFor } from "../../utils/eventOccasion";
+import { ARRIVAL } from "../../collection/collectionCatalogue";
 import { buildWhatsappUrl } from "../../utils/shopLinks";
 import { C, T, SHADOW, BEZEL } from "./landingTokens";
 
@@ -66,16 +67,12 @@ const OWN_PHOTO = {
   },
 };
 
-/** What a guest actually does to open each one — the thing worth showing. */
-const ARRIVAL = {
-  ring: "They touch the box. It opens on film.",
-  bab: "They knock three times. It answers.",
-  swans: "They break the seal. The card rises out.",
-  /* Short, like the other three. The "your own photograph" claim lives in the
-     note below it — saying it here as well made the plate state the same
-     thing three times over, in the arrival, the note and the description. */
-  letter: "They touch the wax. Both flaps fall open.",
-};
+/* ARRIVAL — what a guest actually does to open each one — is IMPORTED, from
+   collection/collectionCatalogue.js. It was declared here as well, verbatim,
+   once the collection gallery shipped: the same four sentences in the two
+   places a visitor reads them, which is how one of them ends up describing an
+   opening the template no longer has. The gallery's module owns them because
+   it is the one every surface that names these templates already reads. */
 
 /** Lowercase roman, to pair with the section numeral without competing. */
 const PLATE_NUMERAL = ["i", "ii", "iii", "iv", "v"];
@@ -273,9 +270,20 @@ export default async function TemplatesShowcaseSection() {
         )}
 
         <div className="tss-cta">
-          {/* /templates does not exist. The place a visitor actually sees and
-              picks these is step one of the wizard. */}
-          <Link href="/register" className="tss-btn tss-btn--ghost">See them in your own event</Link>
+          {/* IT EXISTS NOW. This said "/templates does not exist" and sent a
+              visitor who wanted to look at invitations to a signup form
+              instead — the single widest gap between what this band promises
+              and where its button went. /collection is the gallery, and one
+              tap further in each of these opens for real.
+
+              (Not /templates, which is still a 308 to the homepage in
+              next.config.mjs and would bounce. See collection/page.js.)
+
+              The ghost button goes to the gallery and the signup moves to the
+              second, quieter slot: somebody reading a band of photographs is
+              choosing, not buying, and the next step they actually want is a
+              bigger look rather than an account. */}
+          <Link href="/collection" className="tss-btn tss-btn--ghost">Open the collection</Link>
         </div>
       </div>
 

@@ -125,38 +125,117 @@ export const DEMO_FORM_FIELDS = [
   },
 ];
 
+/* ── WHAT NADIA AND OMAR ARE CELEBRATING ────────────────────────────────────
+
+   THE REASON THIS EXISTS: Velvet Ring declares `occasions: ['engagement']`
+   and nothing can override that — `resolveOccasion` and `getCinematicOccasion`
+   both CLAMP a stored occasion to what the template allows, on read. So an
+   event rendered on Velvet Ring is an engagement whatever the row says.
+
+   Until this map, the fixture was a wedding and only a wedding. Opening
+   Velvet Ring from the collection therefore printed an ENGAGEMENT kicker over
+   a page that said, in the organizer's own words, "We are getting married on
+   the Corniche" — the cover and the prose disagreeing about the same evening,
+   which is exactly the class of mistake the occasion catalogue was built to
+   remove and would have been introduced by the one page most likely to be
+   looked at closely.
+
+   It is the SAME couple, the same house and the same sea in both. Only what
+   is being celebrated changes, because that is the only thing the template
+   actually constrains — and one couple across every template is most of why
+   the demo reads as a product rather than as four unrelated screenshots.
+
+   NOT DERIVED HERE. Which occasion a template implies is `defaultOccasionFor`
+   in utils/eventOccasion.js, and resolving it there would mean importing that
+   module — which imports cinematicThemes.js, which imports react-dom. This
+   file is a dependency-free fixture, read by tests and by the demo alike, and
+   it stays that way: the CALLER resolves the occasion and passes it in. The
+   collection catalogue already carries the answer on every item. */
+export const DEMO_OCCASION_COPY = {
+  wedding: {
+    eventType: 'wedding',
+    dayLabel: 'The wedding',
+    ceremonyLabel: 'Ceremony by the water',
+    description:
+      'We are getting married on the Corniche, at the house Nadia’s '
+      + 'grandmother grew up in, and we would like you there.',
+    descriptionAr:
+      'يسعدنا أن تشاركونا فرحتنا في ليلة نبدأ فيها فصلاً جديداً من حياتنا، على شاطئ الإسكندرية.',
+    story:
+      'We met on the last train out of Ramleh station, both of us running for '
+      + 'the same closing door. Omar got there first and held it. Nadia has been '
+      + 'telling him he was showing off ever since, and he has never once denied '
+      + 'it. Nine years later we are asking you to the sea, on the evening we '
+      + 'stop running for anything.',
+  },
+  engagement: {
+    eventType: 'engagement',
+    dayLabel: 'The engagement',
+    ceremonyLabel: 'The rings, by the water',
+    description:
+      'We are getting engaged on the Corniche, at the house Nadia’s '
+      + 'grandmother grew up in, and we would like you there.',
+    descriptionAr:
+      'يسعدنا أن تشاركونا فرحتنا في ليلة نعلن فيها خطوبتنا، على شاطئ الإسكندرية.',
+    story:
+      'We met on the last train out of Ramleh station, both of us running for '
+      + 'the same closing door. Omar got there first and held it. Nadia has been '
+      + 'telling him he was showing off ever since, and he has never once denied '
+      + 'it. Nine years later he asked her properly, and she said yes before he '
+      + 'had finished.',
+  },
+};
+
+/** The wedding, unless a caller says otherwise. Every existing caller — the
+ *  three demo stages, the organizer fixture, the tests — passes nothing and
+ *  gets exactly the event it has always got. */
+const DEFAULT_OCCASION = 'wedding';
+
 /* ── The page the guest actually scrolls ────────────────────────────────────
    Every key below is one HeritageArchPage reads. Sections whose data is
    absent hide themselves for a real guest, so anything left out here is a
    section the demo simply does not show — which is a content decision, not a
    bug. The demo runs with `isPreview` FALSE: what a visitor sees is what an
    organizer who typed exactly this would get, with no invented hotels. */
-function templateData({ noKids, meals }) {
+function templateData({ noKids, meals, copy, occasion, letterHeroPhoto, letterTextPos }) {
   return {
     groom_name: DEMO_PARTNER_1,
     bride_name: DEMO_PARTNER_2,
     title_ar: 'نادية وعمر',
-    description_ar:
-      'يسعدنا أن تشاركونا فرحتنا في ليلة نبدأ فيها فصلاً جديداً من حياتنا، على شاطئ الإسكندرية.',
+    description_ar: copy.descriptionAr,
+
+    /* The organizer's own answer to "what is this". Every renderer clamps it
+       to what the template allows before using it (resolveOccasion,
+       getCinematicOccasion), so a value the template refuses is corrected
+       rather than obeyed — this is the fixture stating its intent, not
+       overriding policy. */
+    custom_category: occasion,
+
+    /* SEALED LETTER'S FOLD, and nothing else reads these five keys.
+       `letter_hero_photo` null is a supported, finished state — see the note
+       on the parameter — so these are written unconditionally rather than
+       spread in behind a check: an absent key and a null key mean the same
+       thing to LetterPortraitHero, and a conditional spread here would be
+       one more branch for no difference. */
+    letter_hero_photo: letterHeroPhoto || null,
+    letter_hero_focus: 'center',
+    letter_hero_text_pos: letterTextPos,
+    letter_hero_caption: null,
+    letter_hero_caption_sub: null,
 
     ha_meal_options: meals,
     ha_invited_to_city: 'Alexandria',
     ha_invited_to_lat: DEMO_VENUE_LAT,
     ha_invited_to_lng: DEMO_VENUE_LNG,
 
-    ha_our_story:
-      'We met on the last train out of Ramleh station, both of us running for '
-      + 'the same closing door. Omar got there first and held it. Nadia has been '
-      + 'telling him he was showing off ever since, and he has never once denied '
-      + 'it. Nine years later we are asking you to the sea, on the evening we '
-      + 'stop running for anything.',
+    ha_our_story: copy.story,
 
     ha_days: [
       {
-        label: 'The wedding',
+        label: copy.dayLabel,
         schedule: [
           { time: '19:30', label: 'Guests arrive', icon: 'watch' },
-          { time: '20:15', label: 'Ceremony by the water', icon: 'rings' },
+          { time: '20:15', label: copy.ceremonyLabel, icon: 'rings' },
           { time: '21:30', label: 'Dinner is served', icon: 'plate' },
           { time: '23:00', label: 'Dancing', icon: 'ornament' },
         ],
@@ -207,7 +286,25 @@ function templateData({ noKids, meals }) {
  *
  * @param {object}   [o]
  * @param {string}   [o.templateType]  a CINEMATIC_KEYS value; decides the cover
+ * @param {string}   [o.occasion]      a DEMO_OCCASION_COPY key; decides the words.
+ *                                     The CALLER resolves this from the template
+ *                                     (defaultOccasionFor, or the collection
+ *                                     catalogue's own `occasion`) — see the note
+ *                                     on DEMO_OCCASION_COPY for why not here.
  * @param {object}   [o.customColors]  { primary, secondary, accent, background }
+ * @param {string}   [o.letterHeroPhoto] Sealed Letter's fold. THIS FIELD AND NOT
+ *                                     `cover_image_url`: HeritageArchPage passes
+ *                                     the cover to its own framed section as
+ *                                     well, so using it here would print the
+ *                                     same picture twice on one page. Sealed
+ *                                     Letter is the only template that reads it,
+ *                                     and the only one that ships no artwork of
+ *                                     its own — with none it renders a
+ *                                     typographic hero, which is finished but is
+ *                                     not what the template is for.
+ * @param {string}   [o.letterTextPos] 'top' | 'center' | 'bottom' — which edge
+ *                                     the words sit against, and therefore which
+ *                                     edge the scrim is drawn from.
  * @param {string[]} [o.meals]         empty array ⇒ no meal question at all
  * @param {boolean}  [o.noKids]        renders AdultsOnlyNotice under the stepper
  * @param {boolean}  [o.trackGuestSide] renders the "whose side" picker
@@ -216,13 +313,21 @@ function templateData({ noKids, meals }) {
  */
 export function buildDemoEvent({
   templateType = 'swans',
+  occasion = DEFAULT_OCCASION,
   customColors = { primary: '#33492f', secondary: '#6d6f4e', accent: '#5c2331', background: '#f8f4e9' },
+  letterHeroPhoto = null,
+  letterTextPos = 'bottom',
   meals = DEMO_MEALS,
   noKids = true,
   trackGuestSide = false,
   collectDietary = true,
   now = Date.now(),
 } = {}) {
+  /* An occasion this fixture has no words for falls back to the wedding
+     rather than rendering `undefined` into the couple's own story. The
+     catalogue has 25 occasions and this fixture is written for two; that is
+     a content limit, not a bug, and it must fail soft. */
+  const copy = DEMO_OCCASION_COPY[occasion] || DEMO_OCCASION_COPY[DEFAULT_OCCASION];
   const mealList = Array.isArray(meals) ? meals.filter(Boolean) : [];
   /* No dishes ⇒ no meal question. Removing the field is what an organizer
      deleting it in the Form Builder actually does; leaving a flagged field
@@ -237,15 +342,12 @@ export function buildDemoEvent({
     slug: DEMO_SLUG,
     title: DEMO_TITLE,
     title_ar: 'نادية وعمر',
-    event_type: 'wedding',
+    event_type: copy.eventType,
     template_type: templateType,
     status: 'published',
 
-    description:
-      'We are getting married on the Corniche, at the house Nadia’s '
-      + 'grandmother grew up in, and we would like you there.',
-    description_ar:
-      'يسعدنا أن تشاركونا فرحتنا في ليلة نبدأ فيها فصلاً جديداً من حياتنا، على شاطئ الإسكندرية.',
+    description: copy.description,
+    description_ar: copy.descriptionAr,
 
     event_date: eventInstant(now).toISOString(),
     event_end_date: null,
@@ -261,7 +363,9 @@ export function buildDemoEvent({
     dress_code_ar: 'ملابس رسمية · التراس من الحجر، خُذوا الأحذية في الحسبان',
 
     custom_colors: customColors,
-    template_data: templateData({ noKids, meals: mealList }),
+    template_data: templateData({
+      noKids, meals: mealList, copy, occasion, letterHeroPhoto, letterTextPos,
+    }),
     custom_form_fields: fields,
 
     no_kids_allowed: !!noKids,
@@ -271,7 +375,13 @@ export function buildDemoEvent({
 
     /* No cover image and no gallery on purpose: the cinematic templates draw
        their own hero, and a stock photograph underneath one is the single
-       fastest way to make a bespoke invitation look like a template. */
+       fastest way to make a bespoke invitation look like a template.
+
+       Sealed Letter's photograph does NOT go here. It is
+       `template_data.letter_hero_photo` — see the parameter note above and
+       the one on HeritageArchPage's heroPhoto prop: the cover gets its own
+       framed section further down the page, so putting the fold's picture
+       here would print it twice. */
     cover_image_url: null,
     gallery_urls: [],
 

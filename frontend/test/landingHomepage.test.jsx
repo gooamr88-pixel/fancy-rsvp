@@ -290,14 +290,24 @@ describe('the page is not longer than it needs to be', () => {
     /* The bar once carried ELEVEN targets — nine links plus Log In and a gold
        Get Started — which is not a navigation bar, it is a list, and all nine
        had to fit beside the logo before the mobile menu takes over.
-       Seven now, deliberately: Home and Contact Us were both added back on
+       Seven for a while: Home and Contact Us were both added back on
        2026-08-21 at the owner's direction. The ceiling exists to catch drift,
        not to overrule a decision, so it moves with the decision and stays
-       tight enough to keep catching one. */
+       tight enough to keep catching one.
+
+       EIGHT NOW, for Collection. /collection is a page that did not exist
+       until the gallery shipped — the four invitations had no home, and the
+       homepage band that showed them pointed its own call to action at
+       /register because there was nowhere else to send anybody. A product's
+       showcase is not a page you reach only by scrolling the front page to
+       the right band, so it is in the bar.
+
+       Eight is the ceiling, not a target. The next addition should replace
+       something rather than raise this again. */
     const block = NAVBAR.slice(NAVBAR.indexOf('const NAV_LINKS'), NAVBAR.indexOf('export default function Navbar'));
     // SHOP_LABEL is a constant, not a quoted literal, so it is counted here.
     const items = [...block.matchAll(/href:\s*(?:"|SHOP_PATH)/g)];
-    expect(items.length, 'the nav is growing back toward a list').toBeLessThanOrEqual(7);
+    expect(items.length, 'the nav is growing back toward a list').toBeLessThanOrEqual(8);
   });
 
   it('offers the way home from the menu, not only from the logo', () => {

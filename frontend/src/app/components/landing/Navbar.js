@@ -64,6 +64,17 @@ import { SHOP_LABEL, SHOP_PATH } from "../../utils/shopLinks";
        reaching a person. */
 const NAV_LINKS = [
   { label: "Home", href: "/" },
+  /* SECOND, and the count went from seven to eight for it.
+     The four invitations are the most differentiated thing this product has
+     and until /collection existed there was nowhere to see them: the
+     homepage band's own call to action pointed at /register, with a comment
+     saying the gallery did not exist. A visitor who wants to look at the
+     invitations before reading about a platform now has a labelled way to,
+     from every scroll position on every page.
+     It sits above Features on purpose — somebody browsing invitations is
+     earlier in the decision than somebody reading a capability list, and
+     this bar is read left to right. */
+  { label: "Collection", href: "/collection" },
   { label: "Features", href: "/features" },
   { label: "Pricing", href: "/pricing" },
   // Was "Printed Cards" → /printed-invitations. The catalogue now sells

@@ -6,6 +6,7 @@ import GuestExperiencePreview from '../../components/templates/GuestExperiencePr
 import DemoPhone from '../components/DemoPhone';
 import { TEMPLATES, palettesFor } from '../../utils/curatedTemplates';
 import { CINEMATIC_KEYS } from '../../components/templates/cinematic/cinematicThemes';
+import { occasionPolicyFor } from '../../utils/eventOccasion';
 import { buildDemoEvent, DEMO_MEALS } from '../fixtures/demoEvent.mjs';
 import { C, T } from '../../components/landing/landingTokens';
 
@@ -110,6 +111,16 @@ export default function DemoCustomizePage() {
      inside the frame for no reason. */
   const event = useMemo(() => buildDemoEvent({
     templateType,
+    /* THE WORDS FOLLOW THE ARTWORK, because on one template they have to.
+       Velvet Ring declares occasions: ['engagement'] and every renderer
+       clamps to it, so picking it in the control beside this phone printed an
+       ENGAGEMENT kicker over a page whose own description read "We are
+       getting married on the Corniche" — the cover and the prose disagreeing
+       about the same evening, in the one stage built to prove the settings
+       are real.
+       occasionPolicyFor is the same resolution the renderer performs, so the
+       fixture cannot pick words the page will then contradict. */
+    occasion: occasionPolicyFor(templateType).occasion,
     customColors: palette,
     meals: askMeal ? DEMO_MEALS : [],
     noKids,

@@ -1,10 +1,13 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { Suspense, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import GuestExperiencePreview from '../../components/templates/GuestExperiencePreview';
 import DemoPhone from '../components/DemoPhone';
 import DemoHandoff from '../components/DemoHandoff';
-import { buildDemoEvent } from '../fixtures/demoEvent.mjs';
+import { buildDemoEvent, DEMO_TITLE } from '../fixtures/demoEvent.mjs';
+import { collectionItem } from '../../collection/collectionCatalogue';
+import { palettesFor } from '../../utils/curatedTemplates';
 import { C, T } from '../../components/landing/landingTokens';
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -27,6 +30,30 @@ import { C, T } from '../../components/landing/landingTokens';
 
    Nothing reaches the network. See `simulate` in useIdempotentRsvpSubmit.
 
+   ── ?t= CHOOSES THE INVITATION ───────────────────────────────────────────
+
+   /collection/[key] hands a visitor here from the template they were just
+   looking at, and arriving back at the default one would read as the site
+   losing their place. So the stage takes a template key.
+
+   IT IS AN ALLOWLIST LOOKUP, NOT A PASS-THROUGH. The value is a query string
+   a stranger writes, and it would otherwise land on `template_type`, which is
+   free text with no CHECK constraint anywhere in the schema — nothing
+   downstream would refuse it. `collectionItem(t)` either produces a catalogue
+   entry or produces null, and null falls back to Swan Lake. An unknown key is
+   therefore the default page rather than an error, which is the right failure
+   for a shared link with a typo in it.
+
+   The accessor rather than a bare `COLLECTION_BY_KEY[t]`: that index answers
+   truthily for "constructor" and every other inherited name, which would put
+   a function where a template belongs.
+
+   The entry also carries the OCCASION, and that is not decoration. Velvet
+   Ring declares `occasions: ['engagement']` and every renderer clamps to it,
+   so opening Ring on the wedding fixture printed an engagement kicker over
+   "we are getting married". The catalogue resolves the occasion the same way
+   the renderer does, and the fixture words itself to match.
+
    ── THE EVENT IS BUILT ONCE ──────────────────────────────────────────────
 
    Lazy initial state, not a module constant and not a fresh call per render.
@@ -35,11 +62,50 @@ import { C, T } from '../../components/landing/landingTokens';
    guarantees a render every second. At module scope it would freeze the
    clock at import time, which for a date computed relative to "today" is the
    one thing it must not do.
+
+   ── AND WHY THERE IS A SUSPENSE BOUNDARY ─────────────────────────────────
+
+   `useSearchParams` opts its whole subtree out of static rendering unless it
+   sits under one. Without the boundary this page — the single most-linked
+   page in the marketing funnel — would be server-rendered on every request
+   for the sake of one optional query parameter.
    ═══════════════════════════════════════════════════════════════════════════ */
 
-export default function DemoInvitationPage() {
-  const [event] = useState(() => buildDemoEvent());
+function DemoInvitationStage() {
+  const params = useSearchParams();
+  /* The catalogue entry, or nothing. See the header: this IS the guard.
+     Optional-chained because useSearchParams can hand back null while a
+     subtree is still resolving. */
+  const chosen = collectionItem(params?.get('t') || '');
+  const templateType = chosen?.key || 'swans';
+
+  /* MEMOISED ON THE TEMPLATE, not lazy initial state — and the difference is
+     a bug, not a preference.
+
+     `useState(() => …)` runs its initializer ONCE for the life of the
+     component. This component stays mounted across a client-side navigation
+     from one collection plate to another, so `?t=` would change, everything
+     derived from it would update, and `event` would still be the template the
+     visitor arrived on: the new name in the caption, the old invitation in
+     the frame. Keying the phone below does not fix that either — a key
+     remounts the CHILD, and the state lives here in the parent.
+
+     useMemo is not the thing lazy state was avoiding. The countdown re-renders
+     this once a second and a fresh object each time would remount the whole
+     invitation inside the frame; a memo keyed on the template rebuilds only
+     when the template actually changes. Same reason, and the same shape, as
+     demo/customize/page.js. */
+  const event = useMemo(() => buildDemoEvent({
+    templateType,
+    occasion: chosen?.occasion,
+    /* Its own colour story. The presets lead with the palette the artwork was
+       photographed in, so a template opened from the collection looks the way
+       its plate did rather than wearing Swan Lake's olive. */
+    customColors: palettesFor(templateType)[0],
+  }), [templateType, chosen]);
   const [lang, setLang] = useState('en');
+
+  const label = chosen?.label || 'Swan Lake';
 
   return (
     <div className="demo-inv">
@@ -48,7 +114,7 @@ export default function DemoInvitationPage() {
 
       <div className="demo-inv__lede">
         <h1 className="demo-inv__title">
-          You have been invited to <em>Nadia &amp; Omar</em>.
+          You have been invited to <em>{DEMO_TITLE}</em>.
         </h1>
         <p className="demo-inv__sub">
           Break the seal. Everything past it is the real thing — reply, choose a
@@ -58,8 +124,16 @@ export default function DemoInvitationPage() {
 
       <div className="demo-inv__stage">
         <DemoPhone
+          /* KEYED ON THE TEMPLATE, so the cover PLAYS AGAIN.
+             The memo above is what makes the new event reach the frame; this
+             is what makes the frame start over. GuestExperiencePreview re-arms
+             its opening on `playOpening`/`replayKey`, not on the identity of
+             `event`, so without a key a visitor moving between two collection
+             plates would land past the seal of an invitation they had never
+             opened. A different template is a different object. */
+          key={templateType}
           title="Nadia and Omar's invitation — a working demo"
-          caption="Swan Lake · a Fancy invitation"
+          caption={`${label} · a Fancy invitation`}
         >
           <GuestExperiencePreview
             event={event}
@@ -153,5 +227,16 @@ export default function DemoInvitationPage() {
         }
       `}</style>
     </div>
+  );
+}
+
+export default function DemoInvitationPage() {
+  /* `null`, not a spinner. The boundary exists to keep this page static (see
+     the header), and it resolves in the same tick on the client — a skeleton
+     would be a flash of layout nobody is meant to see. */
+  return (
+    <Suspense fallback={null}>
+      <DemoInvitationStage />
+    </Suspense>
   );
 }

@@ -60,6 +60,13 @@ const CONTACT_EMAIL = COMPANY_EMAIL;
 
 const footerLinks = {
   Product: [
+    /* Both of these were unreachable from the footer, and the second was
+       unreachable from anywhere in the chrome. The collection is where the
+       invitations live; /demo/invitation is the only place on the site a
+       stranger can open one and reply to it. Neither is a support page — they
+       are the two strongest pages this product has. */
+    { text: 'The Collection', href: '/collection' },
+    { text: 'Try the demo', href: '/demo/invitation' },
     { text: 'Features', href: '/features' },
     { text: 'Pricing', href: '/pricing' },
     { text: 'Check-in app', href: '/checkin-app' },
