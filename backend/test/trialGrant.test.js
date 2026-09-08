@@ -10,7 +10,9 @@
  *   tier_price_cents      becomes an upgrade credit for money nobody paid
  *   tier_max_guests null  reads as UNLIMITED to the guest-cap trigger
  *   one trial per org     otherwise the account is a renewable free platform
- *   no free plan          leaves an expired trial with nowhere safe to land
+ *   no free plan          must NOT block the offer — an expired trial lands on
+ *                         the gate's baseline, which is what "free" already
+ *                         means everywhere else
  */
 require('./helpers/env');
 
@@ -37,7 +39,7 @@ const PREMIUM = { key: 'prem', name: 'Premium', price_cents: 14900, max_guests: 
 let TIERS = [TRIAL, FREE, PREMIUM];
 injectModule('../../utils/configCache', { getPlatformConfig: async () => ({ pricing_tiers: TIERS }) });
 
-const { startTrial, planColumns, resolveTrialPlans } = require('../services/trialService');
+const { startTrial, planColumns, resolveTrialPlans, landingColumns } = require('../services/trialService');
 
 const EVENT = '33333333-3333-4333-8333-333333333333';
 const ORG = '44444444-4444-4444-8444-444444444444';
@@ -47,13 +49,18 @@ const ORG_ROW = { id: ORG, email: 'host@example.com', name: 'Yara', status: 'act
 
 t.beforeEach(() => { TIERS = [TRIAL, FREE, PREMIUM]; mock.reset(); });
 
-/** Runs startTrial and captures whatever it tried to write to `events`. */
-async function grant({ org = ORG_ROW, event = DRAFT } = {}) {
+/** Runs startTrial and captures whatever it tried to write to `events`.
+ *
+ *  `guests` is the size of the list already sitting on the draft — undefined
+ *  means the count query answered nothing, which is what every test that does
+ *  not care about the cap gets. */
+async function grant({ org = ORG_ROW, event = DRAFT, guests, guestsError } = {}) {
   const writes = [];
   mock.setResolver((s) => {
     if (s.table === 'organizations') return { data: org };
     if (s.table === 'events') return { data: { ...event, ...(s.payload || {}) } };
     if (s.table === 'activity_logs') return { data: {} };
+    if (s.table === 'guests') return guestsError ? { error: guestsError } : { count: guests };
     return {};
   });
   if (mock.onWrite) mock.onWrite((s) => writes.push(s));
@@ -123,6 +130,37 @@ test('a non-draft event cannot start one', async () => {
   assert.equal(result.error, 'EVENT_NOT_DRAFT');
 });
 
+/* ── The guest cap, which the trigger alone cannot hold ────────────────── */
+
+test('a list bigger than the trial covers is refused at the door', async () => {
+  /* The 25 is enforced by a BEFORE INSERT trigger, so it only ever stops the
+     NEXT guest. A draft has no plan and therefore no cap, so the wizard's CSV
+     import will load four hundred names into one — and granting a trial writes
+     the 25 without removing anybody, leaving a real four-hundred-guest wedding
+     running free for a week. This is the check that closes it. */
+  const { result, writes } = await grant({ guests: 400 });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'GUEST_LIMIT_EXCEEDED');
+  assert.match(result.message, /25 guests/);
+  assert.match(result.message, /already has 400/);
+  assert.equal(writes.filter((w) => w.table === 'organizations' && w.op === 'update').length, 0,
+    'and it refuses BEFORE claiming the account trial — a refusal must not burn it');
+});
+
+test('a list within the cap is granted normally', async () => {
+  const { result } = await grant({ guests: 25 });
+  assert.equal(result.ok, true, 'exactly at the cap is inside it, as the trigger reads it');
+});
+
+test('a count that cannot be read does not refuse', async () => {
+  /* A bound on generosity, not an entitlement gate — and the trigger still
+     holds the line on every insert from here. Refusing a legitimate trial
+     because a COUNT timed out costs a customer to protect a limit that is
+     already protected. */
+  const { result } = await grant({ guestsError: { message: 'timeout' } });
+  assert.equal(result.ok, true);
+});
+
 /* ── Configuration refusals — the ones that protect day 8 ──────────────── */
 
 test('no trial plan configured means no trial offered', async () => {
@@ -132,25 +170,38 @@ test('no trial plan configured means no trial offered', async () => {
   assert.equal(result.error, 'TRIAL_NOT_CONFIGURED');
 });
 
-test('no FREE plan to land on means no trial offered', async () => {
-  /* The promise is that an expired trial keeps its invitation live on the free
-     plan. Without a free plan there is nowhere safe to land, and the only
-     remaining options are taking a live event offline or leaving the trial
-     running forever. Refusing to start is the honest failure: it happens
-     before anyone has been promised anything. */
+test('a trial still works when no FREE plan is configured', async () => {
+  /* This USED to refuse, and refusing was wrong in the most expensive way: it
+     made the whole feature depend on the operator happening to sell a £0 plan,
+     and it failed by rendering NOTHING — no card, no error — so the trial
+     looked broken rather than unconfigured.
+
+     It is also unnecessary. "The free plan" already has a precise meaning here
+     that needs no configuration: BASELINE_FEATURES, exactly what featureGate
+     grants an unpaid event, which `entitledFeatures` has always landed on. */
   TIERS = [TRIAL, PREMIUM];
   const { result } = await grant();
-  assert.equal(result.ok, false);
-  assert.equal(result.error, 'NO_FREE_PLAN');
+  assert.equal(result.ok, true);
+  assert.equal(result.days, 7);
+});
+
+test('with no free plan, an expired trial lands on the baseline and stays live', () => {
+  const cols = landingColumns(null);
+  assert.deepEqual(cols.tier_features, [], 'no plan features — the gate adds the baseline');
+  assert.equal(cols.tier_key, null);
+  assert.equal(cols.tier_price_cents, 0);
+  assert.equal(cols.tier_max_guests, 25, 'never null: the cap trigger reads null as UNLIMITED');
+  assert.equal(cols.tier_remove_watermark, false, 'and never a stale paid-branding flag');
+  assert.equal(cols.tier_white_label, false);
 });
 
 test('a contact-sales plan is never mistaken for the landing plan', () => {
   const plans = resolveTrialPlans([TRIAL, { ...FREE, is_custom: true }, PREMIUM]);
-  assert.equal(plans.ok, false);
-  assert.equal(plans.error, 'NO_FREE_PLAN');
+  assert.equal(plans.ok, true, 'the trial is still offered');
+  assert.equal(plans.landing, null, 'but a contact-sales plan is not somewhere to land');
 });
 
-test('the cheapest sellable plan is the landing plan', () => {
+test('a configured free plan is preferred when there is one', () => {
   const plans = resolveTrialPlans([TRIAL, PREMIUM, FREE]);
   assert.equal(plans.ok, true);
   assert.equal(plans.landing.key, 'free');

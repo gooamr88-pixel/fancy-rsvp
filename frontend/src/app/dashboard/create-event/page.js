@@ -1445,8 +1445,8 @@ export default function CreateEventWizard() {
      a successful payment or a redeemed promo code, which is why it updates
      exactly the same four pieces of state they do. Returns { ok, message }
      rather than throwing, so TrialCard can show the refusal inline; the
-     refusals are real and specific (already used, unverified email, no free
-     plan configured) and each deserves its own sentence rather than a generic
+     refusals are real and specific (already used, unverified email, suspended
+     account) and each deserves its own sentence rather than a generic
      banner. */
   const handleStartTrial = useCallback(async () => {
     if (!eventId) return { ok: false, message: 'Event not ready yet — please try again in a moment.' };

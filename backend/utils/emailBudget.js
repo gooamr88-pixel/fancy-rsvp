@@ -45,26 +45,47 @@ const TRIAL_DAILY = Math.max(10, parseInt(process.env.TRIAL_EMAIL_DAILY_CAP, 10)
 const PAID_DAILY = Math.max(100, parseInt(process.env.EVENT_EMAIL_DAILY_CAP, 10) || 5000);
 
 /**
- * Is this event on a trial?
+ * Is this event on a trial — meaning, has nobody paid for it?
  *
- * ITS OWN QUERY, and that is not laziness. The obvious move is to add
- * `trial_ends_at` to the column list `resolveLiveEvent` already selects — and
- * that select is on the invitation-send path, so on a database that has not
- * been given the trial migration yet, PostgREST would reject the whole thing
- * (42703) and NOBODY could send an invitation. Not trial accounts: nobody.
- * That failure mode has happened here before, with `tier_key`.
+ * ── Why it is not just `trial_ends_at` ───────────────────────────────────
  *
- * One tiny indexed read, isolated, that answers "no" to any error — including
- * the column not existing. An un-migrated deployment then applies the paid
- * ceiling to everything, which is the safe direction: a cap that is too high
- * costs money, a send path that is broken costs customers.
+ * It was, and that was a bug with a customer on the other end of it. Paying
+ * does NOT clear the trial columns: every activation path rewrites `tier_*`
+ * and leaves `trial_started_at` / `trial_ends_at` exactly where the grant put
+ * them (that is deliberate — the stamp is what an expired trial is recognised
+ * by). So the stamp is permanent, and reading it alone meant
+ * an organizer who converted on day 3 kept the 150-a-day trial ceiling for the
+ * life of their event, and was told "your free trial can send 150 emails a
+ * day" while paying us. That is the same mistake the trial banner made:
+ * inferring a state from the deadline rather than asking what the event is.
+ *
+ * `tier_price_cents` is the question actually being asked here — did money
+ * arrive? The trial writes 0 (planColumns forces it), a lapsed trial writes 0
+ * (landingColumns), and a real purchase writes the plan's price. An event on a
+ * genuinely free plan also reads 0 and gets the lower ceiling, which is
+ * correct: the ceiling is about who is paying for the mail, not about trials.
+ *
+ * ── Why it is still its own tiny query ───────────────────────────────────
+ *
+ * The obvious move is to add these columns to the list `resolveLiveEvent`
+ * already selects — and that select is on the invitation-send path, so on a
+ * database that has not been given the trial migration yet, PostgREST would
+ * reject the whole thing (42703) and NOBODY could send an invitation. Not
+ * trial accounts: nobody. That has happened here before, with `tier_key`.
+ *
+ * One isolated read that answers "no" to any error — including either column
+ * not existing. An un-migrated deployment then applies the paid ceiling to
+ * everything, which is the safe direction: a cap that is too high costs money,
+ * a send path that is broken costs customers.
  */
 async function isTrialEvent(eventId) {
   try {
     const { data, error } = await supabase
-      .from('events').select('trial_ends_at').eq('id', eventId).single();
+      .from('events').select('trial_ends_at, tier_price_cents').eq('id', eventId).single();
     if (error) return false;
-    return !!data?.trial_ends_at;
+    if (!data?.trial_ends_at) return false;
+    // Money on the row means they left the trial behind, whichever way.
+    return !(Number(data.tier_price_cents) > 0);
   } catch {
     return false;
   }
@@ -112,4 +133,9 @@ function budgetMessage({ cap, isTrial }) {
     : `This event has reached its daily limit of ${cap} emails. It resets in 24 hours. If you genuinely need more, contact us and we will raise it.`;
 }
 
-module.exports = { remainingEmailBudget, budgetMessage, isTrialEvent, TRIAL_DAILY, PAID_DAILY };
+/* `isTrialEvent` is deliberately NOT exported: nothing outside this file has
+   ever imported it, and an exported predicate about trials invites a caller to
+   ask this question for some other purpose — where "is this event on a trial"
+   is answered by the deadline and the price on the row, not by a ceiling's
+   private heuristic about who is paying for email. */
+module.exports = { remainingEmailBudget, budgetMessage, TRIAL_DAILY, PAID_DAILY };

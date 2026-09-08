@@ -52,7 +52,7 @@ const { dispatch } = require('./emailService');
 const { getTrialEndingTemplate, getTrialEndedTemplate } = require('../utils/emailTemplates');
 const { getPublicBaseUrl } = require('../utils/publicUrl');
 const { resolveTrialPlans, landExpiredTrial } = require('./trialService');
-const { isOnTrialPlan } = require('../utils/trialTier');
+const { hasPaidForItsPlan } = require('../utils/tierResolver');
 const { formatInZone } = require('../utils/timezone');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -63,11 +63,13 @@ let running = false;
 
 /** The organizer-facing columns both phases need.
  *
- *  `tier_key` is in here for one reason: an organizer who upgrades mid-trial
- *  keeps their `trial_ends_at`, and landing them on the free plan would be
- *  taking away a plan they paid for. `isOnTrialPlan` is what tells the two
- *  apart, and it needs the key. */
-const SELECT = 'id, title, slug, timezone, tier_key, trial_ends_at, trial_expired_at, trial_warned_at, organizations(name, email)';
+ *  `tier_price_cents` is in here for one reason: an organizer who upgrades
+ *  mid-trial keeps their `trial_ends_at`, and landing them on the free plan
+ *  would be taking away a plan they paid for. It is the same test the GATE
+ *  uses (`hasPaidForItsPlan` in tierResolver), on purpose — the row this sweep
+ *  writes and the entitlement the gates enforce have to be answers to the same
+ *  question, or the dashboard and the API disagree about what somebody has. */
+const SELECT = 'id, title, slug, timezone, tier_key, tier_price_cents, trial_ends_at, trial_expired_at, trial_warned_at, organizations(name, email)';
 
 function warnDays() {
   return Math.max(1, parseInt(process.env.TRIAL_WARN_DAYS, 10) || 2);
@@ -143,7 +145,11 @@ async function warnEndingTrials(now = Date.now()) {
 }
 
 /** Land every trial whose deadline has passed onto the free plan. */
-async function landDueTrials(landing, tiers, now = Date.now()) {
+/* `tiers` is deliberately NOT a parameter any more. It was here so the sweep
+   could ask which plan an event was on; that question is now answered by the
+   row itself (`hasPaidForItsPlan`), and a config argument nothing reads is an
+   invitation to start reading it again. */
+async function landDueTrials(landing, now = Date.now()) {
   const { data: rows, error } = await supabase
     .from('events')
     .select(SELECT)
@@ -160,10 +166,12 @@ async function landDueTrials(landing, tiers, now = Date.now()) {
     /* THEY MAY HAVE PAID. An organizer who upgrades on day 3 keeps the
        deadline stamped on day 0 — the payment path rewrites the plan, not the
        trial columns — so a sweep that trusted the deadline alone would move a
-       paying customer onto the free plan on day 8. `tier_key` no longer being
-       the trial's is what says they left. Stamp them so the query stops
-       returning them, and move on. */
-    if (!isOnTrialPlan(event, tiers)) {
+       paying customer onto the free plan on day 8. Money on the row is what
+       says they left; asking which PLAN they are on instead was wrong in both
+       directions once an admin edited the price list (see the long note in
+       entitledFeatures). Stamp them so the query stops returning them, and
+       move on. */
+    if (hasPaidForItsPlan(event)) {
       // eslint-disable-next-line no-await-in-loop
       await supabase.from('events')
         .update({ trial_expired_at: new Date().toISOString() })
@@ -216,17 +224,21 @@ async function runOnce(trigger = 'interval') {
     const config = await getPlatformConfig();
     const plans = resolveTrialPlans(config.pricing_tiers);
     if (!plans.ok) {
-      /* No trial plan, or no free plan to land on. Refusing to guess is the
-         whole point: `startTrial` makes the same check and would not have
-         granted anything, so an outstanding trial in this state means an
-         admin deleted a plan mid-flight. The gates have ALREADY dropped those
-         events to the baseline — nothing is over-granted while this waits. */
+      /* No trial plan at all. Refusing to guess is the whole point:
+         `startTrial` makes the same check and would not have granted
+         anything, so an outstanding trial in this state means an admin
+         deleted the plan mid-flight. The gates have ALREADY dropped those
+         events to the baseline — nothing is over-granted while this waits.
+
+         A missing LANDING plan is not this case and never reaches here:
+         `plans.ok` stays true with `landing: null`, and `landExpiredTrial`
+         writes the zeroed snapshot that leaves the event on the baseline. */
       logger.warn({ reason: plans.error }, '[trial-sweep] no trial/landing plan configured — nothing swept');
       return { ok: false, error: plans.error };
     }
 
     const warned = await warnEndingTrials();
-    const landed = await landDueTrials(plans.landing, config.pricing_tiers);
+    const landed = await landDueTrials(plans.landing);
 
     if (warned || landed) {
       logger.info({ warned, landed, ms: Date.now() - t0, trigger }, '[trial-sweep] pass complete');

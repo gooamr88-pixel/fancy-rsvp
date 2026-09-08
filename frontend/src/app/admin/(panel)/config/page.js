@@ -1003,9 +1003,20 @@ export default function ConfigPage() {
     setPricingTiers(prev => prev.map((tier, i) => i === idx ? { ...tier, [field]: val } : tier));
   };
 
+  /* There is exactly one free trial, and `trialTier()` finds it by taking the
+     FIRST plan carrying the flag. Two ticked plans is therefore not an error
+     anywhere — it is a silently ignored second plan, and the admin who edited
+     it would have no way to tell. So ticking one unticks the rest, which is
+     what the label already promises. */
+  const setTrialTier = (idx, on) => {
+    setPricingTiers(prev => prev.map((tier, i) => (
+      i === idx ? { ...tier, is_trial: on } : (on ? { ...tier, is_trial: false } : tier)
+    )));
+  };
+
   const addTier = (e) => {
     e?.preventDefault?.();
-    const newTier = { name: 'New Tier', price_cents: 1900, max_guests: 100, max_events: 0, remove_watermark: false, recommended: false, is_custom: false, features: [] };
+    const newTier = { name: 'New Tier', price_cents: 1900, max_guests: 100, max_events: 0, remove_watermark: false, recommended: false, is_custom: false, is_trial: false, trial_days: 7, features: [] };
     setPricingTiers(prev => [...prev, newTier]);
     setSelectedTierIdx(pricingTiers.length);
   };
@@ -1389,7 +1400,67 @@ export default function ConfigPage() {
                         <input type="checkbox" checked={currentTier.remove_watermark === true} onChange={e => handleTierChange(selectedTierIdx, 'remove_watermark', e.target.checked)} />
                         <Icon name="ban" size={13} strokeWidth={1.6} /> Remove Watermark
                       </label>
+
+                      {/* THE FREE TRIAL, which is a plan like any other and is
+                          edited here for exactly that reason.
+
+                          It was not, at first, and the feature was invisible:
+                          the code reads the trial from this array, nothing
+                          seeded one, and there was no control to create one —
+                          so the "start free" card never rendered and there was
+                          no way to find out why.
+
+                          The plan is never sold and never advertised: both
+                          purchase paths reject it, and it is filtered out of
+                          the public price list and the wizard's plan cards.
+                          Its `features` decide what a trial includes and
+                          `max_guests` is the cap that stops somebody running a
+                          real wedding for free. */}
+                      <label
+                        title="Marks this as THE free-trial plan. It is never sold or listed publicly — its features are what a trial includes, and its guest cap is what bounds it. Only one plan may be the trial."
+                        style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.text700, cursor: 'pointer', fontWeight: 600 }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={currentTier.is_trial === true}
+                          onChange={e => setTrialTier(selectedTierIdx, e.target.checked)}
+                        />
+                        <Icon name="hourglass" size={13} strokeWidth={1.6} /> Free trial plan
+                      </label>
+
+                      {currentTier.is_trial === true && (
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.text700, fontWeight: 600 }}>
+                          Days
+                          <input
+                            type="number"
+                            min={1}
+                            max={90}
+                            value={currentTier.trial_days ?? 7}
+                            onChange={e => handleTierChange(selectedTierIdx, 'trial_days', e.target.value)}
+                            style={{ ...inputStyle, width: 72, padding: '4px 8px' }}
+                          />
+                        </label>
+                      )}
                     </div>
+
+                    {currentTier.is_trial === true && (
+                      /* Said here rather than left to be discovered. Three of
+                         these are enforced in code and will silently undo an
+                         admin's edit, which is worse than a rule nobody
+                         mentioned. */
+                      <p style={{
+                        margin: '0 0 20px', padding: '10px 14px', borderRadius: T.radiusSm,
+                        background: T.surfaceAlt, border: `1px solid ${T.border}`,
+                        fontSize: 11.5, lineHeight: 1.6, color: T.text700,
+                      }}>
+                        This plan is never sold or shown on the pricing page. Whatever
+                        you tick below is what a trial includes — except
+                        <strong> white-labelling, which is removed on save</strong>, and
+                        text messages, which stay a paid extra. When the trial ends the
+                        event <strong>stays live</strong> and drops to your cheapest
+                        free plan.
+                      </p>
+                    )}
 
                     {/* Features checklist dropdowns */}
                     <FeatureSelector

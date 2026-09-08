@@ -144,34 +144,6 @@ function isTrialExpired(event, now = Date.now()) {
   return Number.isFinite(at) && at <= now;
 }
 
-/**
- * Is this event STILL on the trial plan?
- *
- * ── The bug this closes, which is the worst one in the feature ────────────
- *
- * An organizer who upgrades on day 3 pays real money, and their event keeps
- * the `trial_ends_at` that was stamped when the trial began — the payment path
- * rewrites the tier snapshot, not the trial columns. On day 8 the deadline
- * passes and, with nothing else to consult, both the gate and the sweep would
- * downgrade a PAYING customer to the free plan. They would have bought a plan
- * that lasted five days.
- *
- * The deadline alone is therefore not sufficient. The event must also still be
- * ON the trial plan, which a purchase changes as a matter of course — so the
- * upgrade path needs no knowledge of trials at all, and cannot forget.
- *
- * FAILS CLOSED. If the trial plan has been deleted outright there is no key to
- * compare against, and this answers true: an expired trial then lands on the
- * free plan rather than keeping every paid feature forever. Over-restricting
- * someone whose trial has already run out is recoverable in one support reply;
- * a permanent free platform is not.
- */
-function isOnTrialPlan(event, tiers) {
-  const trial = trialTier(tiers);
-  if (!trial) return true;
-  return String(event?.tier_key || '') === String(trial.key || '');
-}
-
 module.exports = {
   TRIAL_EXCLUDED_FEATURES,
   sanitizeTrialTier,
@@ -180,5 +152,4 @@ module.exports = {
   trialDays,
   fallbackTier,
   isTrialExpired,
-  isOnTrialPlan,
 };

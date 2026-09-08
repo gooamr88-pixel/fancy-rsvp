@@ -115,8 +115,14 @@ async function withResolvedTier(rawEvent) {
       if (resolved.source === 'trial_expired') {
         return {
           ...event,
-          tier_name: resolved.tier?.name || event.tier_name,
-          tier_key: resolved.tier?.key || event.tier_key,
+          /* `resolved.tier` is NULL when no landing plan is configured — the
+             trial then lands on BASELINE_FEATURES, which is what "the free
+             plan" means everywhere else. Falling back to the event's own
+             columns here would name the ended trial as the CURRENT plan,
+             disagreeing with both the banner beside it and the row the sweep
+             writes (landingColumns(null) blanks the name outright). */
+          tier_name: resolved.tier?.name || 'Free',
+          tier_key: resolved.tier?.key || null,
           tier_max_guests: Number.isFinite(resolved.tier?.max_guests) ? resolved.tier.max_guests : event.tier_max_guests,
           tier_features: resolved.features,
           /* The branding booleans too, or the dashboard keeps promising a

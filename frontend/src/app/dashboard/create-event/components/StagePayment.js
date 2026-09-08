@@ -721,10 +721,10 @@ export default function StagePayment({
           already-live event moving up a tier is a real paid change, and a
           trial there would be a downgrade dressed as an offer.
 
-          `onStartTrial` is absent when the platform has no trial plan
-          configured, or no free plan for one to land on — the server refuses
-          in both cases (services/trialService.js), so the card must not be
-          shown promising something that would be refused on the click. */}
+          `onStartTrial` is absent when the server did not offer a trial — no
+          trial plan is configured, or this account has already used its one
+          (getOrganizerPricing checks both). The card must never be shown
+          promising something the click is certain to refuse. */}
       {!showCurrentPlan && !showPendingPlan && !upgrading && onStartTrial && (
         <TrialCard
           onStartTrial={onStartTrial}

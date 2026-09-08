@@ -42,7 +42,7 @@
  */
 
 const { FREE_TIER_FEATURES, ALWAYS_ON_FEATURES } = require('../config/featureRegistry');
-const { fallbackTier, isTrialExpired, isOnTrialPlan, sanitizeTrialTier } = require('./trialTier');
+const { fallbackTier, isTrialExpired, sanitizeTrialTier } = require('./trialTier');
 
 /**
  * The floor under every plan: what a tier grants no matter what its `features`
@@ -189,6 +189,23 @@ function tierSnapshot(tier) {
 }
 
 /**
+ * Did somebody actually pay for the plan this event is on?
+ *
+ * The trial writes `tier_price_cents: 0` and so does the landing after it
+ * (planColumns / landingColumns force it, because the upgrade path credits
+ * this column and a trial must never become a credit). A real purchase writes
+ * the plan's price. So this is the one column that separates "we are giving
+ * this away" from "money arrived", without asking which plan is which.
+ *
+ * Absent on the older rungs of `selectEventWithTier`'s ladder, where it reads
+ * as unpaid — which is the safe direction here, since those same rungs have no
+ * `trial_ends_at` either and the caller's expiry test cannot fire.
+ */
+function hasPaidForItsPlan(event) {
+  return Number(event?.tier_price_cents) > 0;
+}
+
+/**
  * What features does this event actually have?
  *
  * LIVE tier when the plan still resolves — so an admin ADDING a feature to a
@@ -217,19 +234,42 @@ function entitledFeatures(tiers, event) {
      The sweep only makes the stored state agree with what the gates are
      already enforcing. Same discipline as eventPurge's persisted deadline.
 
-     `isOnTrialPlan` is the second half and it protects the PAYING customer:
-     someone who upgrades on day 3 keeps the trial_ends_at that was stamped on
+     `hasPaidForItsPlan` is the second half and it protects the PAYING
+     customer: someone who upgrades on day 3 keeps the trial_ends_at stamped on
      day 0 — the payment path rewrites the plan, not the trial columns — and
      the deadline alone would downgrade them on day 8 having taken their money.
-     Buying a plan changes `tier_key`, which is all this asks about, so no
-     payment path needs to know that trials exist.
+
+     ── WHY THIS ASKS ABOUT MONEY, NOT ABOUT WHICH PLAN ───────────────────
+
+     It used to ask `isOnTrialPlan`: is this event's tier_key still the key of
+     the plan currently flagged `is_trial`. That is a question about CONFIG,
+     and config moves underneath live events in two directions, both of which
+     it got wrong:
+
+       Retire the trial by flagging a DIFFERENT plan — which the exclusive
+       switch on the pricing screen makes the natural gesture — and every
+       trial in flight counts as having "left the trial". The old plan still
+       resolves, so the deadline stops applying and they run free forever, on
+       an ordinary admin edit, with nothing logged.
+
+       And its fail-closed branch (no flagged plan at all → answer true for
+       everybody) pointed the other way and was worse: it downgrades a
+       CONVERTED customer, whose stale trial_ends_at is permanent, because
+       nothing else was being consulted.
+
+     `tier_price_cents` has neither problem. It is written at purchase from the
+     plan, forced to 0 by both the grant and the landing, and does not move
+     when an admin edits the price list. So the rule is just: past the
+     deadline, an event nobody paid for is downgraded — whichever plan it sits
+     on, whatever the pricing screen says today — and an event somebody DID
+     pay for is never touched by this branch at all.
 
      `fallbackTier` may be null if an admin has since deleted the free plan.
      The event still keeps the baseline — it never falls below an unpaid one,
      and it never goes offline, because `is_paid` and `status` are untouched
      here. Locking features is a plan boundary; taking a live invitation away
      from guests who never agreed to anything is not. */
-  if (isTrialExpired(event) && isOnTrialPlan(event, tiers)) {
+  if (isTrialExpired(event) && !hasPaidForItsPlan(event)) {
     const landing = fallbackTier(tiers);
     return {
       features: withBaseline(landing?.features || []),
@@ -342,6 +382,10 @@ module.exports = {
   tierRemovesWatermark,
   tierIsWhiteLabel,
   entitledFeatures,
+  /* Exported for the SWEEP, which must decide "did anybody pay" exactly the
+     way the gate does. Two implementations of that question is how a stored
+     row and a live entitlement start disagreeing. */
+  hasPaidForItsPlan,
   withBaseline,
   BASELINE_FEATURES,
   selectEventWithTier,

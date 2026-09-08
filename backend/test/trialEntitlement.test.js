@@ -139,12 +139,76 @@ test('an organizer who UPGRADED mid-trial keeps what they paid for', () => {
   /* The bug this guards is the worst one available here: a payment rewrites
      the plan, not the trial columns, so a paying customer walks around with a
      stale trial_ends_at. Judging by the deadline alone would downgrade them on
-     day 8 having taken their money — they would have bought five days. */
-  const paid = { ...onTrial(true), tier_key: 'prem', tier_name: 'Premium', tier_features: TIERS[2].features };
+     day 8 having taken their money — they would have bought five days.
+
+     `tier_price_cents` is part of what an upgrade writes and is therefore part
+     of the fixture. It was missing, which made this row describe a state no
+     payment path can produce: on Premium, at a price of zero. `tierSnapshot`
+     sets it from the plan on the Stripe path, and the manual path copies it
+     off the pending payment — 14900 either way. */
+  const paid = {
+    ...onTrial(true),
+    tier_key: 'prem', tier_name: 'Premium', tier_features: TIERS[2].features,
+    tier_price_cents: 14900,
+  };
   const { features, source } = entitledFeatures(TIERS, paid);
   assert.notEqual(source, 'trial_expired');
   assert.ok(features.includes('seating_map'));
   assert.ok(features.includes('sms_campaigns'));
+});
+
+test('retiring the trial plan by flagging a DIFFERENT one still ends the old trials', () => {
+  /* The hole the exclusive is_trial switch on the pricing screen makes easy to
+     reach: an operator builds a new trial plan and ticks it, which unticks the
+     old one. The old plan still EXISTS, so a rule that asked "is this event's
+     key the flagged plan's key" concluded the event had left the trial, and
+     the deadline stopped applying to it. Every trial in flight at that moment
+     would have run free forever, on an ordinary admin edit, with nothing
+     logged.
+
+     Asking about the PLAN could not see this: it only failed closed when the
+     trial plan was deleted outright. What settles it is that nobody paid. */
+  const swapped = [
+    // The retired trial, kept as a real paid plan — which is what retiring one
+    // actually looks like. Left at £0 it would BE the cheapest free plan, and
+    // landing there is then the operator's pricing decision, plainly visible on
+    // the pricing screen, not something this function should overrule.
+    { ...TIERS[0], is_trial: false, price_cents: 4900 },
+    { key: 'trial2', name: 'Free trial', is_trial: true, trial_days: 7, price_cents: 0, max_guests: 25, features: ['seating_map'] },
+    TIERS[1], TIERS[2],
+  ];
+  const { features, source, tier } = entitledFeatures(swapped, onTrial(true));
+  assert.equal(source, 'trial_expired', 'the deadline applies again');
+  assert.equal(tier.key, 'free', 'and they land on the operator’s free plan');
+  assert.equal(features.includes('seating_map'), false);
+});
+
+test('and an event somebody PAID for is never caught by that, on any plan', () => {
+  /* The other side of the same rule, stated separately because it is the one
+     that must never regress. The deadline may only end things nobody bought. */
+  const swapped = [{ ...TIERS[0], is_trial: false }, TIERS[1], TIERS[2]];
+  const paid = { ...onTrial(true), tier_key: 'prem', tier_name: 'Premium', tier_price_cents: 14900 };
+  assert.notEqual(entitledFeatures(swapped, paid).source, 'trial_expired');
+});
+
+test('a £0 plan bought after a trial lands on the platform free plan, knowingly', () => {
+  /* The cost of the rule above, pinned so it is a decision and not a surprise.
+     A purchase of a genuinely free plan leaves NO trace in the row that a
+     trial does not also leave — both write `tier_price_cents: 0` — so past the
+     deadline such an event is answered with the fallback plan's features
+     rather than its own. It takes an operator selling two DIFFERENT £0 plans
+     for that to be visible at all, and it agrees with what the sweep writes to
+     the row. The alternative was leaving unpaid events entitled forever, which
+     is unbounded. */
+  const twoFree = [
+    TIERS[0],
+    { key: 'free', name: 'Free', price_cents: 0, max_guests: 100, features: [] },
+    { key: 'community', name: 'Community', price_cents: 0, max_guests: 100, features: ['seating_map'] },
+  ];
+  const onCommunity = { ...onTrial(true), tier_key: 'community', tier_name: 'Community', tier_price_cents: 0 };
+  const { source, tier } = entitledFeatures(twoFree, onCommunity);
+  assert.equal(source, 'trial_expired');
+  assert.equal(tier.key, 'free');
 });
 
 test('with the trial plan deleted, an expired trial fails CLOSED', () => {

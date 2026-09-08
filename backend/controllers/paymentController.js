@@ -1724,15 +1724,48 @@ const getOrganizerPricing = async (req, res, next) => {
     const trialPlan = tiers.find((t) => t && t.is_trial === true) || null;
     const sellableTiers = tiers.filter((t) => t && t.is_trial !== true);
 
-    /* Offered only when there is somewhere for it to LAND — the server makes
-       the same check before granting one (resolveTrialPlans), so a card shown
-       without this would promise something the click would refuse. */
-    const landing = fallbackTier(tiers);
-    const trial = trialPlan && landing
+    /* THE OFFER AND THE GRANT MUST AGREE ON THEIR CONDITIONS.
+
+       This used to also require a landing plan — a configured £0 tier for the
+       trial to drop onto on day 8 — because `resolveTrialPlans` refused to
+       grant one without it. That requirement is gone from both: there is
+       always somewhere to land, since an event with no plan features falls to
+       the gate's BASELINE_FEATURES, which is precisely what "the free plan"
+       means everywhere else in the product.
+
+       Keeping the check on only one side is the failure this feature already
+       shipped once: the card renders and the click 400s, or — worse and what
+       actually happened — the card never renders and there is no error to
+       read. Whatever gates the grant gates the offer, in the same commit.
+
+       ── AND AN OFFER THAT CANNOT BE ACCEPTED IS NOT AN OFFER ─────────────
+
+       There is one trial per ACCOUNT, not per event, so the second event this
+       organizer builds would otherwise show the same gold "Try it free for 7
+       days" card — and clicking it answers TRIAL_ALREADY_USED. Showing a
+       promise we are certain to refuse is worse than showing nothing: it
+       reads as a bug at the exact moment somebody is deciding whether to pay
+       us. One indexed read on a screen that already makes several. */
+    const orgId = req.user?.access?.orgId || null;
+    let trialSpent = false;
+    if (orgId && trialPlan) {
+      const { data: org, error: orgError } = await supabase
+        .from('organizations')
+        .select('trial_event_id')
+        .eq('id', orgId)
+        .maybeSingle();
+      /* On an error, OFFER it. The grant re-checks and refuses cleanly with a
+         sentence that explains itself; hiding the card on a failed read would
+         silently withdraw the offer from somebody entitled to it, which is the
+         invisible-failure direction this feature has already been bitten by. */
+      trialSpent = !orgError && !!org?.trial_event_id;
+    }
+
+    const trial = trialPlan && !trialSpent
       ? {
         days: trialDays(trialPlan),
         maxGuests: Number(trialPlan.max_guests) || 25,
-        landingPlanName: landing.name || 'Free',
+        landingPlanName: fallbackTier(tiers)?.name || 'Free',
       }
       : null;
 

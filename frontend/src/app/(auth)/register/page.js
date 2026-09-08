@@ -462,8 +462,14 @@ export default function RegisterPage() {
               free days; a signup form that then says something vaguer reads
               as a bait-and-switch, and the second clause is the one that
               actually removes the hesitation — nobody wants to hand over a
-              card to look at something. */}
-          <p className="auth-subtext">Your first event is free for 7 days — every feature, no card needed</p>
+              card to look at something.
+
+              It said "every feature" until an audit caught it. White-labelling
+              is excluded from trials and text messages are bought separately,
+              so "every feature" was a promise two screens further in would
+              have to walk back — which is a worse first impression than a
+              smaller claim that survives contact with the product. */}
+          <p className="auth-subtext">Your first event is free for 7 days — no card needed</p>
 
           {refCode && (
             <div style={{

@@ -143,7 +143,13 @@ export default function TrialBanner({ event, upgradeHref }) {
         }}>
           {ended
             ? `Guests can still open your invitation and reply. You are on ${planName} now, so seating, the full analytics, exports and branding are locked — everything you built with them is still here and comes straight back.`
-            : 'Every feature is switched on. Choose a plan any time — your event stays live either way.'}
+            /* NOT "every feature". That stopped being true when white-labelling
+               was excluded from trials, and text messages have always been
+               bought separately — the card on the payment step was corrected
+               for exactly this and this line was missed. A banner an organizer
+               reads every day is the worst place to keep a promise the product
+               does not keep. */
+            : 'Seating, analytics, check-in and your own branding are all switched on. Choose a plan any time — your event stays live either way.'}
         </p>
       </div>
 

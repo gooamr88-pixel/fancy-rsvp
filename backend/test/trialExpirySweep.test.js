@@ -81,7 +81,10 @@ const SOON = new Date(Date.now() + 36 * 60 * 60 * 1000).toISOString();
 
 const expiredTrial = (over = {}) => ({
   id: 'evt-1', title: 'Nadia & Omar', slug: 'nadia-and-omar', timezone: 'Africa/Cairo',
-  tier_key: 'trial', trial_ends_at: PAST, trial_expired_at: null, trial_warned_at: null,
+  // A trial's own row: the grant forces the price to zero, which is what both
+  // the sweep and the gate now read to decide whether anybody paid.
+  tier_key: 'trial', tier_price_cents: 0,
+  trial_ends_at: PAST, trial_expired_at: null, trial_warned_at: null,
   organizations: { name: 'Yara', email: 'host@example.com' },
   ...over,
 });
@@ -90,7 +93,7 @@ t.beforeEach(() => { writes = []; rows = []; mails = []; });
 
 test('an expired trial is moved onto the free plan', async () => {
   rows = [expiredTrial()];
-  const landed = await landDueTrials(FREE, [TRIAL, FREE, PREMIUM]);
+  const landed = await landDueTrials(FREE);
 
   assert.equal(landed, 1);
   const update = writes.find((w) => w.payload?.tier_key === 'free');
@@ -103,7 +106,7 @@ test('an expired trial is moved onto the free plan', async () => {
 
 test('THE EVENT STAYS LIVE — is_paid and status are never written', async () => {
   rows = [expiredTrial()];
-  await landDueTrials(FREE, [TRIAL, FREE, PREMIUM]);
+  await landDueTrials(FREE);
 
   writes.forEach((w) => {
     assert.equal('is_paid' in w.payload, false, 'taking a live invitation offline is never this job');
@@ -113,7 +116,7 @@ test('THE EVENT STAYS LIVE — is_paid and status are never written', async () =
 
 test('nothing is deleted', async () => {
   rows = [expiredTrial()];
-  await landDueTrials(FREE, [TRIAL, FREE, PREMIUM]);
+  await landDueTrials(FREE);
   // The fake client would have to expose .delete() for a delete to be possible
   // at all; asserting the shape here documents that the sweep never reaches
   // for one, so a future edit that does will fail loudly rather than quietly.
@@ -124,9 +127,13 @@ test('nothing is deleted', async () => {
 test('an organizer who upgraded mid-trial is left alone', async () => {
   /* They paid. Their event carries the deadline stamped on day 0 because the
      payment path rewrites the plan, not the trial columns — landing them would
-     take away the plan they bought. */
-  rows = [expiredTrial({ tier_key: 'prem' })];
-  const landed = await landDueTrials(FREE, [TRIAL, FREE, PREMIUM]);
+     take away the plan they bought.
+
+     What marks them is the PRICE on the row, not the plan key: asking which
+     plan they were on broke in both directions as soon as an admin edited the
+     price list, so the sweep and the gate now ask the same money question. */
+  rows = [expiredTrial({ tier_key: 'prem', tier_price_cents: 14900 })];
+  const landed = await landDueTrials(FREE);
 
   assert.equal(landed, 0, 'a paying customer is not landed');
   const downgrade = writes.find((w) => w.payload?.tier_key === 'free');
@@ -150,7 +157,7 @@ test('the ending email is sent once, then stamped', async () => {
 
 test('the ended email says the invitation still works', async () => {
   rows = [expiredTrial()];
-  await landDueTrials(FREE, [TRIAL, FREE, PREMIUM]);
+  await landDueTrials(FREE);
 
   const mail = mails.find((m) => m.kind === 'trial_ended');
   assert.ok(mail);

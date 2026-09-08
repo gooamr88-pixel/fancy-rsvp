@@ -193,6 +193,7 @@ sudo apt install certbot python3-certbot-nginx -y
    - `20260831000000_checkin_web_upsert.sql`
    - `20260901000000_sms_templates_and_event_purge.sql`
    - `20260902000000_free_trial.sql`
+   - `20260903000000_seed_trial_plan.sql`
 
 ---
 

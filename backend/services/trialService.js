@@ -47,12 +47,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /**
  * Is the platform configured to offer trials at all?
  *
- * BOTH plans are required, and the landing plan is the reason. The promise is
- * that an expired trial keeps its invitation live on the free plan; without a
- * free plan there is nowhere safe to land, and the only alternatives are
- * taking a live event offline or leaving a trial running forever. Refusing to
- * START is the honest failure — it happens before anyone has been promised
- * anything, rather than seven days later with real guests on the other side.
+ * ONE plan is required — the trial itself. The landing plan is optional and
+ * `landing` may come back null; see the note in the body for why that changed,
+ * and `landingColumns` for what an expired trial lands on without one.
  *
  * @returns {{ ok: true, tier, landing, days } | { ok: false, error }}
  */
@@ -60,10 +57,22 @@ function resolveTrialPlans(pricingTiers) {
   const tier = trialTier(pricingTiers);
   if (!tier) return { ok: false, error: 'TRIAL_NOT_CONFIGURED' };
 
-  const landing = fallbackTier(pricingTiers);
-  if (!landing) return { ok: false, error: 'NO_FREE_PLAN' };
+  /* The landing plan is OPTIONAL, and this used to refuse without one.
+     That was wrong, and it was wrong in the most expensive way: it made the
+     whole feature depend on an operator happening to sell a £0 plan, and it
+     failed by showing NOTHING — no card, no error, no clue — so the trial
+     looked broken rather than unconfigured.
 
-  return { ok: true, tier, landing, days: trialDays(tier) };
+     There is no need for it. "The free plan" in this codebase already has a
+     precise meaning that needs no configuration: BASELINE_FEATURES, which is
+     exactly what featureGate grants an unpaid event. `entitledFeatures`
+     already lands on it (`withBaseline(landing?.features || [])`), so the
+     gate has always tolerated a missing plan; only the grant did not.
+
+     When a free plan IS configured it is still preferred, because an operator
+     who has described their free tier deserves to have expired trials land on
+     the thing they described rather than on a default. */
+  return { ok: true, tier, landing: fallbackTier(pricingTiers), days: trialDays(tier) };
 }
 
 /**
@@ -180,6 +189,38 @@ async function startTrial({ eventId, orgId, actorId }) {
     return { ok: false, error: 'EVENT_NOT_DRAFT', message: 'Only a draft event can start a trial.' };
   }
 
+  /* ── THE GUEST CAP HAS TO BE CHECKED HERE, NOT ONLY WRITTEN ───────────
+     The 25 is enforced by a BEFORE INSERT trigger reading
+     `events.tier_max_guests` (005_update_guest_cap_logic.sql), which means it
+     only ever stops the NEXT guest. A draft has no plan and therefore no cap,
+     so the wizard's CSV import will happily load four hundred names into one
+     — and starting a trial on that event writes the 25 without removing
+     anybody. The result is a real four-hundred-guest wedding running free for
+     a week, which is the exact thing the cap exists to prevent, reached by
+     doing the steps in the obvious order.
+
+     So the cap is checked against what is already there. Refusing at the door
+     is the honest failure: it happens before the offer is made, it names both
+     numbers, and their guest list is untouched — as opposed to accepting them
+     and then breaking imports halfway through the list. */
+  const { count: guestCount, error: countError } = await supabase
+    .from('guests')
+    .select('id', { count: 'exact', head: true })
+    .eq('event_id', eventId);
+
+  /* A failed count does NOT refuse. This is a bound on generosity, not an
+     entitlement gate, and the trigger still holds the line on every insert
+     from here on; refusing a legitimate trial because a COUNT timed out would
+     cost a customer to protect a limit that is already protected. */
+  const trialCap = Number(planColumns(plans.tier).tier_max_guests);
+  if (!countError && Number.isFinite(guestCount) && guestCount > trialCap) {
+    return {
+      ok: false,
+      error: 'GUEST_LIMIT_EXCEEDED',
+      message: `The free trial covers up to ${trialCap} guests, and this event already has ${guestCount}. Choose a plan that fits your list — everything you have built stays exactly as it is.`,
+    };
+  }
+
   const now = new Date();
   const endsAt = new Date(now.getTime() + plans.days * DAY_MS);
 
@@ -288,13 +329,39 @@ async function startTrial({ eventId, orgId, actorId }) {
  * remain; the features that edit them lock, and paying unlocks them again
  * exactly as they were.
  */
+/**
+ * The plan columns an expired trial lands on.
+ *
+ * `landing` may be null — see resolveTrialPlans. The columns below then
+ * describe the same state `featureGate` gives an unpaid event: no plan, no
+ * features beyond the baseline, no paid branding. Written explicitly rather
+ * than by clearing to NULL, because two of these columns read as MORE
+ * permissive when empty: `tier_max_guests` NULL is unlimited to the cap
+ * trigger, and a null plan with a stale `tier_remove_watermark` would keep the
+ * Fancy mark off a lapsed invitation.
+ */
+function landingColumns(landing, { capFallback = 25 } = {}) {
+  if (landing) return planColumns(landing, { capFallback });
+  return {
+    tier_key: null,
+    // Null rather than an invented "Free": no such plan exists to name, and
+    // the surfaces that print it already fall back to "the free plan".
+    tier_name: null,
+    tier_features: [],
+    tier_max_guests: capFallback,
+    tier_price_cents: 0,
+    tier_remove_watermark: false,
+    tier_white_label: false,
+  };
+}
+
 async function landExpiredTrial(event, landing) {
   const now = new Date().toISOString();
 
   const { error } = await supabase
     .from('events')
     .update({
-      ...planColumns(landing),
+      ...landingColumns(landing),
       trial_expired_at: now,
       updated_at: now,
     })
@@ -313,4 +380,5 @@ module.exports = {
   landExpiredTrial,
   resolveTrialPlans,
   planColumns,
+  landingColumns,
 };

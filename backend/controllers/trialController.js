@@ -23,10 +23,14 @@ const { startTrial } = require('../services/trialService');
  *
  * The two configuration refusals are 503, not 500. The platform is working;
  * this one offer is not currently on. A 500 would page somebody.
+ *
+ * `NO_FREE_PLAN` used to be a third: the grant refused when no £0 plan existed
+ * to land on. It is gone rather than kept as a harmless spare, because a code
+ * nothing can raise reads as a reachable state and invites somebody to
+ * reinstate the check it belonged to.
  */
 const STATUS_BY_ERROR = {
   TRIAL_NOT_CONFIGURED: 503,
-  NO_FREE_PLAN: 503,
   CONFIG_ERROR: 503,
   ORG_NOT_FOUND: 404,
   EVENT_NOT_FOUND: 404,
@@ -35,6 +39,10 @@ const STATUS_BY_ERROR = {
   TRIAL_ALREADY_USED: 409,
   ALREADY_PAID: 409,
   EVENT_NOT_DRAFT: 409,
+  // Their list is bigger than the trial covers. A conflict with the state of
+  // the resource, not a permission problem — the same 409 family as the two
+  // above, and the message names both numbers.
+  GUEST_LIMIT_EXCEEDED: 409,
   ACTIVATION_FAILED: 500,
 };
 
