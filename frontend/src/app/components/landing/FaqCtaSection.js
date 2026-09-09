@@ -3,6 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { useAuth } from '../../hooks/useAuth';
+import { useLandingStats, formatStatValue } from '../../utils/useLandingStats';
 import { C, T, ON_INK } from './landingTokens';
 import { FAQS } from './faqContent';
 
@@ -41,6 +42,32 @@ import { FAQS } from './faqContent';
 
 export { FAQS } from './faqContent';
 
+/**
+ * The three numbers, at the end rather than in the hero.
+ *
+ * They used to sit under the fold's buttons, which is a lot of arithmetic for
+ * somebody who has been on the site for four seconds. Here they are the last
+ * thing before the footer, next to the button, where a reader who has read
+ * everything is actually weighing it up — which is the moment a number is
+ * worth anything.
+ *
+ * Every value is real: "events created" and "guests managed" are a server-side
+ * COUNT(*), and only "platform uptime" is admin-set. See useLandingStats.
+ */
+function StatRow() {
+  const { stats } = useLandingStats();
+  return (
+    <ul className="fc-stats">
+      {stats.map((s) => (
+        <li key={s.label}>
+          <strong>{formatStatValue(s)}</strong>
+          <span>{s.label}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function Faq({ item, index }) {
   return (
     <details className="faq-item" open={index === 0}>
@@ -72,7 +99,7 @@ export default function FaqCtaSection() {
               Before you ask
               <span aria-hidden="true" className="fc-kicker__rule" />
             </span>
-            <span className="fc-numeral" aria-hidden="true">V</span>
+            <span className="fc-numeral" aria-hidden="true">VIII</span>
             <h2 id="fc-faq-title" className="fc-h2">Questions we get.</h2>
 
             <div className="fc-list">
@@ -123,18 +150,41 @@ export default function FaqCtaSection() {
               when you are ready to send it.
             </p>
 
+            {/* THE SAME TWO DOORS AS THE HERO, in the same order and with the
+                same labels. A reader who has come this far has read eight
+                bands; offering them a different pair of choices here than the
+                one they were offered at the top makes them re-decide rather
+                than decide. "See pricing" moved into the line under them,
+                which is where somebody looks for it once they have already
+                been told the price is nothing for a week. */}
             <div className="fc-cta__actions">
-              <Link href={signedIn ? '/dashboard' : '/register'} className="fc-btn fc-btn--ivory">
-                {signedIn ? 'Go to dashboard' : 'Create your event'}
+              <Link href={signedIn ? '/dashboard' : '/register'} className="fc-btn fc-btn--ivory fc-btn--stack">
+                {signedIn ? (
+                  'Go to dashboard'
+                ) : (
+                  <>
+                    <span className="fc-btn__do">Create your event</span>
+                    <span className="fc-btn__price">Free for 7 days</span>
+                  </>
+                )}
               </Link>
-              <Link href="/pricing" className="fc-btn fc-btn--onInk">See pricing</Link>
+              <Link href="/demo/invitation" className="fc-btn fc-btn--onInk">
+                <span aria-hidden="true" className="fc-btn__play" />
+                Explore a live invitation
+              </Link>
             </div>
 
+            {/* Accurate, and each one is checkable: the trial runs 7 days from
+                the moment the event is published, it takes no card, and on day
+                8 the event stays live on the free plan rather than going dark.
+                See services/trialExpiry.js and utils/tierResolver.js. */}
             <ul className="fc-assure">
-              <li>Free plan to start</li>
               <li>No credit card</li>
-              <li>One-off price per event</li>
+              <li>Your event stays live afterwards</li>
+              <li><Link href="/pricing" className="fc-assure__link">See pricing</Link></li>
             </ul>
+
+            <StatRow />
           </div>
         </div>
       </div>
@@ -333,6 +383,29 @@ export default function FaqCtaSection() {
           border-radius: 0;
           transition: background 0.35s ease, color 0.35s ease, border-color 0.35s ease;
         }
+        /* The primary label carries a price on a second line — the same
+           arrangement the hero uses, and for the same reason: .fc-btn is
+           nowrap, so one long label would overflow 320px rather than wrap. */
+        .fc-btn--stack { flex-direction: column; padding: 10px 26px; }
+        .fc-btn__do { display: block; }
+        .fc-btn__price {
+          display: block;
+          margin-top: 3px;
+          font-size: 9.5px;
+          font-weight: 500;
+          letter-spacing: 0.16em;
+          opacity: 0.7;
+        }
+        .fc-btn__play {
+          display: block;
+          flex: none;
+          margin-right: 10px;
+          width: 0;
+          height: 0;
+          border-style: solid;
+          border-width: 4.5px 0 4.5px 7px;
+          border-color: transparent transparent transparent currentColor;
+        }
         .fc-btn--ink { background: ${C.ink}; color: ${C.paper}; border: 1px solid ${C.ink}; }
         .fc-btn--ink:hover { background: transparent; color: ${C.ink}; }
         .fc-btn--ghost { background: ${C.paper}; color: ${C.ink}; border: 1px solid ${C.border}; }
@@ -401,6 +474,53 @@ export default function FaqCtaSection() {
           text-transform: uppercase;
           color: ${ON_INK.muted};
         }
+        .fc-assure__link {
+          color: ${ON_INK.body};
+          text-decoration: none;
+          border-bottom: 1px solid ${ON_INK.hairline};
+          padding-bottom: 2px;
+        }
+        .fc-assure__link:hover { color: ${C.ivory}; border-color: ${C.ivory}; }
+
+        /* ── the three numbers ──────────────────────────────────────────────
+           A GRID of three equal tracks, not a wrapping flex row. A flex row
+           wraps 2 + 1 at 390px and leaves "99.9% uptime" orphaned on its own
+           line, which reads as a mistake rather than as a third statistic.
+           Three equal tracks cannot do that at any width. */
+        .fc-stats {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          margin: 40px 0 0;
+          padding: 30px 0 0;
+          list-style: none;
+          border-top: 1px solid ${ON_INK.hairline};
+        }
+        .fc-stats li { min-width: 0; padding: 0 6px; }
+        .fc-stats li + li { border-left: 1px solid ${ON_INK.hairline}; }
+        .fc-stats strong {
+          display: block;
+          font-family: ${T.display};
+          /* FLUID, and nowrap. Three equal tracks inside a 320px viewport are
+             about 85px each, and "50,000+" set at a flat 28px is wider than
+             that — so it wrapped to "50,00 / 0+", which reads as a different
+             number rather than as a tight fit. A number may shrink; it may
+             never break. */
+          font-size: clamp(19px, 6.6vw, 30px);
+          white-space: nowrap;
+          font-weight: 400;
+          line-height: 1;
+          letter-spacing: -0.01em;
+          color: ${ON_INK.title};
+        }
+        .fc-stats span {
+          display: block;
+          margin-top: 8px;
+          font-size: 9px;
+          letter-spacing: 0.16em;
+          text-transform: uppercase;
+          line-height: 1.5;
+          color: ${ON_INK.muted};
+        }
 
         /* ── 768 and up ────────────────────────────────────────────────── */
         @media (min-width: 768px) {
@@ -427,6 +547,10 @@ export default function FaqCtaSection() {
           .fc-cta__title { font-size: 52px; margin-top: 28px; }
           .fc-cta__body { font-size: 17px; margin-top: 18px; }
           .fc-cta__actions { flex-direction: row; justify-content: center; gap: 14px; margin-top: 38px; }
+          .fc-btn--stack { padding: 10px 34px; }
+          .fc-stats { max-width: 620px; margin: 48px auto 0; padding-top: 34px; }
+          .fc-stats strong { font-size: clamp(26px, 2.4vw, 32px); }
+          .fc-stats span { font-size: 9.5px; }
           .fc-btn { min-height: 60px; padding: 0 40px; }
           .fc-aside__actions .fc-btn { padding: 0 24px; }
         }

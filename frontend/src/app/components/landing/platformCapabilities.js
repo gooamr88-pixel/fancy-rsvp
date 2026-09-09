@@ -267,38 +267,89 @@ export const CAPABILITIES = [
 ];
 
 /**
- * The eight the homepage grid shows, by `key`.
+ * The eight the homepage draws as a flow, by `key`, IN THE ORDER THEY HAPPEN.
  *
- * Chosen to answer "what IS this thing" for someone who has never seen it:
- * collect replies, hold the guest list, seat them, get them through the door,
- * message them, watch it happen, in their language, without you remembering
- * to press anything. The remaining five are real but are refinements of those
- * — they belong on /features, behind the "everything else" link.
+ * ── Why the order changed on 2026-09-09 ──────────────────────────────────
+ *
+ * These eight used to be a list, and a list can be in any order — this one was
+ * in rough order of importance (forms, guests, seating, door, SMS, analytics,
+ * language, reminders). The homepage now draws them as a SEQUENCE with arrows
+ * between them, under the heading "One event. One system.", and an arrow is a
+ * claim: it says the thing on the left hands over to the thing on the right.
+ *
+ * So the order is now the order of an actual event — you send an invitation,
+ * they reply, the reply becomes a guest with a meal, you seat them, they are
+ * reminded, they arrive, and you read what happened. Two entries changed with
+ * it: `sms` and `bilingual` left the eight, because neither is a step in that
+ * sequence (one is a channel the reminders use, the other is a property of
+ * every screen), and `reveal` and `meals` took their places, because both are.
+ *
+ * Nothing was demoted by that. Both are named further up the page in the bands
+ * that are actually about them, and both appear by name in the strip under the
+ * diagram — see REST_CAPABILITIES.
  *
  * By key, not by index, so reordering CAPABILITIES cannot silently swap which
  * eight the front page promotes.
  */
 export const HOMEPAGE_CAPABILITY_KEYS = [
+  'reveal',
   'rsvp-forms',
   'guests',
+  'meals',
   'seating',
-  'checkin',
-  'sms',
-  'analytics',
-  'bilingual',
   'reminders',
+  'checkin',
+  'analytics',
 ];
+
+/**
+ * The name a capability goes by INSIDE THE DIAGRAM, where the full title does
+ * not fit.
+ *
+ * A node in a flow is about 90px wide. "Cinematic Invitation Reveal" sets to
+ * four lines there and stops being a diagram; "Invitation" is the same thing
+ * said at the size the drawing has. This is a second NAME, not a second
+ * SOURCE: the full title still comes from CAPABILITIES, is what /features
+ * renders, and is what the strip under the diagram prints — so nothing here
+ * can quietly rename a capability.
+ *
+ * Only the eight in the flow need one. A key with no entry falls back to its
+ * title, which is the correct behaviour for a short one.
+ */
+export const FLOW_LABEL = {
+  reveal: 'Invitation',
+  'rsvp-forms': 'RSVP',
+  guests: 'Guest list',
+  meals: 'Meals',
+  seating: 'Seating',
+  reminders: 'Reminders',
+  checkin: 'Check-in',
+  analytics: 'Analytics',
+};
 
 /** The eight, resolved and in the order above. Throws at import time if a key
  *  stops matching — a silent `undefined` in this array would render a blank
- *  card on the front page rather than failing where someone would notice. */
+ *  node on the front page rather than failing where someone would notice. */
 export const HOMEPAGE_CAPABILITIES = HOMEPAGE_CAPABILITY_KEYS.map((key) => {
   const found = CAPABILITIES.find((c) => c.key === key);
   if (!found) throw new Error(`HOMEPAGE_CAPABILITY_KEYS names "${key}", which is not in CAPABILITIES`);
   return found;
 });
 
-/** How many are NOT on the homepage — so the "and N more" link cannot go
- *  stale the next time a capability is added. */
-export const REMAINING_CAPABILITY_COUNT =
-  CAPABILITIES.length - HOMEPAGE_CAPABILITIES.length;
+/**
+ * Everything that is NOT a step in the sequence — derived, never typed.
+ *
+ * These are printed by name under the diagram rather than hidden behind the
+ * link to /features. The five include SMS campaigns and bilingual
+ * invitations, and a front page that does not say those words has failed at
+ * the one job this module exists for: before it, a visitor could read the
+ * whole homepage and never learn that this product sends texts or lays out
+ * Arabic right to left.
+ */
+export const REST_CAPABILITIES = CAPABILITIES.filter(
+  (c) => !HOMEPAGE_CAPABILITY_KEYS.includes(c.key),
+);
+
+/** How many are NOT in the diagram — so the "and N more" link cannot go stale
+ *  the next time a capability is added. */
+export const REMAINING_CAPABILITY_COUNT = REST_CAPABILITIES.length;

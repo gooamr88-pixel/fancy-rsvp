@@ -45,11 +45,13 @@ vi.mock('../../src/app/utils/useLandingStats', async (importOriginal) => {
 globalThis.React = React;
 
 import HeroSection from '../../src/app/components/landing/HeroSection';
-import HowItWorksSection from '../../src/app/components/landing/HowItWorksSection';
-import StatementSection from '../../src/app/components/landing/StatementSection';
 import TemplatesShowcaseSection from '../../src/app/components/landing/TemplatesShowcaseSection';
-import CapabilitiesSection from '../../src/app/components/landing/CapabilitiesSection';
+import GuestExperienceSection from '../../src/app/components/landing/GuestExperienceSection';
 import DashboardShowcaseSection from '../../src/app/components/landing/DashboardShowcaseSection';
+import SeatingSection from '../../src/app/components/landing/SeatingSection';
+import RemindersSection from '../../src/app/components/landing/RemindersSection';
+import CheckinSection from '../../src/app/components/landing/CheckinSection';
+import CapabilitiesSection from '../../src/app/components/landing/CapabilitiesSection';
 import FaqCtaSection from '../../src/app/components/landing/FaqCtaSection';
 import FooterSection from '../../src/app/components/landing/FooterSection';
 import PrintedInvitationsSection from '../../src/app/components/landing/PrintedInvitationsSection';
@@ -60,12 +62,33 @@ const OUT = path.join(ROOT, '..', '.visual', 'landing');
 const STAGE = path.join(OUT, 'stage');
 const PUBLIC = path.join(ROOT, 'public').replace(/\\/g, '/');
 
+/**
+ * ── TWO SOURCES, AND THE STAGED PAGE SAYS WHICH IT USED ──────────────────
+ *
+ * BUILT is preferred and asserted: it is the CSS the browser actually
+ * receives, with next/font's self-hosted faces wired in.
+ *
+ * SOURCE is the fallback, and it is here because this probe THREW on
+ * 2026-09-09 rather than producing a picture — `.next` held CSS chunks with no
+ * .fx-* rule and no @font-face in them at all, which is what an interrupted
+ * `next build` leaves behind. A partial build is not a build. Refusing to draw
+ * the page because a stale artifact is lying means the page ships unlooked-at,
+ * which is the one thing this file exists to prevent, so it degrades with a
+ * reason instead — and stamps the mode into the page so a downgrade cannot
+ * pass unnoticed a week later. Same arrangement as collectionProbe.
+ *
+ * What SOURCE loses: Tailwind's utilities and the seven theme(--breakpoint-*)
+ * media queries in globals.css. This page uses neither — its own breakpoints
+ * are pixel literals in its own style blocks, and its layout comes from the
+ * .fx-* primitives, which are plain CSS in a plain :root.
+ */
 function appCss() {
   const dir = path.join(ROOT, '.next/static/chunks');
-  if (!fs.existsSync(dir)) throw new Error('No .next build. Run `npx next build` first.');
+  const built = fs.existsSync(dir) && fs.readdirSync(dir).some((f) => f.endsWith('.css'));
+  if (!built) return sourceCss('no .next build at all');
   const css = fs.readdirSync(dir).filter((f) => f.endsWith('.css'))
     .map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
-  if (!css.includes('.fx-grid')) throw new Error('Built CSS has no .fx-grid — stale build.');
+  if (!css.includes('.fx-grid')) return sourceCss('the built CSS has no .fx-grid');
 
   /* THE FONTS, WHICH I HAD BEEN RENDERING WITHOUT.
 
@@ -86,10 +109,27 @@ function appCss() {
   const media = encodeURI(path.join(ROOT, '.next/static/media').split(path.sep).join('/'));
   const withFonts = css.replace(/url\(\.\.\/media\//g, 'url(file:///' + media + '/');
   if (!/@font-face\{font-family:Aboreto;/.test(withFonts)) {
-    throw new Error('No Aboreto @font-face in the built CSS — the font pipeline moved.');
+    return sourceCss('the built CSS has no Aboreto @font-face');
   }
-  return withFonts;
+  return { mode: 'BUILT', css: withFonts };
 }
+
+function sourceCss(why) {
+  // eslint-disable-next-line no-console
+  console.warn(`PROBE: falling back to source CSS — ${why}.`);
+  const globals = fs.readFileSync(path.join(ROOT, 'src/app/globals.css'), 'utf8');
+  if (!globals.includes('.fx-grid')) throw new Error('globals.css has no .fx-grid either.');
+  // The @import lines resolve to nothing from a file:// page; dropped so the
+  // browser does not sit waiting on them.
+  return { mode: 'SOURCE', css: globals.replace(/^@import\s+[^;]+;\s*$/gm, '') };
+}
+
+/** Real faces over the network, for the SOURCE path only. Without these the
+ *  page is reviewed in Georgia, which is not a typeface it uses. */
+const WEBFONTS = '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+  + '<link rel="stylesheet" href="https://fonts.googleapis.com/css2'
+  + '?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400'
+  + '&family=Aboreto&display=swap">';
 
 /* Reset ONLY. It used to redeclare --font-sans/--font-serif as Segoe UI and
    Georgia "because next/font is unavailable offline" — but next/font
@@ -107,12 +147,13 @@ function appCss() {
    restyling the page. */
 const FONT_VARS = `
   :root {
-    --font-heading: "Aboreto", "Aboreto Fallback";
-    --font-body: "Google Sans";
-    --font-playfair: "Playfair Display", "Playfair Display Fallback";
-    --font-cormorant: "Cormorant Garamond", "Cormorant Garamond Fallback";
-    --font-montserrat: "Montserrat", "Montserrat Fallback";
-    --font-script: "Great Vibes", "Great Vibes Fallback";
+    --font-heading: "Aboreto", "Aboreto Fallback", Georgia, serif;
+    --font-body: "Google Sans", "Segoe UI", system-ui, sans-serif;
+    --font-sans: "Segoe UI", system-ui, sans-serif;
+    --font-playfair: "Playfair Display", "Playfair Display Fallback", Georgia, serif;
+    --font-cormorant: "Cormorant Garamond", "Cormorant Garamond Fallback", Georgia, serif;
+    --font-montserrat: "Montserrat", "Montserrat Fallback", sans-serif;
+    --font-script: "Great Vibes", "Great Vibes Fallback", cursive;
   }
 `;
 
@@ -160,11 +201,13 @@ beforeEach(() => {
 const PROBE_SECTIONS = {
   hero: HeroSection,
   invitations: TemplatesShowcaseSection,
-  printed: PrintedInvitationsSection,
-  statement: StatementSection,
-  'how-it-works': HowItWorksSection,
+  experience: GuestExperienceSection,
   dashboard: DashboardShowcaseSection,
+  seating: SeatingSection,
+  reminders: RemindersSection,
+  checkin: CheckinSection,
   capabilities: CapabilitiesSection,
+  printed: PrintedInvitationsSection,
   'faq-cta': FaqCtaSection,
   footer: FooterSection,
 };
@@ -268,17 +311,26 @@ describe('landing — whole-page probe', () => {
        templateShots.dump.jsx does the same rewrite for /templates/. */
     const html = container.innerHTML.replace(/src="\/images\//g, 'src="images/');
     const head = [...document.head.querySelectorAll('style')].map((s) => s.textContent).join('\n');
+    const { mode, css } = appCss();
 
     fs.mkdirSync(STAGE, { recursive: true });
     fs.writeFileSync(path.join(STAGE, 'page.html'),
       `<!doctype html><html lang="en" dir="ltr"><head><meta charset="utf-8">
 <base href="file:///${PUBLIC}/">
-<style>${FONTS}</style><style>${appCss()}</style><style>${FONT_VARS}</style><style>${head}</style>
+${mode === 'SOURCE' ? WEBFONTS : ''}
+<style>${FONTS}</style><style>${css}</style><style>${FONT_VARS}</style><style>${head}</style>
 <style>
   /* Entrance animations run to their end state: this is a still. */
   *,*::before,*::after { animation-duration: 1ms !important; animation-delay: 0s !important; }
 </style>
-</head><body>${html}</body></html>`, 'utf8');
+</head><body>
+<!-- WHICH STYLESHEET THIS CAPTURE USED. In the page, not only in a console
+     line that scrolls away: a SOURCE capture is trustworthy for layout and
+     colour and only as trustworthy for TYPE as the network was when it was
+     taken, and somebody reviewing the picture later has no other way to tell
+     which they are looking at. -->
+<div style="position:fixed;z-index:99999;top:0;right:0;padding:3px 9px;font:11px/1.4 monospace;background:${mode === 'BUILT' ? '#1b5e20' : '#8a4b00'};color:#fff">CSS: ${mode}</div>
+${html}</body></html>`, 'utf8');
 
     /* Reported so the page's real height is a measured number rather than an
        estimate — "is it too long?" was the whole point of the rebuild. */

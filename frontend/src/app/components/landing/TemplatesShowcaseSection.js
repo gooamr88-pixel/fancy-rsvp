@@ -1,157 +1,55 @@
 import React from "react";
 import Link from "next/link";
-import { TEMPLATES } from "../../utils/curatedTemplates";
-import { CINEMATIC_KEYS } from "../templates/cinematic/cinematicThemes";
-import { occasionPolicyFor } from "../../utils/eventOccasion";
-import { ARRIVAL } from "../../collection/collectionCatalogue";
+import { COLLECTION, OWN_PHOTO_NOTE } from "../../collection/collectionCatalogue";
 import { buildWhatsappUrl } from "../../utils/shopLinks";
-import { C, T, SHADOW, BEZEL } from "./landingTokens";
+import { C, T, SHADOW, BEZEL, PAGE_INDEX } from "./landingTokens";
+import CollectionRail from "./CollectionRail";
 
 /* ═══════════════════════════════════════════════════════════════════════════
    THE INVITATIONS.
 
-   The most differentiated thing this product has, and the old homepage showed
-   it nowhere at all. Every picture is a real screenshot of the shipping
-   template, produced by test/shots — never an artist's impression.
+   The most differentiated thing this product has. Every picture is a real
+   screenshot of the shipping template, produced by test/shots — never an
+   artist's impression.
 
-   The occasion badge is read from `occasionPolicyFor`, the same function the
-   wizard and the guest page use, so the homepage cannot advertise a template
-   for an occasion the product would refuse.
+   ── 2026-09-09: two changes ──────────────────────────────────────────────
 
-   ── 2026-08-20: three changes ─────────────────────────────────────────────
+   1. THE PLATES BECAME A RAIL. Four capped plates in a grid are one desktop
+      row and four stacked handsets on a phone — about 2,400px of scroll for
+      four pictures. See CollectionRail.js.
 
-   1. IT KEPT ITS OWN PALETTE. There was a private `const C = { ivory, gold,
-      goldLight }` at the top of this file — the third copy of the brand
-      colours in the tree, and the exact drift landingTokens.js exists to
-      prevent. It now imports the shared one.
+   2. THE CATALOGUE IS READ, NOT REBUILT. This file used to assemble its own
+      view of the four templates: TEMPLATES filtered by CINEMATIC_KEYS, the
+      badge from occasionPolicyFor, the art from a local SHOTS map, the
+      opening line from ARRIVAL. collection/collectionCatalogue.js already
+      does all of that, for the gallery, the detail pages and the sitemap —
+      and its whole docstring is about why that list must exist once. This
+      band was the fifth surface reassembling it. It now imports COLLECTION,
+      which is the same four items the gallery shows, in the same order, with
+      the same badges.
 
-   2. THE BAND IS NO LONGER DARK. Two full-dark bands were competing with the
-      photography they existed to show; on paper, the invitations are the only
-      saturated thing in view and they carry the whole section.
+      One thing was lost in that swap and it was worth losing: the "your own
+      photograph goes here" margin note on the Sealed Letter plate, with its
+      stand-in illustration. A card in a rail is a name and a picture; a
+      footnote about what is behind one of them belongs on that template's own
+      page, which now exists at /collection/letter and says it there.
 
-   3. ALTERNATING ROWS BECAME THREE PLATES. The flip-flop layout read well but
-      ran ~2,400px tall for three items. As a three-up grid they read as plates
-      in a catalogue, each numbered and closed with a hairline, in about a
-      third of the height.
-
-   A Server Component: no state, no client JavaScript.
+   The quote at the foot is a REAL published review or it is absent — see
+   fetchQuote below.
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/** The opened hero shot per template. The cover (sealed) art is used by the
- *  hero band, not here — three sealed envelopes in a row say less than three
- *  opened invitations do. */
-const SHOTS = {
-  ring: "/images/landing/hero-ring.webp",
-  bab: "/images/landing/hero-bab.webp",
-  swans: "/images/landing/hero-swans.webp",
-  /* The SEALED envelope, not the opened page — the one exception, and a
-     deliberate one. The other three open onto photography we supply, so their
-     opened page is the thing to show. Sealed Letter opens onto the couple's
-     OWN photograph, and there is no honest picture of that: any hero shot
-     here would be a stock couple standing in for theirs, which is exactly the
-     impression this template exists to avoid giving. So the plate shows what
-     we actually ship — the envelope — and says in words what goes behind it,
-     with the inset below standing in at a size that cannot be mistaken for a
-     promise. */
-  letter: "/images/landing/cover-letter.webp",
-};
-
-/** Templates whose plate carries the "your own photo goes here" note. */
-const OWN_PHOTO = {
-  letter: {
-    /* Lifted from the template's own former hero artwork — the illustration
-       that used to be printed into it, now retired from the product and kept
-       only at this size. */
-    illustration: "/images/landing/couple-illustration.webp",
-    line: "And behind it, your own photograph — full screen, with your names and your words across it.",
-  },
-};
-
-/* ARRIVAL — what a guest actually does to open each one — is IMPORTED, from
-   collection/collectionCatalogue.js. It was declared here as well, verbatim,
-   once the collection gallery shipped: the same four sentences in the two
-   places a visitor reads them, which is how one of them ends up describing an
-   opening the template no longer has. The gallery's module owns them because
-   it is the one every surface that names these templates already reads. */
-
-/** Lowercase roman, to pair with the section numeral without competing. */
-const PLATE_NUMERAL = ["i", "ii", "iii", "iv", "v"];
-
-/* The band's own headline and its commission strip both COUNT the templates,
-   and both had the number typed into the sentence — so shipping a fourth
-   template left the page saying "three" twice, in the two places a visitor
-   reads first. Spelled from the list that is actually being rendered. */
-const COUNT_WORD = ["no", "one", "two", "three", "four", "five", "six", "seven"];
-const countWord = (n) => COUNT_WORD[n] || String(n);
-const titleCase = (s) => s.charAt(0).toUpperCase() + s.slice(1);
-
-function TemplatePlate({ template, index }) {
-  const policy = occasionPolicyFor(template.key);
-  const shot = SHOTS[template.key];
-  const own = OWN_PHOTO[template.key];
-
-  return (
-    <li className="tss-plate">
-      <div className="tss-device">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={shot}
-          alt={`The ${template.label} invitation as a guest sees it: ${template.tagline}`}
-          width={468}
-          height={1013}
-          loading="lazy"
-        />
-
-      </div>
-
-      <div className="tss-namerow">
-        <h3 className="tss-name">{template.label}</h3>
-        <span className="tss-numeral" aria-hidden="true">
-          {PLATE_NUMERAL[index] || index + 1}
-        </span>
-      </div>
-
-      <p className="tss-arrival">{ARRIVAL[template.key]}</p>
-
-      {/* An annotated note, sitting in the flow AFTER the name — not an inset
-          floated over the artwork. Overlapping the device covered the couple's
-          names printed on the envelope, and placing it above the title broke
-          the rhythm every other plate keeps (picture, name, arrival,
-          description). Beside its own illustration it reads as a margin note
-          about what is inside, which is exactly what it is. */}
-      {own && (
-        <figure className="tss-own">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            className="tss-own__fig"
-            src={own.illustration}
-            alt="An illustration of a couple, standing in for the photograph you upload"
-            width={285}
-            height={338}
-            loading="lazy"
-          />
-          <figcaption className="tss-own__line">{own.line}</figcaption>
-        </figure>
-      )}
-
-      <p className="tss-desc">{template.desc}</p>
-      <span className="tss-badge">{policy.label}</span>
-    </li>
-  );
-}
+const API_URL = process.env.INTERNAL_API_URL
+  || process.env.NEXT_PUBLIC_API_URL
+  || 'http://localhost:5000/api/v1';
 
 /* THE STUDIO'S NUMBER, FROM THE ONE PLACE THAT OWNS IT.
 
    Same endpoint and same revalidate as PrintedInvitationsSection, so Next
    dedupes the two into ONE request per render rather than fetching the
    catalogue twice for one page. The number lives in
-   super_admin_config.shop_settings and is served through the public
-   allowlist — there is no second place to put a WhatsApp number, and adding
-   one is how a business ends up answering two. */
-const API_URL = process.env.INTERNAL_API_URL
-  || process.env.NEXT_PUBLIC_API_URL
-  || 'http://localhost:5000/api/v1';
-
+   super_admin_config.shop_settings and is served through the public allowlist
+   — there is no second place to put a WhatsApp number, and adding one is how a
+   business ends up answering two. */
 async function fetchShopSettings() {
   try {
     const res = await fetch(`${API_URL}/public/shop`, { next: { revalidate: 300 } });
@@ -159,8 +57,42 @@ async function fetchShopSettings() {
     const data = await res.json();
     return data?.settings || null;
   } catch {
-    // The band must render with or without it — the three invitations are the
+    // The band must render with or without it — the four invitations are the
     // point, and the commission strip simply does not appear.
+    return null;
+  }
+}
+
+/**
+ * One published review, for the pull quote.
+ *
+ * ── Why this is fetched on the SERVER when a hook already exists ──────────
+ *
+ * `useTestimonials` is what ProofSection uses, and it is right for that band:
+ * a grid of cards that appears or does not. This is a single line of display
+ * type in the middle of the page, and a client hook would render the band, do
+ * a round trip, and then push everything below it down by the height of a
+ * quote. Fetched here it is either in the first paint or absent from it.
+ *
+ * NOTHING IS INVENTED. The endpoint degrades to an empty array on a backend
+ * error (marketingController.getPublicTestimonials answers HTTP 200 with
+ * `success: false`), and an empty array renders no quote at all — which is the
+ * state of a fresh install. A homepage carrying a testimonial nobody gave is
+ * the one thing this band must never do.
+ */
+async function fetchQuote() {
+  try {
+    const res = await fetch(`${API_URL}/public/testimonials`, { next: { revalidate: 300 } });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const list = Array.isArray(data?.testimonials) ? data.testimonials : [];
+    // The shortest one. A pull quote is one line of 40px display type; the
+    // longest review in the table would set to six and stop being a pull
+    // quote. ProofSection still shows all of them in full.
+    const usable = list.filter((t) => t?.quote && t?.name);
+    if (!usable.length) return null;
+    return usable.reduce((a, b) => (a.quote.length <= b.quote.length ? a : b));
+  } catch {
     return null;
   }
 }
@@ -168,59 +100,104 @@ async function fetchShopSettings() {
 /** Pre-typed so whoever answers is not starting from "hi". */
 const COMMISSION_MESSAGE = 'Hello! I would like to talk about a custom invitation design for my event.';
 
-export default async function TemplatesShowcaseSection() {
-  // The cinematic ones only. Custom Canvas has no photography by definition —
-  // it is the organizer's own colours — so it has nothing to show here.
-  const shown = TEMPLATES.filter((t) => CINEMATIC_KEYS.includes(t.key));
+/* The band's headline COUNTS the templates rather than naming a number, so
+   shipping a fifth cannot leave the page saying "four". */
+const COUNT_WORD = ["no", "one", "two", "three", "four", "five", "six", "seven"];
+const countWord = (n) => COUNT_WORD[n] || String(n);
 
+export default async function TemplatesShowcaseSection() {
   /* Gated on a real NUMBER, not on whether the shop is switched on: the shop
      switch is about selling printed goods, and commissioning an invitation is
      a different conversation on the same phone. No number, no strip — a CTA
      that opens "wa.me/" and nothing else is worse than no CTA. */
-  const settings = await fetchShopSettings();
+  const [settings, quote] = await Promise.all([fetchShopSettings(), fetchQuote()]);
   const commissionHref = buildWhatsappUrl({ settings, message: COMMISSION_MESSAGE });
 
   return (
     <section id="invitations" className="tss" aria-labelledby="tss-title">
       {/* --5xl, not --lg. .fx-container--lg is 720px, a READING measure, and
-          this is a three-column gallery of photographs. */}
+          this is a gallery of photographs. */}
       <div className="fx-container fx-container--5xl fx-gutter">
+        {/* ── WHAT IS ON THIS PAGE ──
+            The first thing under the hero, and it belongs to the PAGE rather
+            than to this band — but it is rendered here rather than as a band
+            of its own so that BAND_ORDER stays the one place the page's
+            arrangement is stated. A twelfth entry declaring a strip of six
+            links would say less than this comment does.
+
+            A <nav> with a real label, because that is what it is: six anchors
+            into a page that is seventeen screens long on a phone. See
+            PAGE_INDEX in landingTokens.js for why these six. */}
+        <nav className="tss-index" aria-label="On this page">
+          <ul className="fx-scroll-x">
+            {PAGE_INDEX.map((entry) => (
+              <li key={entry.id}>
+                <a href={`#${entry.id}`}>{entry.label}</a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+
         <header className="tss-head">
           <span className="tss-kicker">
-            The invitations
+            The collection
             <span aria-hidden="true" className="tss-kicker__rule" />
           </span>
           <span className="tss-secnum" aria-hidden="true">I</span>
-          <h2 id="tss-title" className="tss-title">{titleCase(countWord(shown.length))} ways to open a door.</h2>
+          <h2 id="tss-title" className="tss-title">
+            Invitations for every kind of celebration.
+          </h2>
           <p className="tss-sub">
             {/* "Filmed, not animated" was true of three and is not true of the
                 fourth — Sealed Letter is a sprite sheet, which is why it opens
                 instantly on a handset that cannot stream video. The claim that
-                covers all four is that they are photographed rather than
-                drawn, which is the one a visitor actually cares about. */}
+                covers all {countWord(COLLECTION.length)} is that they are
+                photographed rather than drawn. */}
             Each one is photographed, not drawn — and every one of them is yours
             to fill in, in any language, for any occasion.
           </p>
         </header>
 
-        {/* .fx-grid walks 3 → 2 → 1 from --fx-col with no breakpoints of its
-            own. A fixed three-column grid could not fit a phone — see
-            AGENTS.md on min-content width. */}
-        {/* 250px, not 290. .fx-grid is auto-fit, so the track count is
-            floor((container + gap) / (--fx-col + gap)) — at 290px a 1184px
-            container fits exactly THREE, which was right for three templates
-            and leaves the fourth stranded alone on a second row. 250 fits
-            four (4 x 250 + 3 x 44 = 1132 <= 1184) and still falls to two on a
-            tablet and one on a phone with no breakpoint of its own. The
-            plate's own max-width keeps the picture the size it was. */}
-        <ul className="tss-plates fx-grid" style={{ "--fx-col": "250px", "--fx-gap": "clamp(44px, 3vw, 40px)" }}>
-          {shown.map((t, i) => (
-            <TemplatePlate key={t.key} template={t} index={i} />
-          ))}
-        </ul>
+        <CollectionRail items={COLLECTION} />
+
+        {/* THE CLAIM A PICTURE CANNOT MAKE.
+            One footnote under the rail rather than a note glued to one card:
+            it is about what is BEHIND a card, the rail is 206px wide, and the
+            note used to carry a 64px stand-in illustration of a couple that
+            was standing in for a photograph we do not have. The sentence is
+            the whole of the value; the illustration was decoration on top of
+            a disclaimer. Read from the catalogue, one per template that has
+            something a shot of it cannot show. */}
+        {COLLECTION.some((c) => OWN_PHOTO_NOTE[c.key]) && (
+          <ul className="tss-notes">
+            {COLLECTION.filter((c) => OWN_PHOTO_NOTE[c.key]).map((c) => (
+              <li key={c.key}>{OWN_PHOTO_NOTE[c.key]}</li>
+            ))}
+          </ul>
+        )}
+
+        <div className="tss-cta">
+          {/* /collection, not /templates — the latter is still a 308 to the
+              homepage in next.config.mjs and would bounce. */}
+          <Link href="/collection" className="tss-btn tss-btn--ghost">
+            Explore the collection
+          </Link>
+        </div>
+
+        {/* ── THE QUOTE ──
+            Real or absent. See fetchQuote. */}
+        {quote && (
+          <figure className="tss-quote">
+            <blockquote>&ldquo;{quote.quote}&rdquo;</blockquote>
+            <figcaption>
+              <span className="tss-quote__who">{quote.name}</span>
+              {quote.role && <span className="tss-quote__role">{quote.role}</span>}
+            </figcaption>
+          </figure>
+        )}
 
         {/* ── THE COMMISSION ──
-            Three invitations on a page read as a menu, and a visitor whose
+            Four invitations on a page read as a menu, and a visitor whose
             event is not on that menu concludes the product cannot do it. It
             can: the studio designs one. This says so where the assumption is
             formed, rather than in a FAQ four bands down. */}
@@ -233,7 +210,7 @@ export default async function TemplatesShowcaseSection() {
                 <span aria-hidden="true" className="tss-comm__rule" />
               </span>
               <h3 id="tss-comm-title" className="tss-comm__title">
-                These {countWord(shown.length)} are where we start, not where we stop.
+                These {countWord(COLLECTION.length)} are where we start, not where we stop.
               </h3>
               <p className="tss-comm__body">
                 If what you are imagining is not here — your own artwork, another
@@ -268,28 +245,11 @@ export default async function TemplatesShowcaseSection() {
             </div>
           </aside>
         )}
-
-        <div className="tss-cta">
-          {/* IT EXISTS NOW. This said "/templates does not exist" and sent a
-              visitor who wanted to look at invitations to a signup form
-              instead — the single widest gap between what this band promises
-              and where its button went. /collection is the gallery, and one
-              tap further in each of these opens for real.
-
-              (Not /templates, which is still a 308 to the homepage in
-              next.config.mjs and would bounce. See collection/page.js.)
-
-              The ghost button goes to the gallery and the signup moves to the
-              second, quieter slot: somebody reading a band of photographs is
-              choosing, not buying, and the next step they actually want is a
-              bigger look rather than an account. */}
-          <Link href="/collection" className="tss-btn tss-btn--ghost">Open the collection</Link>
-        </div>
       </div>
 
       {/* A plain style element — styled-jsx cannot be imported from a Server
           Component, and a scoped rule would never attach to the next/link
-          above. Classes are prefixed "tss-" instead.
+          cards CollectionRail renders. Classes are prefixed "tss-" instead.
 
           No backticks inside these CSS comments: one would end the template
           literal and produce a parse error. */}
@@ -297,8 +257,50 @@ export default async function TemplatesShowcaseSection() {
         .tss {
           width: 100%;
           background: ${C.paper2};
-          padding: 60px 0;
+          padding: 66px 0;
         }
+        /* ── the in-page index ──────────────────────────────────────────────
+           One row that scrolls rather than wraps. Six labels at this tracking
+           are about 780px laid end to end, so on a phone this is a swipe and
+           on a desktop it is a line — and a wrapped index reads as a paragraph
+           of links rather than as a map.
+
+           .fx-scroll-x is the primitive for content that genuinely cannot
+           reflow; the inner list needs width: max-content or the flex track
+           sizes to the port and the row never scrolls. */
+        .tss-index {
+          margin: 0 0 34px;
+          padding-bottom: 20px;
+          border-bottom: 1px solid ${C.border};
+        }
+        .tss-index ul {
+          display: flex;
+          gap: 10px;
+          width: max-content;
+          min-width: 100%;
+          margin: 0;
+          padding: 0 0 2px;
+          list-style: none;
+        }
+        .tss-index li { flex: none; }
+        .tss-index a {
+          display: block;
+          padding: 9px 15px;
+          border: 1px solid ${C.border};
+          border-radius: 999px;
+          background: ${C.paper};
+          font-family: ${T.body};
+          font-size: 10.5px;
+          font-weight: 600;
+          letter-spacing: 0.14em;
+          text-transform: uppercase;
+          white-space: nowrap;
+          color: ${C.inkSoft};
+          text-decoration: none;
+          transition: color 0.25s ease, border-color 0.25s ease;
+        }
+        .tss-index a:hover { color: ${C.ink}; border-color: ${C.gold}; }
+
         .tss-head {
           display: grid;
           grid-template-columns: 1fr auto;
@@ -351,130 +353,197 @@ export default async function TemplatesShowcaseSection() {
           max-width: 52ch;
         }
 
-        .tss-plates {
-          margin: 40px 0 0;
-          padding: 0;
+        /* ── the rail ───────────────────────────────────────────────────────
+           The cards are a FIXED width and the port scrolls. That is the one
+           arrangement in which a phone shows one and a half cards — which is
+           what tells a reader, without an instruction, that the row moves. */
+        .tss-railwrap { position: relative; margin-top: 58px; }
+        .tss-rail {
+          display: flex;
+          gap: 16px;
+          margin: 0;
+          padding: 0 0 6px;
           list-style: none;
+          overflow-x: auto;
+          overscroll-behavior-x: contain;
+          scroll-snap-type: x mandatory;
+          -webkit-overflow-scrolling: touch;
+          scrollbar-width: none;
         }
-        /* CAPPED, and this is the whole point of the 2026-08-21 pass.
-           .fx-grid is auto-fit, so three items in a 1184px container stretch
-           to ~372px tracks whatever --fx-col says — and the shot is a whole
-           phone screen at 468x1013, so each plate rendered about 365 wide and
-           790 TALL. Three of those is most of a desktop screen for one band,
-           and on a phone it was ~2,400px of scrolling past three enormous
-           handsets.
-           The cap sits on the PLATE, not on the image, so the name, the rule
-           under it and the description all narrow with the picture instead of
-           running out past it. The tracks stay where they are, so plate one
-           still lines up with the heading above. */
-        /* Centred while there is ONE per row, left-aligned once there are
-           three. A capped plate in a full-width phone track sits against the
-           left edge with 86px of nothing beside it, which reads as a layout
-           fault; three capped plates across a desktop row do not, because the
-           first still lines up with the heading. */
-        .tss-plate { min-width: 0; max-width: 244px; margin-inline: auto; }
+        .tss-rail::-webkit-scrollbar { display: none; }
+        .tss-slide {
+          flex: none;
+          width: 206px;
+          scroll-snap-align: start;
+        }
+        .tss-card { display: block; text-decoration: none; }
 
         /* The invitation as an object: a dark bezel, a long shadow, and a faint
            edge so it does not read as a pasted rectangle. */
         .tss-device {
-          border-radius: 22px;
+          display: block;
+          border-radius: 20px;
           padding: 5px;
           background: ${BEZEL};
           box-shadow: ${SHADOW.device};
+          transition: transform 0.4s ease;
         }
         .tss-device img {
           display: block;
           width: 100%;
           height: auto;
-          border-radius: 17px;
+          border-radius: 15px;
         }
-
-        /* ── "and behind it, your own photograph" ──
-           A margin note: the stand-in illustration beside the sentence it
-           illustrates. Small on purpose — it is standing in for something we
-           do not have, and at 54px it can never be mistaken for a picture the
-           template ships. In the FLOW, not floated over the device: as an
-           overlay it covered the couple's names printed on the envelope. */
-        .tss-own {
-          display: flex;
-          align-items: flex-start;
-          gap: 12px;
-          margin: 12px 0 0;
-          padding: 10px 12px;
-          background: ${C.paper};
-          border: 1px solid #DED4C1;
-        }
-        /* 64px, not 54. At 54 the two figures had merged into one grey shape
-           and the note illustrated nothing; at 64 the dress and the suit read
-           as a couple, which is the entire job. Still far too small to be
-           taken for a picture the template ships. */
-        .tss-own__fig {
-          flex: none;
-          width: 64px;
-          height: auto;
-          display: block;
-          border: 1px solid #E6DCCB;
-        }
-        .tss-own__line {
-          margin: 0;
-          min-width: 0;
-          font-family: ${T.display};
-          font-size: 13.5px;
-          font-style: italic;
-          line-height: 1.5;
-          color: ${C.goldInk};
-        }
+        .tss-card:hover .tss-device { transform: translateY(-6px); }
 
         .tss-namerow {
           display: flex;
           align-items: baseline;
           justify-content: space-between;
-          gap: 14px;
-          margin-top: 22px;
-          padding-bottom: 12px;
+          gap: 12px;
+          margin-top: 18px;
+          padding-bottom: 10px;
           border-bottom: 1px solid ${C.border};
         }
         .tss-name {
           font-family: ${T.display};
-          font-size: 24px;
+          font-size: 21px;
           font-weight: 400;
           line-height: 1.12;
           letter-spacing: -0.01em;
           color: ${C.ink};
-          margin: 0;
           min-width: 0;
         }
-        .tss-numeral {
+        .tss-badge {
           flex: none;
-          font-family: ${T.display};
-          font-style: italic;
-          font-size: 14px;
-          color: ${C.goldInk};
-          opacity: 0.8;
+          font-size: 8.5px;
+          letter-spacing: 0.18em;
+          text-transform: uppercase;
+          color: ${C.inkSoft};
+          opacity: 0.75;
+          white-space: nowrap;
         }
         .tss-arrival {
+          display: block;
           font-family: ${T.display};
-          font-size: 16.5px;
+          font-size: 15.5px;
           font-style: italic;
           line-height: 1.4;
           color: ${C.goldInk};
-          margin: 12px 0 0;
+          margin-top: 11px;
         }
-        .tss-desc {
-          font-size: 13px;
-          font-weight: 300;
-          line-height: 1.72;
-          color: ${C.inkSoft};
-          margin: 9px 0 0;
+
+        /* Above the rail's top-right corner: they cover nothing, so they never
+           have to be taken away on a narrow screen. The railwrap's own top
+           margin is what they sit in, so the two numbers move together — at
+           -46 against a 34px margin they would have overlapped the sub-copy. */
+        .tss-arrows {
+          position: absolute;
+          top: -52px;
+          right: 0;
+          display: flex;
+          gap: 8px;
         }
-        .tss-badge {
-          display: inline-block;
-          margin-top: 14px;
-          font-size: 9px;
+        .tss-arrow {
+          display: grid;
+          place-items: center;
+          width: 38px;
+          height: 38px;
+          padding: 0;
+          border-radius: 50%;
+          background: ${C.paper};
+          border: 1px solid ${C.border};
+          color: ${C.ink};
+          cursor: pointer;
+          transition: background 0.25s ease, border-color 0.25s ease, opacity 0.25s ease;
+        }
+        .tss-arrow svg { width: 16px; height: 16px; }
+        .tss-arrow:hover { border-color: ${C.gold}; }
+        .tss-arrow:disabled { opacity: 0.34; cursor: default; }
+
+        /* ── the footnotes ─────────────────────────────────────────────────
+           Set in the display italic and in the readable gold, so a sentence
+           about what is BEHIND a card is visibly an aside rather than a fifth
+           card's worth of copy. */
+        .tss-notes {
+          margin: 24px 0 0;
+          padding: 0;
+          list-style: none;
+        }
+        .tss-notes li {
+          font-family: ${T.display};
+          font-size: 16px;
+          font-style: italic;
+          line-height: 1.5;
+          color: ${C.goldInk};
+          max-width: 56ch;
+        }
+        .tss-notes li + li { margin-top: 8px; }
+
+        .tss-cta {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          margin-top: 32px;
+        }
+        .tss-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 56px;
+          font-family: ${T.body};
+          font-size: 11px;
+          font-weight: 600;
           letter-spacing: 0.2em;
           text-transform: uppercase;
+          white-space: nowrap;
+          text-decoration: none;
+          border-radius: 0;
+          transition: background 0.35s ease, color 0.35s ease, border-color 0.35s ease;
+        }
+        .tss-btn--ghost {
+          background: ${C.paper};
+          color: ${C.ink};
+          border: 1px solid ${C.border};
+        }
+        .tss-btn--ghost:hover { background: ${C.ink}; border-color: ${C.ink}; color: ${C.paper}; }
+
+        /* ── the quote ──────────────────────────────────────────────────── */
+        .tss-quote {
+          margin: 44px 0 0;
+          padding-top: 30px;
+          border-top: 1px solid ${C.border};
+          text-align: center;
+        }
+        .tss-quote blockquote {
+          margin: 0;
+          font-family: ${T.display};
+          font-weight: 300;
+          font-style: italic;
+          font-size: 25px;
+          line-height: 1.35;
+          letter-spacing: -0.01em;
+          color: ${C.ink};
+          text-wrap: pretty;
+        }
+        .tss-quote figcaption {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 4px;
+          margin-top: 18px;
+        }
+        .tss-quote__who {
+          font-size: 10px;
+          font-weight: 600;
+          letter-spacing: 0.2em;
+          text-transform: uppercase;
+          color: ${C.goldInk};
+        }
+        .tss-quote__role {
+          font-size: 12px;
+          font-weight: 300;
           color: ${C.inkSoft};
-          opacity: 0.7;
         }
 
         /* ── the commission strip ──
@@ -577,53 +646,30 @@ export default async function TemplatesShowcaseSection() {
           opacity: 0.75;
         }
 
-        .tss-cta {
-          display: flex;
-          flex-direction: column;
-          gap: 10px;
-          margin-top: 40px;
-        }
-        .tss-btn {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          min-height: 56px;
-          font-family: ${T.body};
-          font-size: 11px;
-          font-weight: 600;
-          letter-spacing: 0.2em;
-          text-transform: uppercase;
-          white-space: nowrap;
-          text-decoration: none;
-          border-radius: 0;
-          transition: background 0.35s ease, color 0.35s ease, border-color 0.35s ease;
-        }
-        .tss-btn--ghost {
-          background: ${C.paper};
-          color: ${C.ink};
-          border: 1px solid ${C.border};
-        }
-        .tss-btn--ghost:hover { background: ${C.ink}; border-color: ${C.ink}; color: ${C.paper}; }
-
         @media (min-width: 768px) {
-          .tss { padding: 92px 0; }
+          .tss { padding: 112px 0; }
+          .tss-index { margin-bottom: 44px; padding-bottom: 26px; }
+          .tss-index ul { gap: 12px; }
+          .tss-index a { padding: 10px 20px; font-size: 11px; }
           .tss-kicker { font-size: 11px; letter-spacing: 0.38em; gap: 16px; }
           .tss-kicker__rule { width: 44px; }
           .tss-secnum { font-size: 15px; }
-          .tss-title { font-size: 48px; margin-top: 20px; }
+          .tss-title { font-size: 54px; margin-top: 20px; }
           .tss-sub { font-size: 17px; margin-top: 16px; }
-          .tss-plates { margin-top: 48px; }
-          .tss-plate { max-width: 260px; margin-inline: 0; }
+          .tss-railwrap { margin-top: 68px; }
+          .tss-rail { gap: 24px; }
+          .tss-slide { width: 252px; }
           .tss-device { border-radius: 24px; padding: 6px; }
           .tss-device img { border-radius: 19px; }
-          .tss-namerow { margin-top: 22px; padding-bottom: 12px; }
-          .tss-name { font-size: 26px; }
-          .tss-numeral { font-size: 14px; }
-          .tss-arrival { font-size: 17.5px; margin-top: 13px; }
-          .tss-desc { font-size: 13.5px; }
-          .tss-badge { margin-top: 14px; }
-          .tss-cta { flex-direction: row; margin-top: 48px; }
+          .tss-name { font-size: 24px; }
+          .tss-arrival { font-size: 17px; }
+          .tss-arrows { top: -54px; }
+          .tss-notes { margin-top: 30px; }
+          .tss-notes li { font-size: 18px; }
+          .tss-cta { flex-direction: row; margin-top: 44px; }
           .tss-btn { min-height: 56px; padding: 0 40px; }
+          .tss-quote { margin-top: 62px; padding-top: 44px; }
+          .tss-quote blockquote { font-size: 36px; max-width: 22ch; margin: 0 auto; }
 
           /* Copy and action side by side, with the action holding its own
              width — a nowrap button in a shrinking track is the second-largest
@@ -634,7 +680,7 @@ export default async function TemplatesShowcaseSection() {
             justify-content: space-between;
             gap: 44px;
             padding: 34px 38px;
-            margin-top: 52px;
+            margin-top: 62px;
           }
           .tss-comm__act { align-items: flex-end; }
           .tss-comm__title { font-size: 27px; }
@@ -642,7 +688,8 @@ export default async function TemplatesShowcaseSection() {
         }
 
         @media (prefers-reduced-motion: reduce) {
-          .tss-btn, .tss-comm__btn { transition: none; }
+          .tss-btn, .tss-comm__btn, .tss-device, .tss-arrow { transition: none; }
+          .tss-rail { scroll-behavior: auto; }
         }
       `}</style>
     </section>

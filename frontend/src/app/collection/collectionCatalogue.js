@@ -103,6 +103,29 @@ export const ARRIVAL = {
   letter: 'They touch the wax. Both flaps fall open.',
 };
 
+/**
+ * The one claim a picture cannot make, for the template that cannot show it.
+ *
+ * Sealed Letter opens onto the COUPLE'S OWN photograph — full bleed, with
+ * their names across it — and that is the strongest thing it has to say. It is
+ * also the one thing no shot of it can prove: every picture we could publish
+ * would be a stock couple standing in for theirs, which is precisely the
+ * impression this template exists to avoid giving. So the plate shows the
+ * sealed envelope we really do ship and the claim is made in words.
+ *
+ * It lives HERE rather than in the homepage band that prints it, for the same
+ * reason ARRIVAL does: this module is what every surface naming these four
+ * templates already reads, and a sentence about what is inside one of them
+ * belongs beside the sentence about how it opens. The gallery is free to print
+ * it too — the homepage was simply the first surface that needed it.
+ *
+ * A template with no entry has nothing to add, which is the correct state for
+ * the three that open onto photography we supply.
+ */
+export const OWN_PHOTO_NOTE = {
+  letter: 'Sealed Letter opens onto your own photograph — full screen, with your names and your words across it.',
+};
+
 /** The occasion chips, in the order they are offered.
  *
  *  `key` is a real entry in `customEventCategories.js` — the same catalogue

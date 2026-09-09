@@ -298,12 +298,19 @@ describe('every picture and every link is real', () => {
 
   it('adds no new bytes to the landing image budget', () => {
     /* The gallery deliberately reuses the photographs the homepage already
-       ships. templatesShowcase.test.jsx caps this directory at 320KB and it
-       sits at ~297 — there is not room for a second set, and the right
-       answer was never to raise the cap. */
+       ships: there is not room for a second set, and the right answer was
+       never to raise the cap to make room for one.
+
+       The NUMBER is owned by templatesShowcase.test.jsx, which is where the
+       reasoning behind it lives — it moved 320 -> 360 on 2026-09-09 when the
+       homepage gained a hero photograph and four dashboard frames and shed
+       three dead files. This copy has been wrong once already by being a
+       second literal, so keep the two in step or, better, delete this line and
+       trust that one. What THIS case is really about is the assertion below:
+       the gallery must not reach outside the committed set. */
     const dir = path.join(ROOT, 'public/images/landing');
     const total = fs.readdirSync(dir).reduce((n, f) => n + fs.statSync(path.join(dir, f)).size, 0);
-    expect(Math.round(total / 1024)).toBeLessThan(320);
+    expect(Math.round(total / 1024)).toBeLessThan(360);
 
     COLLECTION.forEach((item) => {
       expect(item.art, 'the gallery is pulling art from outside the committed landing set')
@@ -458,8 +465,15 @@ describe('the gallery reads as a gallery', () => {
     const band = read('src/app/components/landing/TemplatesShowcaseSection.js');
     expect(band, 'the band is declaring its own ARRIVAL again')
       .not.toMatch(/^const ARRIVAL = \{/m);
-    expect(band, 'the band should read ARRIVAL from the collection catalogue')
-      .toMatch(/import \{ ARRIVAL \} from ["'][^"']*collectionCatalogue["']/);
+
+    /* It used to import ARRIVAL by name. Since 2026-09-09 it imports the whole
+       of COLLECTION — every item of which carries its own `arrival`, resolved
+       by this module — so the sentences still come from here, and so do the
+       label, the badge and the plate art that the band was also assembling for
+       itself. Either import satisfies the rule this case exists for; what it
+       must never do is stop reading this module. */
+    expect(band, 'the band should take its words from the collection catalogue')
+      .toMatch(/import \{[^}]*(ARRIVAL|COLLECTION)[^}]*\} from ["'][^"']*collectionCatalogue["']/);
   });
 
   it('never types the number of templates into a call to action', () => {

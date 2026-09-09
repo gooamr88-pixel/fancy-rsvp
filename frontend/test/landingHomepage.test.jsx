@@ -11,7 +11,10 @@ vi.mock('next/navigation', () => ({
 }));
 
 import HeroSection from '../src/app/components/landing/HeroSection';
-import HowItWorksSection from '../src/app/components/landing/HowItWorksSection';
+import GuestExperienceSection from '../src/app/components/landing/GuestExperienceSection';
+import SeatingSection from '../src/app/components/landing/SeatingSection';
+import RemindersSection from '../src/app/components/landing/RemindersSection';
+import CheckinSection from '../src/app/components/landing/CheckinSection';
 import CapabilitiesSection from '../src/app/components/landing/CapabilitiesSection';
 import DashboardShowcaseSection from '../src/app/components/landing/DashboardShowcaseSection';
 import FaqCtaSection, { FAQS } from '../src/app/components/landing/FaqCtaSection';
@@ -21,9 +24,10 @@ import ShopRail from '../src/app/components/landing/ShopRail';
 import {
   CAPABILITIES,
   HOMEPAGE_CAPABILITIES,
+  REST_CAPABILITIES,
   REMAINING_CAPABILITY_COUNT,
 } from '../src/app/components/landing/platformCapabilities';
-import { BAND_ORDER, C } from '../src/app/components/landing/landingTokens';
+import { BAND_ORDER, PAGE_INDEX, C } from '../src/app/components/landing/landingTokens';
 
 const ROOT = process.cwd();
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
@@ -59,9 +63,15 @@ const NAVBAR = read('src/app/components/landing/Navbar.js');
 /**
  * Does `/foo` resolve to a real page?
  *
- * Not a path join: Next ROUTE GROUPS are directories in parentheses that do
- * not appear in the URL, so `/register` lives at `(auth)/register/page.js`.
- * Checking `src/app/register/page.js` reports a real route as broken.
+ * Not a path join, for two reasons this checker has been taught the hard way:
+ *
+ * · Next ROUTE GROUPS are directories in parentheses that do not appear in the
+ *   URL, so `/register` lives at `(auth)/register/page.js`. Checking
+ *   `src/app/register/page.js` reports a real route as broken.
+ * · DYNAMIC SEGMENTS are directories in square brackets. `/collection/ring` is
+ *   served by `collection/[key]/page.js`, and without this the first homepage
+ *   link into the collection gallery was reported dead — a checker crying wolf
+ *   over a working link is how a real one gets ignored.
  */
 function routeExists(href) {
   const segments = href.replace(/^\//, '').split('/').filter(Boolean);
@@ -69,9 +79,11 @@ function routeExists(href) {
     if (rest.length === 0) return fs.existsSync(path.join(dir, 'page.js'));
     const [head, ...tail] = rest;
     if (fs.existsSync(path.join(dir, head)) && walk(path.join(dir, head), tail)) return true;
-    return fs.readdirSync(dir, { withFileTypes: true })
-      .filter((e) => e.isDirectory() && /^\(.+\)$/.test(e.name))
-      .some((g) => walk(path.join(dir, g.name), rest));
+    const entries = fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory());
+    // A dynamic segment matches this URL segment; a route group matches none of
+    // them and is descended through with `rest` intact.
+    return entries.filter((e) => /^\[.+\]$/.test(e.name)).some((d) => walk(path.join(dir, d.name), tail))
+      || entries.filter((e) => /^\(.+\)$/.test(e.name)).some((g) => walk(path.join(dir, g.name), rest));
   };
   return walk(path.join(ROOT, 'src/app'), segments);
 }
@@ -108,7 +120,8 @@ describe('the homepage shows the product, not a drawing of it', () => {
   });
 
   it('every product image it names is a real file that is actually shipped', () => {
-    [DashboardShowcaseSection, HeroSection].forEach((Section) => {
+    [DashboardShowcaseSection, HeroSection, GuestExperienceSection,
+      SeatingSection, CheckinSection].forEach((Section) => {
       const { container, unmount } = render(<Section />);
       const imgs = [...container.querySelectorAll('img')];
       expect(imgs.length, 'a product section with no product imagery').toBeGreaterThan(0);
@@ -122,12 +135,23 @@ describe('the homepage shows the product, not a drawing of it', () => {
   });
 
   it('declares dimensions on every image, so nothing shifts as they decode', () => {
-    [HeroSection, DashboardShowcaseSection].forEach((Section) => {
+    [HeroSection, DashboardShowcaseSection, GuestExperienceSection,
+      SeatingSection, CheckinSection].forEach((Section) => {
       const { container, unmount } = render(<Section />);
       [...container.querySelectorAll('img')].forEach((img) => {
         expect(img.getAttribute('width'), 'no width — this will shift the layout').toBeTruthy();
         expect(img.getAttribute('height')).toBeTruthy();
-        expect((img.getAttribute('alt') || '').length, 'alt text is too thin').toBeGreaterThan(30);
+        /* The hero's photograph is the one image on the page with an EMPTY
+           alt, and that is correct rather than lax: it is a blurred backdrop
+           behind an object, it carries no information the headline beside it
+           does not, and a screen reader describing the wallpaper before the
+           headline is noise. Every image that is a picture OF something still
+           has to describe itself. */
+        const alt = img.getAttribute('alt');
+        expect(alt, 'no alt attribute at all').not.toBeNull();
+        if (alt !== '') {
+          expect(alt.length, 'alt text is too thin').toBeGreaterThan(30);
+        }
       });
       unmount();
     });
@@ -136,34 +160,76 @@ describe('the homepage shows the product, not a drawing of it', () => {
   it('can regenerate the product shots it depends on', () => {
     // If the only way to remake these is to remember how, they go stale the
     // first time the dashboard changes.
-    const dump = read('test/shots/landingShots.dump.jsx');
-    expect(dump).toContain('OrganizerOverview');
-    expect(dump).toContain('SeatingMiniMap');
-    expect(dump).toContain('force-device-scale-factor');
+    const shots = read('test/shots/landingShots.dump.jsx');
+    expect(shots).toContain('SeatingMiniMap');
+    expect(shots).toContain('force-device-scale-factor');
+
+    // The four tab frames come from the demo's own screens — see the header
+    // of that file for why they are not in landingShots.
+    const tabs = read('test/shots/landingTabs.dump.jsx');
+    expect(tabs).toContain('DemoDashboardPage');
+    expect(tabs).toContain('force-device-scale-factor');
+
     expect(read('vitest.shots.config.mjs')).toContain("config.test.include = ['test/shots/*.dump.jsx']");
+  });
+
+  it('shows the four tab screens it promises, one image per tab', () => {
+    /* A strip with four labels and three panels is a dead tab: it renders an
+       empty window and looks like a failed download. */
+    const { container, unmount } = render(<DashboardShowcaseSection />);
+    const tabs = container.querySelectorAll('[role="tab"]');
+    const panels = container.querySelectorAll('[role="tabpanel"]');
+    expect(tabs.length).toBeGreaterThanOrEqual(3);
+    expect(panels.length).toBe(tabs.length);
+    expect(container.querySelectorAll('[role="tabpanel"] img').length).toBe(tabs.length);
+
+    // Exactly one panel is visible before hydration, and it is the first.
+    const shown = [...panels].filter((p) => !p.hasAttribute('hidden'));
+    expect(shown.length, 'more than one tab panel is showing at once').toBe(1);
+    expect(shown[0]).toBe(panels[0]);
+    unmount();
   });
 });
 
 describe('the page explains the platform', () => {
-  it('names eight real capabilities, from the same array /features renders', () => {
-    render(<CapabilitiesSection />);
+  it('draws eight real capabilities, from the same array /features renders', () => {
+    const { container, unmount } = render(<CapabilitiesSection />);
     expect(HOMEPAGE_CAPABILITIES.length).toBe(8);
+    // Every node carries its capability's own one-line caption, which is what
+    // makes the diagram legible rather than eight icons and eight nouns.
     HOMEPAGE_CAPABILITIES.forEach((c) => {
-      expect(screen.getByText(c.title), `${c.title} is missing from the homepage`).toBeTruthy();
+      expect(container.textContent, `${c.title} is missing from the diagram`)
+        .toContain(c.short);
     });
+    unmount();
+
     // The /features page must not have re-declared its own copy.
     const features = read('src/app/features/page.js');
     expect(features).toContain('platformCapabilities');
     expect(features, '/features declared its own features array again').not.toMatch(/^const features = \[/m);
   });
 
-  it('names the capabilities that make this more than a form', () => {
-    /* The specific omission this section exists to fix: a visitor could read
-       the entire old front page and not learn that it does seating, runs a
-       door, sends SMS, or lays out Arabic. */
-    render(<CapabilitiesSection />);
+  it('names EVERY capability somewhere on the page, not just the diagram eight', () => {
+    /* The specific omission the capabilities band was created to fix: a
+       visitor could read the entire old front page and not learn that this
+       does seating, runs a door, sends SMS, or lays out Arabic.
+
+       The diagram shows the eight that are STEPS in an event. The five that
+       are not — SMS campaigns and bilingual invitations among them — are
+       printed by name under it rather than hidden behind the link to
+       /features, which is what keeps that fix in place after the 2026-09-09
+       reshuffle changed which eight are in the diagram. */
+    const { container, unmount } = render(<CapabilitiesSection />);
+    CAPABILITIES.forEach((c) => {
+      const named = HOMEPAGE_CAPABILITIES.includes(c)
+        ? container.textContent.includes(c.short)
+        : container.textContent.includes(c.title);
+      expect(named, `${c.title} appears nowhere in the capabilities band`).toBe(true);
+    });
     ['Seating Charts', 'QR Check-In', 'SMS Campaigns', 'Bilingual Invitations']
-      .forEach((t) => expect(screen.getByText(t), `${t} is not on the homepage`).toBeTruthy());
+      .forEach((t) => expect(REST_CAPABILITIES.concat(HOMEPAGE_CAPABILITIES).some((c) => c.title === t),
+        `${t} is not in the registry any more`).toBe(true));
+    unmount();
   });
 
   it('counts the remaining capabilities instead of hardcoding a number', () => {
@@ -175,29 +241,90 @@ describe('the page explains the platform', () => {
       .not.toMatch(/And \d+ more/);
   });
 
-  it('walks the organizer through the whole job in three steps', () => {
-    render(<HowItWorksSection />);
-    expect(screen.getByText(/Build the invitation/)).toBeTruthy();
-    expect(screen.getByText(/watch the replies/)).toBeTruthy();
-    expect(screen.getByText(/run the door/)).toBeTruthy();
+  it('shows the whole job — seat them, remind them, run the door — as screens', () => {
+    /* This replaced a three-step "how it works" list. The steps are not gone,
+       they are the bands: each one now has a picture of the thing it
+       describes and a link into the live demo of it. If a band stops saying
+       what it is for, this fails in the same place the list used to. */
+    const seating = render(<SeatingSection />);
+    expect(screen.getByText(/Seat everyone/)).toBeTruthy();
+    expect(seating.container.querySelector('a[href="/demo/dashboard"]')).toBeTruthy();
+    seating.unmount();
+
+    const reminders = render(<RemindersSection />);
+    expect(screen.getByText(/Remind them before the night begins/)).toBeTruthy();
+    reminders.unmount();
+
+    const door = render(<CheckinSection />);
+    expect(screen.getByText(/Check-in, made elegant/)).toBeTruthy();
+    expect(door.container.querySelector('a[href="/checkin-app"]')).toBeTruthy();
+    door.unmount();
+
+    const guest = render(<GuestExperienceSection />);
+    expect(guest.container.querySelector('a[href="/demo/invitation"]'),
+      'the guest-experience band does not open the demo').toBeTruthy();
+    guest.unmount();
+  });
+
+  it('quotes the reminder schedule the scheduler actually runs', () => {
+    /* The three marks on that band are backend/services/emailScheduler.js. A
+       marketing page naming a time the platform does not send at is worse than
+       one naming none, because somebody will plan an evening around it. This
+       reads the scheduler's own comment block rather than trusting the band.
+
+       The mockup this page was built from drew a PUSH notification and a
+       "custom reminders" toggle. Neither exists — hence this test. */
+    const scheduler = read('../backend/services/emailScheduler.js');
+    ['T-24h', 'T-6h', 'T-2h'].forEach((mark) => {
+      expect(scheduler, `${mark} is no longer a mark in the scheduler`).toContain(mark);
+    });
+
+    const { container, unmount } = render(<RemindersSection />);
+    const text = container.textContent;
+    expect(text).toContain('24 hours before');
+    expect(text).toContain('6 hours before');
+    expect(text).toContain('2 hours before');
+    expect(text, 'the band promises a push notification, which this platform does not send')
+      .not.toMatch(/push notification/i);
+    unmount();
+  });
+
+  it('shows the text message with the compliance footer it is actually sent with', () => {
+    /* smsDispatch appends COMPLIANCE_FOOTER to every outbound body — a CTIA
+       requirement for the toll-free number this platform sends on, charged for
+       in every segment estimate. A screenshot of the message with it cropped
+       off is a picture of a message we do not send. */
+    const dispatch = read('../backend/services/smsDispatch.js');
+    expect(dispatch).toMatch(/Reply STOP to opt out, HELP for help/);
+
+    const { container, unmount } = render(<RemindersSection />);
+    expect(container.textContent).toContain('Reply STOP to opt out, HELP for help');
+    unmount();
   });
 });
 
 describe('the page is not longer than it needs to be', () => {
-  it('renders ten bands, in the declared rhythm', () => {
+  it('renders twelve bands, in the declared rhythm', () => {
     /* BAND_ORDER is the one place the arrangement is stated. If a section is
        added, removed or moved in page.js without updating it, this fails —
        which is the only way "does this page still alternate?" stays a
-       question you answer by reading ten lines. */
+       question you answer by reading twelve lines.
+
+       TEN until 2026-09-09. The four feature bands added there took the page
+       from arguing about the seating chart, the messages and the door to
+       showing them; two bands (how-it-works, statement) were retired to pay
+       for them. See the note on BAND_ORDER. */
     const names = BAND_ORDER.map((b) => b.split(':')[0]);
-    expect(names.length).toBe(10);
+    expect(names.length).toBe(12);
 
     const EXPECTED_COMPONENT = {
       hero: 'HeroSection',
       invitations: 'TemplatesShowcaseSection',
-      statement: 'StatementSection',
-      'how-it-works': 'HowItWorksSection',
+      experience: 'GuestExperienceSection',
       dashboard: 'DashboardShowcaseSection',
+      seating: 'SeatingSection',
+      reminders: 'RemindersSection',
+      checkin: 'CheckinSection',
       capabilities: 'CapabilitiesSection',
       printed: 'PrintedInvitationsSection',
       proof: 'ProofSection',
@@ -245,9 +372,11 @@ describe('the page is not longer than it needs to be', () => {
     const FILE = {
       hero: 'HeroSection',
       invitations: 'TemplatesShowcaseSection',
-      statement: 'StatementSection',
-      'how-it-works': 'HowItWorksSection',
+      experience: 'GuestExperienceSection',
       dashboard: 'DashboardShowcaseSection',
+      seating: 'SeatingSection',
+      reminders: 'RemindersSection',
+      checkin: 'CheckinSection',
       capabilities: 'CapabilitiesSection',
       printed: 'PrintedInvitationsSection',
       proof: 'ProofSection',
@@ -275,6 +404,54 @@ describe('the page is not longer than it needs to be', () => {
         + `backgrounds are: ${named.join(', ') || 'none found'}`,
       ).toBe(true);
     });
+  });
+
+  it('the in-page index points at bands that exist and actually render', () => {
+    /* ── AN ANCHOR IS A LINK NO ROUTE CHECKER CAN SEE ────────────────────
+       routeExists() walks the filesystem, so "#seating" is invisible to it: a
+       chip pointing at a band that was renamed, removed or never given an id
+       scrolls nowhere and fails silently, which on a seventeen-screen phone
+       page is the worst kind of dead link — the reader concludes the section
+       does not exist.
+
+       Three things are pinned. Every entry names a real band in BAND_ORDER;
+       that band's own component carries the matching id="…" on its section;
+       and none of them is a CONDITIONAL band, because an index that offers a
+       tour of something which renders nothing on a fresh install is worse
+       than a shorter index. */
+    const bands = BAND_ORDER.map((b) => b.split(':')[0]);
+    const FILE = {
+      invitations: 'TemplatesShowcaseSection',
+      experience: 'GuestExperienceSection',
+      dashboard: 'DashboardShowcaseSection',
+      seating: 'SeatingSection',
+      reminders: 'RemindersSection',
+      checkin: 'CheckinSection',
+    };
+    const CONDITIONAL = ['printed', 'proof'];
+
+    expect(PAGE_INDEX.length).toBeGreaterThan(3);
+    PAGE_INDEX.forEach(({ id, label }) => {
+      expect(bands, `the index offers "${id}", which is not a band`).toContain(id);
+      expect(CONDITIONAL, `"${id}" renders nothing without data and must not be indexed`)
+        .not.toContain(id);
+      expect(label.length, `"${id}" has no label`).toBeGreaterThan(2);
+
+      const file = FILE[id];
+      expect(file, `no component is mapped for the indexed band "${id}"`).toBeTruthy();
+      const src = read(`src/app/components/landing/${file}.js`);
+      expect(src, `${file} has no id="${id}" for the index to scroll to`)
+        .toContain(`id="${id}"`);
+    });
+
+    /* And it is rendered from the array rather than typed out. The DOM side of
+       this — six chips, in order, with the right hrefs — is asserted in
+       templatesShowcase.test.jsx, which is the file that already has the
+       fetch mock that band needs to render at all. */
+    const band = code(read('src/app/components/landing/TemplatesShowcaseSection.js'));
+    expect(band).toContain('PAGE_INDEX.map');
+    expect(band, 'the index labels are typed into the band instead of read')
+      .not.toContain(PAGE_INDEX[0].label);
   });
 
   it('does not wrap the page in scroll-reveal wrappers', () => {
@@ -385,8 +562,9 @@ describe('the footer', () => {
 
 describe('nothing links into a hole', () => {
   it('every internal href on the page resolves to a real page.js', () => {
-    const sections = [HeroSection, HowItWorksSection, CapabilitiesSection,
-      DashboardShowcaseSection, FaqCtaSection, FooterSection];
+    const sections = [HeroSection, GuestExperienceSection, CapabilitiesSection,
+      DashboardShowcaseSection, SeatingSection, RemindersSection, CheckinSection,
+      FaqCtaSection, FooterSection];
     sections.forEach((Section) => {
       const { container, unmount } = render(<Section />);
       [...container.querySelectorAll('a')]
@@ -475,14 +653,26 @@ describe('the shop band', () => {
   const SHOP_BAND = read('src/app/components/landing/PrintedInvitationsSection.js');
   const RAIL = read('src/app/components/landing/ShopRail.js');
 
-  it('sits above the software explanation, not below it', () => {
-    /* Moved from seventh to third on 2026-08-21 at the owner's direction: the
+  it('sits after the software explanation, and before the closing ask', () => {
+    /* ── THIS BAND HAS MOVED TWICE, AND BOTH MOVES WERE DELIBERATE ────────
+       Seventh → THIRD on 2026-08-21, at the owner's direction: the
        highest-value order on the page was sitting behind four bands of
-       feature copy. It trades places with the statement band, so the
-       light/warm alternation the tests above check is untouched. */
+       feature copy.
+
+       Third → NINTH on 2026-09-09. What sat below it then was four bands of
+       prose; what sits below it now is four bands that SHOW the seating chart,
+       the messages and the door, in the order an event happens. A catalogue of
+       paper cards in the middle of that broke the sentence — and a reader who
+       has just watched the whole product work is a better prospect for a
+       printed order than one who has seen three photographs.
+
+       What this test protects is unchanged: it must never be last-but-one
+       before the footer, where nobody scrolls, and it must never be so early
+       that it interrupts the argument. Between the capabilities diagram and
+       the closing ask is both. */
     const names = BAND_ORDER.map((b) => b.split(':')[0]);
-    expect(names.indexOf('printed')).toBeLessThan(names.indexOf('how-it-works'));
-    expect(names.indexOf('printed')).toBe(names.indexOf('invitations') + 1);
+    expect(names.indexOf('printed')).toBe(names.indexOf('capabilities') + 1);
+    expect(names.indexOf('printed')).toBeLessThan(names.indexOf('faq-cta'));
   });
 
   it('links each piece at a URL that exists', () => {
@@ -593,8 +783,9 @@ describe('the sections that need real data render nothing without it', () => {
 
 describe('the styled-jsx traps this codebase has already paid for', () => {
   const FILES = [
-    'HeroSection.js', 'HowItWorksSection.js', 'CapabilitiesSection.js',
-    'DashboardShowcaseSection.js', 'FaqCtaSection.js', 'FooterSection.js',
+    'HeroSection.js', 'GuestExperienceSection.js', 'CapabilitiesSection.js',
+    'DashboardShowcaseSection.js', 'SeatingSection.js', 'RemindersSection.js',
+    'CheckinSection.js', 'FaqCtaSection.js', 'FooterSection.js',
     'ProofSection.js',
   ];
 
@@ -641,11 +832,18 @@ describe('the styled-jsx traps this codebase has already paid for', () => {
     });
   });
 
-  it('keeps the three no-interaction bands as Server Components', () => {
+  it('keeps the no-interaction bands as Server Components', () => {
     /* They render markup and nothing else. Marking one "use client" to get
        styled-jsx scoping back would ship JavaScript to draw static type — and
-       it is how the first pass of this rebuild failed the build outright. */
-    ['HowItWorksSection.js', 'CapabilitiesSection.js', 'DashboardShowcaseSection.js']
+       it is how the first pass of the 2026-08-19 rebuild failed the build
+       outright.
+
+       DashboardShowcaseSection is on this list even though its band has a tab
+       strip: the strip is a separate client CHILD (DashboardTabs.js), which is
+       the arrangement that keeps the heading, the chrome and every rule of CSS
+       on the server. Same split as PrintedInvitationsSection and ShopRail. */
+    ['GuestExperienceSection.js', 'CapabilitiesSection.js', 'DashboardShowcaseSection.js',
+      'SeatingSection.js', 'RemindersSection.js', 'CheckinSection.js']
       .forEach((f) => {
         const src = read(`src/app/components/landing/${f}`);
         expect(src.trimStart().startsWith("'use client'") || src.trimStart().startsWith('"use client"'),

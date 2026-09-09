@@ -863,18 +863,32 @@ describe('Sealed Letter is wired into everything a template needs', () => {
   });
 
   it('the landing band shows it, with its own arrival line', () => {
-    const band = read('src/app/components/landing/TemplatesShowcaseSection.js');
+    /* ── ALL THREE OF THESE MOVED ON 2026-09-09, AND NONE WAS LOST ────────
+       The homepage band stopped assembling its own view of the four templates
+       and now renders collection/collectionCatalogue.js — the module that
+       already fed the gallery, the detail pages and the sitemap. So the three
+       things this case protects are asserted where they now live.
+
+       The stand-in ILLUSTRATION is the one thing genuinely gone. The plates
+       became 206px rail cards, and a 64px drawing of a couple beside a
+       disclaimer does not fit on one — nor did it need to. The sentence is
+       the whole of the value and it is still on the page. */
+    const catalogue = read('src/app/collection/collectionCatalogue.js');
+
     /* The SEALED envelope, not an opened page — this is the one template
        whose opened page is the couple's own photograph, and any hero shot
        here would be a stock couple standing in for theirs. */
-    expect(band).toContain('/images/landing/cover-letter.webp');
-    expect(band, 'the plate never says the photograph is the organizer\'s')
+    expect(catalogue).toContain('/images/landing/cover-letter.webp');
+    expect(catalogue, 'nothing says the photograph is the organizer\'s')
       .toMatch(/your own photograph/i);
-    expect(band, 'the "your photo here" inset is gone')
-      .toContain('/images/landing/couple-illustration.webp');
-    // The band renders ARRIVAL[key]; a template missing from that map prints
-    // an empty line under its photograph rather than erroring.
-    const arrivals = band.match(/const ARRIVAL = \{([\s\S]*?)\n\};/)?.[1] || '';
+
+    const band = read('src/app/components/landing/TemplatesShowcaseSection.js');
+    expect(band, 'the band no longer prints the "your own photograph" note')
+      .toContain('OWN_PHOTO_NOTE');
+
+    // The rail renders ARRIVAL[key] through the catalogue; a template missing
+    // from that map prints an empty line under its photograph.
+    const arrivals = catalogue.match(/export const ARRIVAL = \{([\s\S]*?)\n\};/)?.[1] || '';
     expect(arrivals).toContain('letter:');
   });
 });

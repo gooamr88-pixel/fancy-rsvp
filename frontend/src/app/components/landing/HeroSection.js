@@ -4,100 +4,98 @@ import React from "react";
 import Link from "next/link";
 import { useAuth } from "../../hooks/useAuth";
 import { useLandingStats, formatStatValue } from "../../utils/useLandingStats";
-import { C, T, SHADOW, BEZEL } from "./landingTokens";
+import { C, T, SHADOW, BEZEL, ON_PHOTO } from "./landingTokens";
 
 /* ═══════════════════════════════════════════════════════════════════════════
    THE HERO.
 
-   ── The 2026-08-20 pass ───────────────────────────────────────────────────
+   ── The 2026-09-09 pass: the hero is a photograph now ─────────────────────
 
-   The previous hero put a pale admin dashboard screenshot on a flat ground
-   with a phone overlapping it. Three things were wrong with that picture, and
-   all three are why it read as a template:
+   It was warm paper with two screenshots standing on it, and it was correct.
+   What it was not was ATMOSPHERIC — the first screen of a business that sells
+   an evening looked like the first screen of a business that sells software,
+   and the invitation had to carry the whole mood from inside a bezel 36% of
+   the width of the page.
 
-   1. THE ART HAD NO EDGES. A raw crop bled into the background, so it looked
-      like a screengrab someone had pasted in rather than a thing you could
-      pick up. Both invitations now sit in a dark bezel with a long shadow and
-      a contact shadow on the ground beneath them — they are OBJECTS.
+   Three things changed, and the first is the only one that matters:
 
-   2. IT LED WITH THE DASHBOARD. The least aspirational asset we own was the
-      first thing a visitor saw, on the one screen where the product has to
-      look desirable. The dashboard now appears in its own band further down,
-      where "what do I get" is the question actually being asked. The hero
-      shows what the GUEST gets.
+   1. THE BAND IS A PHOTOGRAPH. /images/landing/hero-bg.webp is our own Door of
+      Joy plate (public/templates/bab/hero-poster.jpg — licensed, already
+      shipped, already used by that template) cropped and blurred to a depth of
+      field. Blurred on purpose and not for weight: the invitation is the only
+      thing in this frame allowed to be sharp, and a photograph that competes
+      with the object standing in front of it is a busy hero rather than a
+      composed one. It is 30KB, which is less than the two screenshots it
+      replaced.
 
-   3. THE HEADLINE WAS SET IN A CAPITALS-ONLY FACE. `--font-serif` is Aboreto.
-      A nine-word sentence in it is a nine-word sentence in capitals, at a
-      weight the font does not ship. See landingTokens.js — the display face
-      is now Cormorant Garamond, which has a lowercase and an italic.
+   2. ONE INVITATION, NOT TWO. The sealed-and-opened pair said what the product
+      does in one glance, and it is still said — one band further down, where
+      the whole section is about what opening one feels like. Here there is a
+      single object under a single light, which is what a photograph of
+      something for sale looks like.
 
-   The two invitations are the SAME invitation, sealed and open, which says
-   what the product does in one glance and needs no caption to explain — though
-   it gets one anyway, because naming the template is worth a line.
+   3. THE NUMBERS MOVED TO THE END. Three statistics under the fold's buttons
+      is a lot of arithmetic for somebody who has been on the site for four
+      seconds. One line here; the full set closes the page, next to the same
+      two buttons, where a reader who has read everything is actually weighing
+      it up.
 
-   MOBILE FIRST. The base rules here are the phone; the only media query steps
-   UP at 768. The previous version was written at desktop with a phone override
-   bolted on, and every button label wrapped onto two lines at 390px.
+   MOBILE FIRST. The base rules are the phone; the only media query steps UP at
+   768. The order on a phone is claim, object, action — the buttons sit under
+   the invitation because that is the order the eye travels. At desktop the
+   copy and the action share the left column and the invitation takes the
+   right, which is why they are three separate blocks in the markup.
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/** Both are real screenshots of the shipping Swan Lake template, produced by
- *  test/shots/landingShots.dump.jsx — so a redesign of the template cannot
+/** Ours, both of them.
+ *
+ *  `photo` is the licensed Door of Joy artwork, blurred (see the header).
+ *  `sealed` is a real screenshot of the shipping Swan Lake template, produced
+ *  by test/shots/templateShots.dump.jsx — so a redesign of the template cannot
  *  leave a stale picture on the front page. */
 const ART = {
+  photo: "/images/landing/hero-bg.webp",
   sealed: "/images/landing/cover-swans.webp",
-  opened: "/images/landing/hero-swans.webp",
 };
 
 function TrustLine() {
   const { stats } = useLandingStats();
+  const first = stats[0];
+  if (!first) return null;
 
-  /* A GRID of three equal tracks, not a wrapping flex row. The old flex row
-     wrapped 2 + 1 at 390px and left "99.9% uptime" orphaned on its own line,
-     which reads as a mistake rather than as a third statistic. Three equal
-     tracks cannot do that at any width. */
+  /* ONE STATISTIC, in a sentence, rather than three in a grid.
+     The grid moved to the closing band. Which one is shown is not hardcoded:
+     it is whichever the backend returns first, formatted by the same helper
+     the rest of the site uses, so an admin reordering them in
+     super_admin_config.landing_stats changes this line too. */
   return (
-    <ul className="hero-trust">
-      {stats.map((s) => (
-        <li key={s.label}>
-          <strong>{formatStatValue(s)}</strong>
-          <span>{s.label}</span>
-        </li>
-      ))}
-    </ul>
+    <p className="hero-trust">
+      <span className="hero-trust__n">{formatStatValue(first)}</span>
+      <span className="hero-trust__label">{first.label.toLowerCase()} worldwide</span>
+    </p>
   );
 }
 
 /**
- * The invitation, sealed and open.
+ * The invitation, sealed, standing in the photograph.
  *
- * `width`/`height` are declared on both images so the box reserves its height
- * before either file arrives. Without it the headline jumps on load, and the
- * hero is the one place on the site where that is guaranteed to be noticed.
+ * `width`/`height` are declared so the box reserves its height before the file
+ * arrives. Without it the headline jumps on load, and the hero is the one
+ * place on the site where that is guaranteed to be noticed.
  */
 function HeroArt() {
   return (
     <figure className="hero-art">
       <div className="hero-art__row">
-        {/* The ground the objects stand on. Without a contact shadow two
-            floating rectangles read as stickers. */}
+        {/* The ground the object stands on. Without a contact shadow a
+            floating rectangle reads as a sticker. */}
         <span aria-hidden="true" className="hero-art__ground" />
 
-        <span className="hero-art__obj hero-art__obj--sealed">
+        <span className="hero-art__obj">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={ART.sealed}
-            alt="A Fancy RSVP invitation before it is opened: an olive envelope closed with an ivory wax seal."
-            width={468}
-            height={1013}
-            fetchPriority="high"
-          />
-        </span>
-
-        <span className="hero-art__obj hero-art__obj--opened">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={ART.opened}
-            alt="The same invitation open on a phone, showing the couple's names, the date and a button to save the invitation."
+            alt="A Fancy RSVP invitation before it is opened: an olive envelope closed with an ivory wax seal, the couple's names beneath it."
             width={468}
             height={1013}
             fetchPriority="high"
@@ -105,7 +103,7 @@ function HeroArt() {
         </span>
       </div>
 
-      <figcaption>Swan Lake — sealed, and opened</figcaption>
+      <figcaption>Swan Lake — sealed, on a guest&rsquo;s phone</figcaption>
     </figure>
   );
 }
@@ -116,14 +114,22 @@ export default function HeroSection() {
 
   return (
     <section id="hero" className="hero">
-      {/* The warm light behind the objects. Decorative, so it is hidden from
-          assistive tech and sits under everything. */}
-      <span aria-hidden="true" className="hero__glow" />
+      {/* THE PHOTOGRAPH, as an <img> rather than a CSS background.
+          A background-image cannot carry fetchPriority, cannot be preloaded by
+          the browser's scanner, and has no alt to suppress — so the one image
+          on the page that decides the LCP would be the one the browser finds
+          last. It is decorative, so the alt is empty and the figure is hidden
+          from assistive tech. */}
+      <div className="hero__photo" aria-hidden="true">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={ART.photo} alt="" width={1400} height={900} fetchPriority="high" />
+        <span className="hero__scrim" />
+      </div>
 
       <div className="hero-grid fx-container fx-container--5xl fx-gutter">
         <div className="hero-copy">
           <span className="hero-eyebrow">
-            Invitations · RSVPs · Seating
+            More than an invitation
             <span aria-hidden="true" className="hero-eyebrow__rule" />
           </span>
 
@@ -134,24 +140,32 @@ export default function HeroSection() {
             Your guests don&rsquo;t get a link. They get an <em>arrival</em>.
           </h1>
 
-          {/* NAMES THE WHOLE PRODUCT, not just the picture above it. The
+          {/* NAMES THE WHOLE PRODUCT, not just the picture beside it. The
               headline sells the arrival, which is the right thing to sell
               first — but a reader who stops here should already know this is
-              not only an invitation. Replies, meals, seating and the door,
-              in that order, because that is the order the work happens in. */}
+              not only an invitation. Replies, meals, seating and the door, in
+              that order, because that is the order the work happens in. */}
+          {/* NAMES THE WHOLE PRODUCT IN ONE LINE, and it is one line on
+              purpose. This ran to four lines at 390px, which — under a
+              three-line headline and above a photograph of a phone — put the
+              primary button 880px down a 844px screen. Every word that went is
+              said again, with a picture, in the bands below. */}
           <p className="hero-sub">
-            Every invitation opens on film. Behind it sits the whole event —
-            the replies, the meal counts, the seating chart, and the scanner at
-            the door.
+            It opens on film. Behind it sits the whole event — the replies, the
+            meals, the seating chart and the door.
           </p>
+        </div>
 
-          {/* ── TWO DOORS, AND THE ORDER IS THE WHOLE FUNNEL ──────────────
-              The demo (below) proves the product in a minute. It does not
-              create a reason to stay: a visitor who finishes it has admired
-              something. A visitor who spends an evening putting their own
-              guest list, their own invitation and their own seating chart
-              into Fancy has moved in, and a week later the cost of leaving is
-              their own work rather than our argument.
+        <HeroArt />
+
+        <div className="hero-act">
+          {/* ── TWO DOORS, AND THE ORDER IS THE WHOLE FUNNEL ────────────────
+              The demo proves the product in a minute. It does not create a
+              reason to stay: a visitor who finishes it has admired something.
+              A visitor who spends an evening putting their own guest list,
+              their own invitation and their own seating chart into Fancy has
+              moved in, and a week later the cost of leaving is their own work
+              rather than our argument.
 
               So the trial leads and the demo follows — for the visitor who is
               not ready to hand over an email address yet, which is a real and
@@ -167,26 +181,28 @@ export default function HeroSection() {
           <div className="hero-buttons">
             {signedIn ? (
               <>
-                <Link href="/dashboard" className="hero-btn hero-btn--ink" id="hero-cta-get-started">
+                <Link href="/dashboard" className="hero-btn hero-btn--gold" id="hero-cta-get-started">
                   Go to dashboard
                 </Link>
                 <Link href="/demo/invitation" className="hero-btn hero-btn--ghost" id="hero-cta-demo">
-                  Open the invitation
+                  <span aria-hidden="true" className="hero-btn__play" />
+                  Explore a live invitation
                 </Link>
               </>
             ) : (
               <>
-                <Link href="/register" className="hero-btn hero-btn--ink" id="hero-cta-get-started">
+                <Link href="/register" className="hero-btn hero-btn--gold" id="hero-cta-get-started">
                   {/* Split so the phone can break the line between the action
                       and the price instead of shrinking the whole label —
                       "CREATE YOUR EVENT — FREE FOR 7 DAYS" at 0.2em tracking
-                      does not fit 280px on one line, and `white-space: nowrap`
-                      on .hero-btn means it would not wrap, it would overflow. */}
+                      does not fit 280px on one line, and nowrap on .hero-btn
+                      means it would not wrap, it would overflow. */}
                   <span className="hero-btn__do">Create your event</span>
                   <span className="hero-btn__price">Free for 7 days</span>
                 </Link>
                 <Link href="/demo/invitation" className="hero-btn hero-btn--ghost" id="hero-cta-demo">
-                  Open the invitation
+                  <span aria-hidden="true" className="hero-btn__play" />
+                  Explore a live invitation
                 </Link>
               </>
             )}
@@ -198,8 +214,6 @@ export default function HeroSection() {
 
           <TrustLine />
         </div>
-
-        <HeroArt />
       </div>
 
       {/* ONE PLAIN STYLE ELEMENT, for the whole component.
@@ -222,30 +236,58 @@ export default function HeroSection() {
       <style>{`
         .hero {
           position: relative;
+          isolation: isolate;
           overflow: hidden;
+          /* The band's declared tone. Nothing sees it once the photograph has
+             decoded — it is what the first paint and a failed image show, and
+             a hero that flashes white before a dark picture is worse than one
+             that never flashes at all. */
           background: ${C.paper};
-          padding: 62px 0 76px;
+          padding: 34px 0 48px;
         }
-        .hero__glow {
+
+        /* ── the photograph ─────────────────────────────────────────────── */
+        .hero__photo {
           position: absolute;
-          top: 38%;
-          left: 50%;
-          transform: translateX(-50%);
-          width: 160%;
-          height: 56%;
-          background: radial-gradient(ellipse at 50% 50%,
-            rgba(169, 138, 78, 0.17), rgba(169, 138, 78, 0.05) 46%, transparent 72%);
+          inset: 0;
+          z-index: 0;
           pointer-events: none;
+          background: #241C12;
         }
+        .hero__photo img {
+          display: block;
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          /* On a phone the frame is portrait and the crop takes the middle of
+             a landscape file: 62% keeps the lit archway behind the invitation
+             rather than the paving at the bottom of it. */
+          object-position: 50% 62%;
+        }
+        .hero__scrim {
+          position: absolute;
+          inset: 0;
+          /* Three stops, not one flat wash. A single 62% wash over the whole
+             frame kills the light that is the reason for using this picture;
+             this leaves the middle bright and puts the weight where the type
+             actually sits, top and bottom. */
+          background:
+            linear-gradient(180deg,
+              ${C.scrimEdge} 0%,
+              ${C.scrim} 26%,
+              rgba(24, 19, 12, 0.44) 52%,
+              ${C.scrimEdge} 100%);
+        }
+
         .hero-grid {
           position: relative;
           z-index: 2;
           display: flex;
           flex-direction: column;
-          gap: 52px;
+          gap: 24px;
         }
 
-        /* ── the claim ─────────────────────────────────────────────────── */
+        /* ── the claim ──────────────────────────────────────────────────── */
         .hero-eyebrow {
           display: inline-flex;
           align-items: center;
@@ -254,8 +296,8 @@ export default function HeroSection() {
           font-size: 10px;
           letter-spacing: 0.30em;
           text-transform: uppercase;
-          color: ${C.goldInk};
-          /* A two-word label must never wrap onto a second line. */
+          color: ${ON_PHOTO.gold};
+          /* A three-word label must never wrap onto a second line. */
           white-space: nowrap;
         }
         .hero-eyebrow__rule {
@@ -263,8 +305,8 @@ export default function HeroSection() {
           flex: none;
           width: 28px;
           height: 1px;
-          background: ${C.gold};
-          opacity: 0.55;
+          background: ${ON_PHOTO.gold};
+          opacity: 0.6;
         }
         .hero-headline {
           font-family: ${T.display};
@@ -272,41 +314,99 @@ export default function HeroSection() {
           font-size: 47px;
           line-height: 1.02;
           letter-spacing: -0.02em;
-          color: ${C.ink};
+          color: ${ON_PHOTO.title};
           margin: 18px 0 0;
+          /* Type on a photograph needs a shadow the eye never notices and the
+             contrast meter does. Two stops: a tight one for the edge and a
+             wide one for the ground under the counters. */
+          text-shadow: 0 1px 2px rgba(12, 9, 5, 0.45), 0 14px 40px rgba(12, 9, 5, 0.35);
         }
         .hero-headline em {
           font-style: italic;
-          color: ${C.gold};
+          color: ${ON_PHOTO.gold};
         }
         .hero-sub {
           font-size: 15.5px;
           font-weight: 300;
-          line-height: 1.85;
-          color: ${C.inkSoft};
+          line-height: 1.8;
+          color: ${ON_PHOTO.body};
           margin: 14px 0 0;
           max-width: 46ch;
+          text-shadow: 0 1px 3px rgba(12, 9, 5, 0.5);
         }
 
-        /* ── buttons ───────────────────────────────────────────────────────
-           Full width and stacked on a phone, and "nowrap" so a label can never
+        /* ── the object ─────────────────────────────────────────────────── */
+        .hero-art { margin: 0; }
+        .hero-art__row {
+          position: relative;
+          display: flex;
+          justify-content: center;
+          align-items: flex-end;
+        }
+        .hero-art__ground {
+          position: absolute;
+          left: 18%;
+          right: 18%;
+          bottom: -12px;
+          height: 30px;
+          background: radial-gradient(ellipse at 50% 50%, rgba(10, 8, 5, 0.5), transparent 70%);
+          filter: blur(8px);
+          pointer-events: none;
+        }
+        /* 214px, not 260. The invitation is 468x1013, so every 10px of width
+           here is 22px of hero height — and this is the band whose height
+           decides whether the primary button is on the first screen of a
+           390x844 phone. At 214 the wax seal and the couple's names are both
+           still legible, which is the whole job of the object. */
+        .hero-art__obj {
+          position: relative;
+          display: block;
+          width: 55%;
+          max-width: 214px;
+          border-radius: 24px;
+          padding: 5px;
+          background: ${BEZEL};
+          box-shadow: ${SHADOW.device};
+        }
+        .hero-art__obj img {
+          display: block;
+          width: 100%;
+          height: auto;
+          border-radius: 19px;
+        }
+        /* BODY, not muted. This caption sits over the LIT middle of the
+           photograph on a phone, where the scrim is at its lightest stop —
+           the one place on this band where the weakest text colour would be
+           reading against sunlight. See ON_PHOTO on why that is a margin
+           rather than a measured ratio. */
+        .hero-art figcaption {
+          margin-top: 20px;
+          text-align: center;
+          font-size: 9.5px;
+          letter-spacing: 0.2em;
+          text-transform: uppercase;
+          color: ${ON_PHOTO.body};
+          text-shadow: 0 1px 3px rgba(12, 9, 5, 0.55);
+        }
+
+        /* ── buttons ────────────────────────────────────────────────────────
+           Full width and stacked on a phone, and nowrap so a label can never
            break across two lines. Two side-by-side buttons with 0.2em tracking
-           do not fit in 342px, and the previous version silently wrapped both
-           of them.
+           do not fit in 342px, and an earlier version silently wrapped both.
 
            NOTE the quotes above: this whole block is a template literal, so a
            backtick anywhere inside it — including inside a CSS comment —
-           terminates the string and produces a parse error, not a style bug. */
+           terminates the string and produces a parse error. */
         .hero-buttons {
           display: flex;
           flex-direction: column;
           gap: 10px;
-          margin-top: 30px;
         }
         .hero-btn {
           display: flex;
           align-items: center;
           justify-content: center;
+          gap: 10px;
           min-height: 56px;
           font-family: ${T.body};
           font-size: 11px;
@@ -329,164 +429,124 @@ export default function HeroSection() {
           font-size: 9.5px;
           font-weight: 500;
           letter-spacing: 0.16em;
-          opacity: 0.7;
+          opacity: 0.72;
         }
-        .hero-btn--ink {
-          background: ${C.ink};
-          color: ${C.paper};
-          border: 1px solid ${C.ink};
+        /* INK ON GOLD, not ivory on ink. The band behind it is already dark,
+           and a near-black button on a dark photograph is a hole rather than a
+           call to action. */
+        .hero-btn--gold {
           flex-direction: column;
           text-align: center;
-          padding-top: 10px;
-          padding-bottom: 10px;
+          padding: 10px 26px;
+          background: ${ON_PHOTO.gold};
+          color: #221A0C;
+          border: 1px solid ${ON_PHOTO.gold};
         }
-        .hero-btn--ink:hover { background: transparent; color: ${C.ink}; }
+        .hero-btn--gold:hover { background: ${C.ivory}; border-color: ${C.ivory}; }
         .hero-btn--ghost {
-          background: transparent;
-          color: ${C.ink};
-          border: 1px solid ${C.border};
+          padding: 0 22px;
+          background: rgba(252, 249, 240, 0.06);
+          color: ${ON_PHOTO.title};
+          border: 1px solid ${ON_PHOTO.hairline};
+          /* The glass panel behind the ghost button is what stops it vanishing
+             over the lit part of the photograph. */
+          backdrop-filter: blur(3px);
         }
-        .hero-btn--ghost:hover { background: ${C.ink}; border-color: ${C.ink}; color: ${C.paper}; }
+        .hero-btn--ghost:hover {
+          background: rgba(252, 249, 240, 0.16);
+          border-color: ${ON_PHOTO.body};
+        }
+        /* A play mark drawn in CSS rather than shipped as an icon: it is three
+           borders, and an SVG for a triangle is a request for a triangle. */
+        .hero-btn__play {
+          display: block;
+          flex: none;
+          width: 0;
+          height: 0;
+          border-style: solid;
+          border-width: 4.5px 0 4.5px 7px;
+          border-color: transparent transparent transparent currentColor;
+        }
 
         .hero-reassure {
           font-size: 11.5px;
           line-height: 1.7;
-          color: ${C.inkSoft};
-          opacity: 0.75;
-          margin: 18px 0 0;
+          color: ${ON_PHOTO.body};
+          margin: 16px 0 0;
+          text-shadow: 0 1px 3px rgba(12, 9, 5, 0.5);
         }
 
-        /* ── the numbers ───────────────────────────────────────────────── */
+        /* ── the one number ─────────────────────────────────────────────── */
         .hero-trust {
-          display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          margin: 32px 0 0;
-          padding: 0;
-          list-style: none;
-          border-top: 1px solid ${C.border};
+          display: flex;
+          align-items: baseline;
+          flex-wrap: wrap;
+          gap: 0 10px;
+          margin: 20px 0 0;
+          padding-top: 18px;
+          border-top: 1px solid ${ON_PHOTO.hairline};
         }
-        .hero-trust li {
-          padding: 18px 10px 0 0;
-          min-width: 0;
-        }
-        .hero-trust li + li {
-          border-left: 1px solid ${C.border};
-          padding-left: 14px;
-        }
-        .hero-trust strong {
-          display: block;
+        .hero-trust__n {
           font-family: ${T.display};
-          /* FLUID, and nowrap. Three equal tracks inside a 320px viewport are
-             about 93px each, and "50,000+" set at a flat 28px is wider than
-             that — so it wrapped to "50,00 / 0+", which reads as a different
-             number rather than as a tight fit. A number may shrink; it may
-             never break. */
-          font-size: clamp(20px, 7.2vw, 28px);
-          white-space: nowrap;
+          font-size: 26px;
           font-weight: 400;
           line-height: 1;
           letter-spacing: -0.01em;
-          color: ${C.ink};
+          color: ${ON_PHOTO.title};
+          /* A number may shrink; it may never break. */
+          white-space: nowrap;
         }
-        .hero-trust span {
-          display: block;
-          margin-top: 8px;
-          font-size: 9px;
-          letter-spacing: 0.16em;
-          text-transform: uppercase;
-          line-height: 1.5;
-          color: ${C.inkSoft};
-          opacity: 0.8;
-        }
-
-        /* ── the objects ───────────────────────────────────────────────── */
-        .hero-art { margin: 0; }
-        .hero-art__row {
-          position: relative;
-          display: flex;
-          justify-content: center;
-          align-items: flex-end;
-          gap: 16px;
-        }
-        .hero-art__ground {
-          position: absolute;
-          left: 6%;
-          right: 6%;
-          bottom: -10px;
-          height: 26px;
-          background: radial-gradient(ellipse at 50% 50%, rgba(25, 24, 21, 0.22), transparent 70%);
-          filter: blur(6px);
-          pointer-events: none;
-        }
-        .hero-art__obj {
-          display: block;
-          border-radius: 22px;
-          padding: 5px;
-          background: ${BEZEL};
-          box-shadow: ${SHADOW.device};
-        }
-        .hero-art__obj img {
-          display: block;
-          width: 100%;
-          height: auto;
-          border-radius: 17px;
-        }
-        .hero-art__obj--sealed {
-          position: relative;
-          z-index: 1;
-          width: 36%;
-          transform: rotate(-3.5deg) translateY(-16px);
-        }
-        .hero-art__obj--opened {
-          position: relative;
-          z-index: 2;
-          width: 55%;
-        }
-        .hero-art figcaption {
-          margin-top: 22px;
-          text-align: center;
+        .hero-trust__label {
           font-size: 10px;
           letter-spacing: 0.18em;
           text-transform: uppercase;
-          color: ${C.inkSoft};
-          opacity: 0.72;
+          color: ${ON_PHOTO.body};
+          text-shadow: 0 1px 3px rgba(12, 9, 5, 0.5);
         }
 
-        /* ── 768 and up ────────────────────────────────────────────────── */
+        /* ── 768 and up ─────────────────────────────────────────────────── */
         @media (min-width: 768px) {
-          .hero { padding: 128px 0; }
-          .hero__glow {
-            top: -20%;
-            left: auto;
-            right: -6%;
-            transform: none;
-            width: 66%;
-            height: 124%;
+          .hero { padding: 96px 0 104px; }
+          .hero__photo img { object-position: 50% 55%; }
+          .hero__scrim {
+            background:
+              linear-gradient(100deg,
+                ${C.scrimEdge} 0%,
+                ${C.scrim} 46%,
+                rgba(24, 19, 12, 0.34) 100%),
+              linear-gradient(180deg, rgba(16, 13, 9, 0.5), transparent 30%);
           }
+
+          /* Copy and action share the left column; the invitation takes the
+             right and spans both rows. Three blocks in the markup rather than
+             two is what buys this without a second copy of anything. */
           .hero-grid {
             display: grid;
-            grid-template-columns: minmax(0, 1.02fr) minmax(0, 0.98fr);
-            gap: 80px;
-            align-items: center;
+            grid-template-columns: minmax(0, 1.04fr) minmax(0, 0.96fr);
+            grid-template-rows: auto auto;
+            column-gap: 72px;
+            row-gap: 34px;
+            align-items: start;
           }
+          .hero-copy { grid-column: 1; grid-row: 1; }
+          .hero-act { grid-column: 1; grid-row: 2; }
+          .hero-art {
+            grid-column: 2;
+            grid-row: 1 / span 2;
+            align-self: center;
+          }
+
           .hero-eyebrow { font-size: 11px; letter-spacing: 0.38em; gap: 16px; }
           .hero-eyebrow__rule { width: 44px; }
-          .hero-headline { font-size: 78px; margin-top: 24px; max-width: 12.5ch; }
-          .hero-sub { font-size: 18px; margin-top: 18px; }
-          .hero-buttons { flex-direction: row; gap: 14px; margin-top: 36px; }
-          .hero-btn { min-height: 60px; padding: 0 40px; }
-          .hero-trust { margin-top: 40px; max-width: 530px; }
-          .hero-trust li { padding: 20px 18px 0 0; }
-          .hero-trust li + li { padding-left: 22px; }
-          .hero-trust strong { font-size: clamp(28px, 2.6vw, 34px); }
-          .hero-trust span { font-size: 9.5px; }
-          .hero-art__row { gap: 26px; }
+          .hero-headline { font-size: 74px; margin-top: 24px; max-width: 12.5ch; }
+          .hero-sub { font-size: 18px; margin-top: 20px; }
+          .hero-buttons { flex-direction: row; gap: 14px; }
+          .hero-btn--ghost { padding: 0 34px; }
+          .hero-art__obj { width: 74%; max-width: 320px; }
           .hero-art__ground { bottom: -16px; height: 40px; }
-          .hero-art__obj { border-radius: 30px; padding: 7px; }
-          .hero-art__obj img { border-radius: 24px; }
-          .hero-art__obj--sealed { width: 38%; transform: rotate(-3.5deg) translateY(-34px); }
-          .hero-art__obj--opened { width: 58%; }
-          .hero-art figcaption { margin-top: 30px; font-size: 10.5px; }
+          .hero-art figcaption { margin-top: 26px; font-size: 10px; }
+          .hero-trust { margin-top: 26px; }
+          .hero-trust__n { font-size: 30px; }
         }
 
         @media (prefers-reduced-motion: reduce) {

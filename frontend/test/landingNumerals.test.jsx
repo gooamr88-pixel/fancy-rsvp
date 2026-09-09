@@ -19,18 +19,26 @@ const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
    fully populated one — the kind of defect that never shows up in the
    environment it was built in.
 
-   So the numerals now run I..V across exactly the five sections that always
-   render. This test pins both halves of that: the sequence is complete, and a
-   conditional section never joins it.
+   So the numerals run across exactly the sections that always render — I..V
+   until 2026-09-09, I..VIII since the four feature bands were added. This test
+   pins both halves of that: the sequence is complete, and a conditional
+   section never joins it.
+
+   The hero carries no numeral, and that is not an omission: a sequence that
+   starts before the reader has been told what they are looking at is counting
+   for its own sake. I is the first thing being SHOWN.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /** In render order — see BAND_ORDER and page.js. */
 const NUMBERED = [
   ['TemplatesShowcaseSection.js', 'tss-secnum', 'I'],
-  ['HowItWorksSection.js', 'hiw-numeral', 'II'],
+  ['GuestExperienceSection.js', 'ge-numeral', 'II'],
   ['DashboardShowcaseSection.js', 'dash-numeral', 'III'],
-  ['CapabilitiesSection.js', 'cap-numeral', 'IV'],
-  ['FaqCtaSection.js', 'fc-numeral', 'V'],
+  ['SeatingSection.js', 'seat-numeral', 'IV'],
+  ['RemindersSection.js', 'rem-numeral', 'V'],
+  ['CheckinSection.js', 'door-numeral', 'VI'],
+  ['CapabilitiesSection.js', 'cap-numeral', 'VII'],
+  ['FaqCtaSection.js', 'fc-numeral', 'VIII'],
 ];
 
 /** Sections that render null without data, and so must never be numbered. */
@@ -39,14 +47,14 @@ const CONDITIONAL = ['PrintedInvitationsSection.js', 'ProofSection.js'];
 const src = (file) => read(`src/app/components/landing/${file}`);
 
 describe('landing section numerals', () => {
-  it('run I..V with no gaps, in render order', () => {
+  it('run in sequence with no gaps, in render order', () => {
     NUMBERED.forEach(([file, cls, numeral]) => {
       const needle = `className="${cls}" aria-hidden="true">${numeral}<`;
       expect(src(file), `${file} should carry numeral ${numeral}`).toContain(needle);
     });
   });
 
-  it('numbers exactly five sections', () => {
+  it('numbers exactly the sections that always render', () => {
     const all = fs.readdirSync(path.join(ROOT, 'src/app/components/landing'))
       .filter((f) => f.endsWith('Section.js'));
     const numbered = all.filter((f) => /aria-hidden="true">[IVX]+</.test(src(f)));

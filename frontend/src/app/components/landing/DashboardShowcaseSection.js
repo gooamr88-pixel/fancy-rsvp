@@ -1,169 +1,143 @@
 import React from "react";
-import { C, T, SHADOW, BEZEL } from "./landingTokens";
-import { CHECKIN_SCREENS } from "../../utils/checkinApp";
+import Link from "next/link";
+import { C, T, SHADOW } from "./landingTokens";
+import DashboardTabs from "./DashboardTabs";
 
 /* ═══════════════════════════════════════════════════════════════════════════
    YOUR SIDE OF IT.
 
    Every image here is a photograph of the real component, produced by
-   test/shots/landingShots.dump.jsx from the actual dashboard code with mocked
-   data — so a redesign of the dashboard cannot leave a stale picture here.
+   test/shots/landingTabs.dump.jsx from the demo's own fixtures — the same
+   screens /demo/dashboard mounts. So a redesign of the dashboard cannot leave
+   a stale picture here, and the four frames are all of ONE application rather
+   than four screenshots taken from different places.
 
-   ── 2026-08-20: the screenshots are now PRESENTED, not just placed ────────
+   ── The 2026-09-09 pass ──────────────────────────────────────────────────
 
-   The pictures were right and the presentation was wrong. Three raw crops,
-   each with a 1px border, stacked down the band. That reads as screengrabs
-   somebody pasted in — which is exactly what they were.
+   This band used to carry three objects: the dashboard in a browser window,
+   the seating plan on a plate overlapping it, and the door app in a tablet.
+   Two of those have their own bands now, which is what this whole pass is
+   about — the seating chart and the door were being shown as accessories to
+   the dashboard rather than as the two things that sell this product.
 
-   The same pixels now sit in the chrome that matches what they are:
+   What is left is one window and a way through it. The strip is the mockup's
+   idea and it is the right one: four screens in the vertical space of one, and
+   a visitor who clicks even a single tab has learnt more about the depth of
+   this thing than a paragraph could tell them.
 
-   · the dashboard in a BROWSER WINDOW, with a title bar and its own URL. The
-     chrome is drawn in this page's palette rather than borrowed macOS grey, so
-     it belongs to the design instead of looking like a stock mockup;
-   · the seating plan as a smaller PLATE overlapping the window's lower-left
-     corner at desktop, so the two read as one arrangement rather than two
-     stacked pictures;
-   · the door app in a TABLET BODY, because it is a physical thing standing at
-     an entrance, and a flat rectangle loses that entirely.
-
-   On a phone the overlap is dropped: at 342px of usable width an overlap just
-   hides half of both images. Each object gets its own row and its own caption.
-
-   A Server Component — no state, no client JavaScript.
+   A Server Component. The only client JavaScript on the band is the strip
+   itself — see DashboardTabs.js.
    ═══════════════════════════════════════════════════════════════════════════ */
 
-const SHOTS = {
-  overview: {
+/** 1120x860, all four, so switching tabs cannot resize the window. */
+const SHOTS = [
+  {
+    key: "overview",
+    label: "Overview",
     src: "/images/landing/dash-overview.webp",
     w: 1120,
     h: 860,
     alt:
       "The Fancy RSVP dashboard: total events and guests, an RSVP rate with accepted, declined and pending counts, and below them the organizer's upcoming events and a live feed of replies as they arrive.",
+    note: "Who is coming, who has not replied, and how the replies are trending — updated the moment a guest submits.",
   },
-  seating: {
-    src: "/images/landing/dash-seating.webp",
-    w: 760,
-    h: 560,
+  {
+    key: "guests",
+    label: "Guest list",
+    src: "/images/landing/dash-guests.webp",
+    w: 1120,
+    h: 860,
     alt:
-      "The seating plan: numbered round and oval tables with their chairs drawn in, a head table, and the venue's stage, dance floor, bar and entrance marked around them.",
-  },
-};
-
-const POINTS = [
-  {
-    title: "Everything about the event, on one screen",
-    body:
-      "Who is coming, who has not replied, how many meals of each kind, and how the replies are trending — updated the moment a guest submits, with no refresh.",
+      "The guest list: a card for each invited party showing their reply, the size of their party, the meal they chose, who they are bringing and the table they are sitting at.",
+    note: "One card per invitation — the reply, the party, the meals, the table. Search it, filter it, export it.",
   },
   {
-    title: "Seating you arrange by dragging names",
-    body:
-      "Round tables, long tables, zones and a dance floor. It tracks remaining seats per table and refuses to overbook one, then lets each guest look up their own place.",
+    key: "seating",
+    label: "Seating",
+    src: "/images/landing/dash-seating-plan.webp",
+    w: 1120,
+    h: 860,
+    alt:
+      "The seating screen: how many of the accepted guests are seated so far, and beneath it every guest with their party size, their meal and a table selector.",
+    note: "Assign a table and the counts follow. A table with no seats left is not offered.",
   },
   {
-    title: "A door that works when the venue's wifi doesn't",
-    body:
-      "The Fancy Check-in tablet app holds the whole guest list on the device, so it keeps scanning through dead spots and syncs back once it reconnects.",
+    key: "analytics",
+    label: "Analytics",
+    src: "/images/landing/dash-analytics.webp",
+    w: 1120,
+    h: 860,
+    alt:
+      "The analytics screen: how many guests opened the invitation, how many replied, and how those replies arrived over time.",
+    note: "Who opened the invitation, where they stopped, and what they did next.",
   },
 ];
 
-/** A screenshot presented as a window rather than a rectangle. The URL in the
- *  bar is decorative and marked as such — it is not a link, and a screen reader
- *  announcing "fancyrsvp.com/dashboard" between the heading and the image would
- *  be noise. */
-function BrowserFrame({ shot }) {
-  return (
-    <div className="dash-win">
-      <div className="dash-win__bar" aria-hidden="true">
-        <span className="dash-win__dot" />
-        <span className="dash-win__dot" />
-        <span className="dash-win__dot" />
-        <span className="dash-win__url">fancyrsvp.com/dashboard</span>
-      </div>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={shot.src} alt={shot.alt} width={shot.w} height={shot.h} loading="lazy" />
-    </div>
-  );
-}
-
 export default function DashboardShowcaseSection() {
-  const door = CHECKIN_SCREENS[0];
-
   return (
-    <section className="dash" aria-labelledby="dash-title">
+    <section id="dashboard" className="dash" aria-labelledby="dash-title">
       <div className="fx-container fx-container--5xl fx-gutter">
         <header className="dash-head">
           <span className="dash-kicker">
-            Your side of it
+            For organizers
             <span aria-hidden="true" className="dash-kicker__rule" />
           </span>
           <span className="dash-numeral" aria-hidden="true">III</span>
           <h2 id="dash-title" className="dash-h2">
-            The part your guests never see.
+            Everything happens here.
           </h2>
           <p className="dash-sub">
-            These are screenshots of the actual dashboard, not illustrations of it.
+            Guests, meals, seating, messages and the door — one place, and these
+            are screenshots of it rather than illustrations of it.
           </p>
         </header>
 
-        {/* ── the dashboard, with the seating plan overlapping it ── */}
         <div className="dash-stage">
           <span aria-hidden="true" className="dash-stage__glow" />
-
-          <figure className="dash-stage__win">
-            <BrowserFrame shot={SHOTS.overview} />
-          </figure>
-
-          <figure className="dash-stage__plate">
-            <div className="dash-plate">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={SHOTS.seating.src}
-                alt={SHOTS.seating.alt}
-                width={SHOTS.seating.w}
-                height={SHOTS.seating.h}
-                loading="lazy"
-              />
-            </div>
-            <figcaption className="dash-cap">The seating plan</figcaption>
-          </figure>
+          <DashboardTabs shots={SHOTS} />
         </div>
 
-        {/* ── the door app, on its own, because it is a different device ── */}
-        <div className="dash-door">
-          <figure className="dash-door__art">
-            <div className="dash-tablet">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={door.src} alt={door.alt} width={760} height={560} loading="lazy" />
-            </div>
-          </figure>
-          <div className="dash-door__copy">
-            <h3 className="dash-door__title">{POINTS[2].title}</h3>
-            <p className="dash-door__body">{POINTS[2].body}</p>
-            <p className="dash-cap dash-cap--left">Fancy Check-in — Android tablet</p>
-          </div>
-        </div>
+        <div className="dash-foot">
+          <p className="dash-hint">
+            <svg width="34" height="26" viewBox="0 0 40 30" fill="none" aria-hidden="true">
+              <path d="M38 28C30 26 14 22 7 12c-2-3-3-6-3-9" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+              <path d="M1 5l3-4 5 2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <span>Switch between the tabs — every one is a real screen.</span>
+          </p>
 
-        <ul className="dash-points fx-grid" style={{ "--fx-col": "280px", "--fx-gap": "clamp(28px, 3vw, 56px)" }}>
-          {POINTS.slice(0, 2).map((p) => (
-            <li key={p.title} className="dash-point">
-              <h3 className="dash-point__title">{p.title}</h3>
-              <p className="dash-point__body">{p.body}</p>
-            </li>
-          ))}
-        </ul>
+          <Link href="/demo/dashboard" className="dash-cta">
+            Open the live dashboard
+            <svg width="16" height="9" viewBox="0 0 16 9" fill="none" aria-hidden="true">
+              <path d="M0 4.5h14M11 1l3.5 3.5L11 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </Link>
+        </div>
       </div>
 
       {/* A plain style element — styled-jsx cannot be imported from a Server
-          Component. Classes are prefixed "dash-" instead.
+          Component, and a scoped rule would never reach the buttons
+          DashboardTabs renders. Classes are prefixed "dash-" instead.
 
           No backticks inside these CSS comments: one would terminate the
           template literal and produce a parse error. */}
       <style>{`
         .dash {
           width: 100%;
-          background: ${C.paper};
-          padding: 76px 0;
+          /* CLIPS THE GLOW. .dash-stage__glow is inset -10% horizontally so the
+             light spills past the container the way an ambient one would — and
+             at a desktop width that is 118px of box hanging off each side of
+             the viewport. Measured at 1280: documentElement.scrollWidth was
+             1344 against a clientWidth of 1274.
+
+             The page never scrolled sideways, because html { overflow-x: clip }
+             in globals.css was hiding it — which is a GUARD, not a fix, and
+             hidden overflow is unreachable rather than scrollable. This is the
+             fix: the glow is clipped by the band it belongs to and the guard
+             goes back to guarding nothing. */
+          overflow: hidden;
+          background: ${C.paper2};
+          padding: 72px 0;
         }
         .dash-head {
           display: grid;
@@ -217,7 +191,48 @@ export default function DashboardShowcaseSection() {
           max-width: 52ch;
         }
 
-        /* ── the browser window ────────────────────────────────────────── */
+        .dash-stage { position: relative; margin-top: 34px; }
+        .dash-stage__glow { display: none; }
+
+        /* ── the strip ──────────────────────────────────────────────────────
+           .fx-scroll-x is the primitive for content that genuinely cannot
+           reflow. The inner row needs min-width: 0 or the flex track sizes to
+           max-content and the port never scrolls — it just gets wider than the
+           page, which is the single most common way this goes wrong here. */
+        .dash-tabs__strip { margin-bottom: 14px; min-width: 0; }
+        .dash-tabs__strip [role="tablist"] {
+          display: flex;
+          gap: 8px;
+          width: max-content;
+          min-width: 100%;
+          padding-bottom: 2px;
+        }
+        .dash-tab {
+          flex: none;
+          appearance: none;
+          padding: 11px 18px;
+          background: transparent;
+          border: 1px solid ${C.border};
+          border-radius: 999px;
+          font-family: ${T.body};
+          font-size: 10.5px;
+          font-weight: 600;
+          letter-spacing: 0.16em;
+          text-transform: uppercase;
+          white-space: nowrap;
+          color: ${C.inkSoft};
+          cursor: pointer;
+          transition: background 0.25s ease, color 0.25s ease, border-color 0.25s ease;
+        }
+        .dash-tab:hover { border-color: ${C.gold}; color: ${C.ink}; }
+        .dash-tab--on {
+          background: ${C.ink};
+          border-color: ${C.ink};
+          color: ${C.paper};
+        }
+        .dash-tab--on:hover { color: ${C.paper}; }
+
+        /* ── the window ─────────────────────────────────────────────────── */
         .dash-win {
           border-radius: 12px;
           overflow: hidden;
@@ -261,151 +276,87 @@ export default function DashboardShowcaseSection() {
         }
         .dash-win img { display: block; width: 100%; height: auto; }
 
-        /* ── the plate and the tablet ──────────────────────────────────── */
-        .dash-plate {
-          border: 1px solid ${C.border};
-          background: ${C.paper};
-          padding: 6px;
-          box-shadow: ${SHADOW.lift};
-        }
-        .dash-plate img { display: block; width: 100%; height: auto; }
-
-        .dash-tablet {
-          border-radius: 16px;
-          padding: 9px;
-          background: ${BEZEL};
-          box-shadow: ${SHADOW.device};
-        }
-        .dash-tablet img { display: block; width: 100%; height: auto; border-radius: 7px; }
-
-        .dash-cap {
-          margin: 14px 0 0;
-          font-size: 10px;
-          letter-spacing: 0.2em;
-          text-transform: uppercase;
+        .dash-tabs__note {
+          margin: 16px 0 0;
+          font-size: 13px;
+          font-weight: 300;
+          line-height: 1.7;
           color: ${C.inkSoft};
-          opacity: 0.72;
+          max-width: 62ch;
         }
 
-        /* ── phone layout: no overlap, one object per row ──────────────── */
-        .dash-stage {
-          position: relative;
-          display: flex;
-          flex-direction: column;
-          gap: 34px;
-          margin-top: 38px;
-        }
-        .dash-stage__glow { display: none; }
-        .dash-stage__win, .dash-stage__plate { margin: 0; }
-
-        .dash-door {
+        /* ── under it ───────────────────────────────────────────────────── */
+        .dash-foot {
           display: flex;
           flex-direction: column;
           gap: 20px;
-          margin-top: 44px;
+          margin-top: 26px;
         }
-        .dash-door__art { margin: 0; }
-        .dash-door__title {
-          font-family: ${T.display};
-          font-size: 22px;
-          font-weight: 400;
-          line-height: 1.25;
-          color: ${C.ink};
+        .dash-hint {
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
           margin: 0;
+          color: ${C.goldInk};
         }
-        .dash-door__body {
-          font-size: 13.5px;
-          font-weight: 300;
-          line-height: 1.78;
-          color: ${C.inkSoft};
-          margin: 8px 0 0;
-        }
-        .dash-cap--left { margin-top: 16px; }
-
-        .dash-points {
-          margin: 44px 0 0;
-          padding: 0;
-          list-style: none;
-        }
-        .dash-point {
-          padding-top: 22px;
-          border-top: 1px solid ${C.border};
-          min-width: 0;
-        }
-        .dash-point__title {
+        .dash-hint svg { flex: none; opacity: 0.7; margin-top: 2px; transform: scaleX(-1); }
+        .dash-hint span {
           font-family: ${T.display};
-          font-size: 22px;
-          font-weight: 400;
-          line-height: 1.25;
+          font-style: italic;
+          font-size: 17px;
+          line-height: 1.35;
+        }
+        .dash-cta {
+          align-self: flex-start;
+          display: inline-flex;
+          align-items: center;
+          gap: 12px;
+          font-size: 11px;
+          font-weight: 600;
+          letter-spacing: 0.2em;
+          text-transform: uppercase;
           color: ${C.ink};
-          margin: 0;
+          text-decoration: none;
+          border-bottom: 1px solid ${C.gold};
+          padding-bottom: 8px;
+          transition: color 0.3s ease, border-color 0.3s ease;
         }
-        .dash-point__body {
-          font-size: 13.5px;
-          font-weight: 300;
-          line-height: 1.78;
-          color: ${C.inkSoft};
-          margin: 8px 0 0;
-        }
+        .dash-cta:hover { color: ${C.goldInk}; border-color: ${C.goldInk}; }
 
-        /* ── 768 and up: the composed stage ────────────────────────────── */
         @media (min-width: 768px) {
-          .dash { padding: 128px 0; }
+          .dash { padding: 122px 0; }
           .dash-kicker { font-size: 11px; letter-spacing: 0.38em; gap: 16px; }
           .dash-kicker__rule { width: 44px; }
           .dash-numeral { font-size: 15px; }
-          .dash-h2 { font-size: 58px; margin-top: 22px; }
-          .dash-sub { font-size: 18px; margin-top: 18px; }
-
-          .dash-stage {
-            display: block;
-            margin-top: 58px;
-            padding-bottom: 120px;
-          }
+          .dash-h2 { font-size: 54px; margin-top: 22px; }
+          .dash-sub { font-size: 17px; margin-top: 18px; }
+          .dash-stage { margin-top: 52px; }
           .dash-stage__glow {
             display: block;
             position: absolute;
-            inset: -6% -10% 4% -10%;
-            background: radial-gradient(ellipse at 55% 45%, rgba(169, 138, 78, 0.14), transparent 66%);
+            inset: -8% -10% -6% -10%;
+            background: radial-gradient(ellipse at 55% 45%, rgba(169, 138, 78, 0.16), transparent 66%);
             pointer-events: none;
           }
-          .dash-stage__win {
-            position: relative;
-            width: 84%;
-            margin-left: auto;
-          }
-          .dash-stage__plate {
-            position: absolute;
-            left: 0;
-            bottom: 0;
-            width: 42%;
-            z-index: 3;
-          }
+          .dash-tabs__strip { margin-bottom: 18px; }
+          .dash-tab { padding: 12px 24px; font-size: 11px; }
           .dash-win { border-radius: 15px; }
           .dash-win__bar { padding: 13px 18px; gap: 8px; }
           .dash-win__dot { width: 9px; height: 9px; }
           .dash-win__url { height: 26px; padding: 0 14px; font-size: 10px; margin-left: 12px; }
-          .dash-plate { padding: 9px; }
-          .dash-tablet { border-radius: 22px; padding: 14px; }
-          .dash-tablet img { border-radius: 9px; }
-
-          .dash-door {
-            display: grid;
-            grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
-            gap: 64px;
+          .dash-tabs__note { font-size: 14px; margin-top: 20px; }
+          .dash-foot {
+            flex-direction: row;
             align-items: center;
-            margin-top: 96px;
-            padding-top: 64px;
-            border-top: 1px solid ${C.border};
+            justify-content: space-between;
+            gap: 40px;
+            margin-top: 34px;
           }
-          .dash-door__title { font-size: 34px; line-height: 1.16; letter-spacing: -0.01em; }
-          .dash-door__body { font-size: 16px; line-height: 1.85; margin-top: 16px; max-width: 44ch; }
-          .dash-cap--left { margin-top: 22px; }
+          .dash-hint span { font-size: 19px; }
+        }
 
-          .dash-points { margin-top: 80px; }
-          .dash-point { padding-top: 26px; }
-          .dash-point__title { font-size: 24px; }
-          .dash-point__body { font-size: 14.5px; line-height: 1.8; }
+        @media (prefers-reduced-motion: reduce) {
+          .dash-tab, .dash-cta { transition: none; }
         }
       `}</style>
     </section>

@@ -10,6 +10,8 @@ import TemplatesShowcaseSection from '../src/app/components/landing/TemplatesSho
 import { TEMPLATES } from '../src/app/utils/curatedTemplates';
 import { CINEMATIC_KEYS } from '../src/app/components/templates/cinematic/cinematicThemes';
 import { occasionPolicyFor } from '../src/app/utils/eventOccasion';
+import { COLLECTION, ARRIVAL, OWN_PHOTO_NOTE } from '../src/app/collection/collectionCatalogue';
+import { PAGE_INDEX } from '../src/app/components/landing/landingTokens';
 
 const ROOT = process.cwd();
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
@@ -18,9 +20,15 @@ const SECTION = read('src/app/components/landing/TemplatesShowcaseSection.js');
 /**
  * Does `/foo` resolve to a real page?
  *
- * Not a path join: Next ROUTE GROUPS are directories in parentheses that do
- * not appear in the URL, so `/register` lives at `(auth)/register/page.js`.
- * Checking `src/app/register/page.js` reports a real route as broken.
+ * Not a path join, for two reasons:
+ *
+ * · Next ROUTE GROUPS are directories in parentheses that do not appear in the
+ *   URL, so `/register` lives at `(auth)/register/page.js`.
+ * · DYNAMIC SEGMENTS are directories in square brackets. `/collection/ring` is
+ *   served by `collection/[key]/page.js`, and without this the rail's own
+ *   card links were reported dead.
+ *
+ * Kept in step with the copy in landingHomepage.test.jsx.
  */
 function routeExists(href) {
   const segments = href.replace(/^\//, '').split('/').filter(Boolean);
@@ -28,10 +36,9 @@ function routeExists(href) {
     if (rest.length === 0) return fs.existsSync(path.join(dir, 'page.js'));
     const [head, ...tail] = rest;
     if (fs.existsSync(path.join(dir, head)) && walk(path.join(dir, head), tail)) return true;
-    // Descend through any route group at this level.
-    return fs.readdirSync(dir, { withFileTypes: true })
-      .filter((e) => e.isDirectory() && /^\(.+\)$/.test(e.name))
-      .some((g) => walk(path.join(dir, g.name), rest));
+    const entries = fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory());
+    return entries.filter((e) => /^\[.+\]$/.test(e.name)).some((d) => walk(path.join(dir, d.name), tail))
+      || entries.filter((e) => /^\(.+\)$/.test(e.name)).some((g) => walk(path.join(dir, g.name), rest));
   };
   return walk(path.join(ROOT, 'src/app'), segments);
 }
@@ -106,36 +113,44 @@ describe('the invitations are shown, and they are real', () => {
   });
 
   it('says whose photograph it is wherever it cannot show one', async () => {
-    /* The other half of the exception above. A plate that shows a sealed
+    /* The other half of the exception above. A card that shows a sealed
        envelope and says nothing has simply told the visitor less than the
        other three did — the claim has to be made in words instead, and it is
-       the strongest thing this template has to say. */
+       the strongest thing this template has to say.
+
+       It was a margin note with a 64px stand-in illustration beside it until
+       2026-09-09, when the plates became a 206px rail card and a footnote
+       about what is behind one of them stopped fitting on it. The SENTENCE is
+       the whole of the value and it now sits under the rail, read from the
+       catalogue — which is also where the gallery can pick it up. The
+       illustration is gone: it was decoration on top of a disclaimer. */
     const { container } = await renderBand();
-    const text = container.textContent;
-    expect(text, 'the "your own photograph" claim is gone')
+    expect(container.textContent, 'the "your own photograph" claim is gone')
       .toMatch(/your own photograph/i);
-    // And the small stand-in beside it, at a size that cannot be mistaken for
-    // a picture the template ships.
-    const own = container.querySelector('.tss-own img');
-    expect(own, 'the "your photo here" inset is gone').toBeTruthy();
-    expect(own.getAttribute('alt') || '', 'the stand-in does not admit what it is')
-      .toMatch(/standing in for/i);
+
+    // From the catalogue, not typed into the band — the same rule ARRIVAL
+    // follows and for the same reason.
+    expect(SECTION).toContain('OWN_PHOTO_NOTE');
+    expect(Object.values(OWN_PHOTO_NOTE).join(' ')).toMatch(/your own photograph/i);
   });
 
-  it('the sealed-and-opened pair is still made, in the hero', async () => {
+  it('the sealed-and-opened pair is still made, across the hero and the demo band', async () => {
     /* The claim is "it opens on film before it becomes a page", and one image
        cannot make that point. This band used to carry the pair for all three
        templates — six tall photographs in a row, which showed the same idea
-       three times. Since 2026-08-20 the HERO makes the argument once, with
-       Swan Lake sealed beside Swan Lake open, and this band shows what each
-       one becomes.
+       three times.
 
-       So the guarantee did not go away, it moved: assert it where it now
-       lives, or the page can quietly lose the pair entirely. */
+       Since 2026-09-09 the two halves are one band apart and that is the
+       point of the arrangement: the HERO holds Swan Lake sealed, and the
+       guest-experience band holds the same invitation open, under a heading
+       about what opening one is like. So the guarantee did not go away, it
+       moved twice — assert it where it now lives, or the page can quietly
+       lose the pair entirely. */
     const hero = read('src/app/components/landing/HeroSection.js');
     expect(hero, 'the hero no longer shows a sealed invitation')
       .toContain('/images/landing/cover-swans.webp');
-    expect(hero, 'the hero no longer shows an opened invitation')
+    const experience = read('src/app/components/landing/GuestExperienceSection.js');
+    expect(experience, 'no band shows the invitation opened any more')
       .toContain('/images/landing/hero-swans.webp');
   });
 
@@ -149,13 +164,55 @@ describe('the invitations are shown, and they are real', () => {
   });
 
   it('keeps the whole set inside a sane page budget', async () => {
-    /* Six full-bleed invitation photographs sit below the fold on the
-       homepage. They are lazy, but they are still the page's weight. */
+    /* Every invitation photograph and every dashboard frame on the homepage
+       lives in this folder. Most are lazy, but they are still the page's
+       weight, and the hero's is the LCP image.
+
+       ── 320 -> 360 on 2026-09-09, and the arithmetic is the point ────────
+       That pass added FIVE files — the hero photograph and one frame per
+       dashboard tab — and the folder grew by 25KB, from 296 to 321, because
+       three dead ones went with them: cover-bab (69KB) and cover-ring (12KB)
+       were left behind when the band stopped showing sealed covers, and
+       couple-illustration (9KB) was the stand-in drawing beside a footnote
+       that is now one sentence.
+
+       The ceiling moves to 360 rather than to whatever the folder happens to
+       weigh: a budget with no headroom fails the next person for adding one
+       honest file, and a budget set to the current total is not a budget. What
+       it must never do is move to FIT a lazily compressed file — the four
+       dashboard frames are 1120px wide at quality 62 and land at 20-30KB
+       each. If one arrives at 90, compress it. */
     const dir = path.join(ROOT, 'public/images/landing');
     const total = fs.readdirSync(dir)
       .reduce((sum, f) => sum + fs.statSync(path.join(dir, f)).size, 0);
     expect(Math.round(total / 1024), 'the landing imagery has grown past its budget')
-      .toBeLessThan(320);
+      .toBeLessThan(360);
+  });
+
+  it('ships no landing image that nothing on the site references', async () => {
+    /* THE OTHER HALF OF THE BUDGET, and the half that actually leaked. Three
+       files sat in this folder unreferenced for weeks — 90KB, 30% of the
+       whole allowance — because deleting the code that showed a picture does
+       not delete the picture. Every byte of that was being deployed.
+
+       Scoped to src/ plus the shots harness: an image referenced only by a
+       test fixture is still dead as far as the site is concerned. */
+    const dir = path.join(ROOT, 'public/images/landing');
+    const roots = [path.join(ROOT, 'src'), path.join(ROOT, 'test/shots')];
+    const sources = [];
+    const walk = (d) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const full = path.join(d, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (/\.(js|jsx|mjs|css)$/.test(e.name)) sources.push(fs.readFileSync(full, 'utf8'));
+      }
+    };
+    roots.forEach(walk);
+    const haystack = sources.join('\n');
+
+    fs.readdirSync(dir).forEach((f) => {
+      expect(haystack.includes(f), `${f} is shipped and referenced nowhere`).toBe(true);
+    });
   });
 
   it('declares dimensions and defers loading', async () => {
@@ -172,31 +229,69 @@ describe('the invitations are shown, and they are real', () => {
 });
 
 describe('the words come from the product, not a second copy', () => {
-  it('takes name and description from the template registry', async () => {
-    /* The tagline is no longer printed here. Each plate carried FOUR lines of
-       prose — tagline, arrival, description, badge — under a photograph that
-       is already doing most of the talking, and the tagline was the one that
-       overlapped the description in meaning.
+  it('reads the catalogue rather than rebuilding its own view of it', async () => {
+    /* THE BAND USED TO BE THE FIFTH SURFACE ASSEMBLING THIS LIST. It filtered
+       TEMPLATES by CINEMATIC_KEYS, resolved the badge through
+       occasionPolicyFor, held its own map of which webp represents each
+       template, and imported ARRIVAL for the opening line — which is exactly
+       what collection/collectionCatalogue.js does, for the gallery, the detail
+       pages and the sitemap, and whose whole docstring is about why that list
+       must exist once.
 
-       What matters is unchanged and still asserted: the name and description a
-       visitor reads are the registry's, so they cannot drift from what the
-       wizard shows. */
+       So the assertion moved up a level: the band renders COLLECTION, and the
+       CATALOGUE is what has to agree with the registry and the picker. Both
+       halves are still pinned — the second by the tests below. */
+    /* Matched on the IMPORT LINES, not on the file's text. The header above
+       names the four things the band used to assemble for itself, and a test
+       that fails on the sentence explaining what was fixed punishes writing
+       the explanation down. */
+    const imports = SECTION.slice(0, SECTION.indexOf('/* ═'));
+    expect(imports).toMatch(/import \{[^}]*COLLECTION/);
+    expect(imports, 'the band is reassembling the catalogue again')
+      .not.toMatch(/CINEMATIC_KEYS|curatedTemplates|eventOccasion/);
+
     await renderBand();
-    TEMPLATES.filter((t) => CINEMATIC_KEYS.includes(t.key)).forEach((t) => {
-      expect(screen.getByText(t.label)).toBeTruthy();
-      expect(screen.getByText(t.desc)).toBeTruthy();
+    COLLECTION.forEach((c) => {
+      expect(screen.getByText(c.label), `${c.label} is missing from the rail`).toBeTruthy();
+      expect(screen.getByText(ARRIVAL[c.key]), `${c.key} lost its arrival line`).toBeTruthy();
     });
-    expect(SECTION).toContain('TEMPLATES');
-    expect(SECTION).toContain('CINEMATIC_KEYS');
+  });
+
+  it('the catalogue it reads still takes its names from the template registry', async () => {
+    /* One level down from the band: whatever COLLECTION says a template is
+       called, it has to be what the create-event wizard calls it. */
+    TEMPLATES.filter((t) => CINEMATIC_KEYS.includes(t.key)).forEach((t) => {
+      const item = COLLECTION.find((c) => c.key === t.key);
+      expect(item, `${t.key} is in the picker and not in the collection`).toBeTruthy();
+      expect(item.label).toBe(t.label);
+      expect(item.desc).toBe(t.desc);
+    });
   });
 
   it('takes the occasion badge from the same policy the picker offers from', async () => {
     /* Otherwise the homepage can advertise "any occasion" on a template the
-       wizard then refuses — Velvet Ring is engagements only. */
+       wizard then refuses — Velvet Ring is engagements only. Read through the
+       catalogue now, which is where occasionPolicyFor is consulted. */
+    const catalogue = read('src/app/collection/collectionCatalogue.js');
+    expect(catalogue).toContain('occasionPolicyFor');
     await renderBand();
-    expect(SECTION).toContain('occasionPolicyFor');
     expect(screen.getAllByText(occasionPolicyFor('ring').label).length).toBeGreaterThan(0);
     expect(screen.getAllByText(occasionPolicyFor('bab').label).length).toBeGreaterThan(0);
+  });
+
+  it('carries the page index, in order, as real anchors', async () => {
+    /* The six chips under the hero are the only map of a page that runs
+       seventeen screens on a phone. Rendered from PAGE_INDEX so a band that
+       is renamed or removed cannot leave a chip scrolling into nothing — the
+       other half of that guarantee (every id exists on a real band) is in
+       landingHomepage.test.jsx. */
+    const { container } = await renderBand();
+    const chips = [...container.querySelectorAll('nav[aria-label="On this page"] a')];
+    expect(chips.length, 'the in-page index is gone').toBe(PAGE_INDEX.length);
+    expect(chips.map((a) => a.getAttribute('href')))
+      .toEqual(PAGE_INDEX.map((e) => `#${e.id}`));
+    expect(chips.map((a) => a.textContent))
+      .toEqual(PAGE_INDEX.map((e) => e.label));
   });
 
   it('does not link anywhere that does not exist', async () => {
@@ -265,67 +360,60 @@ describe('the commission strip', () => {
     expect(commissionLink(container)).toBeNull();
   });
 
-  it('still shows the three invitations when the settings call fails', async () => {
+  it('still shows the invitations when the settings call fails', async () => {
     // The band's reason to exist is the photography; the strip is an extra.
     global.fetch = vi.fn(() => Promise.reject(new Error('down')));
     const { container } = await renderBand();
     expect(commissionLink(container)).toBeNull();
-    expect(container.querySelectorAll('.tss-plate').length).toBe(CINEMATIC_KEYS.length);
+    expect(container.querySelectorAll('.tss-slide').length).toBe(CINEMATIC_KEYS.length);
   });
 });
 
 describe('it survives a phone', () => {
-  it('releases the grid minimum the invitation images would otherwise set', async () => {
-    // A grid item's automatic minimum is its content's min-content size, and
-    // these images are 468px wide intrinsically — so without this the band
-    // sets a floor no phone can meet and the page scrolls sideways.
-    //
-    // Matched as a PROPERTY inside the rule rather than as one exact line: the
-    // rule grew a max-width when the plates were capped on 2026-08-21, and a
-    // test that pins formatting fails on a change that does not touch what it
-    // is protecting.
-    const rule = SECTION.slice(SECTION.indexOf('.tss-plate {'));
-    expect(rule.slice(0, rule.indexOf('}'))).toMatch(/min-width:\s*0/);
+  /** The rail's own rule block, up to its closing brace. */
+  const rule = (selector) => {
+    const at = SECTION.indexOf(`${selector} {`);
+    expect(at, `${selector} is gone`).toBeGreaterThan(-1);
+    return SECTION.slice(at, SECTION.indexOf('}', at));
+  };
+
+  it('scrolls sideways instead of stacking four handsets down the page', async () => {
+    /* THE FAILURE THIS REPLACED, TWICE OVER. The images are 468x1013 — whole
+       phone screens. As grid items they set a min-content floor no phone can
+       meet (fixed 2026-08-21 with min-width: 0 and a max-width cap), and even
+       capped, one column on a phone meant four of them stacked: about 2,400px
+       of scrolling for four pictures.
+
+       A rail is one screen at every width. The three properties that make it
+       one are asserted here rather than left to a reviewer's eye: the port
+       scrolls, the cards do not shrink to fit, and the scroll snaps so a
+       half-card is never where a swipe leaves you. */
+    const rail = rule('.tss-rail');
+    expect(rail, 'the rail no longer scrolls').toMatch(/overflow-x:\s*auto/);
+    expect(rail, 'the rail lost its snap').toMatch(/scroll-snap-type:\s*x/);
+
+    const slide = rule('.tss-slide');
+    expect(slide, 'a slide can shrink, so four will squeeze onto one screen')
+      .toMatch(/flex:\s*none/);
+    expect(slide, 'a slide has no width, so it collapses to its content')
+      .toMatch(/width:\s*\d+px/);
   });
 
-  it('caps the plate so the invitation shots do not fill the band', async () => {
-    /* .fx-grid is auto-fit: three items in a 1184px container stretch to
-       ~372px tracks whatever --fx-col says, and the shot is a whole phone
-       screen at 468x1013 — so each plate rendered about 365 wide and 790 TALL,
-       and a phone scrolled ~2,400px past three giant handsets.
-       The cap is on the PLATE, not the image, so the name and the rule under
-       it narrow with the picture instead of running out past it. */
-    const rule = SECTION.slice(SECTION.indexOf('.tss-plate {'));
-    expect(rule.slice(0, rule.indexOf('}'))).toMatch(/max-width:\s*\d/);
-  });
+  it('shows a card and a half on the narrowest phone, so the rail reads as one', async () => {
+    /* A rail whose first card exactly fills the port looks like a single
+       static card and nobody swipes it. The arithmetic, per AGENTS.md, rather
+       than a browser: inside .fx-gutter at 320px there are 280px of usable
+       width, and the card plus one gap has to leave a visible slice of the
+       next one — but not so narrow that the card itself stops being a
+       photograph. */
+    const width = Number(rule('.tss-slide').match(/width:\s*(\d+)px/)[1]);
+    const gap = Number(rule('.tss-rail').match(/gap:\s*(\d+)px/)[1]);
+    const AVAILABLE = 280;
 
-  it('fits every template on one desktop row', async () => {
-    /* .fx-grid is auto-fit, so the column count is arithmetic, not a
-       declaration: floor((container + gap) / (--fx-col + gap)). Nothing in
-       the DOM shows it — the plate count test above passes just as happily
-       with the last template stranded alone on a second row, which is exactly
-       what happened when a fourth was added against the old 290px value.
-
-       At the desktop target the container is .fx-container--5xl (1280) less
-       two --fx-pad-x gutters of 48 = 1184, and this band overrides the gap to
-       44 (its clamp has min > max, so it is always the min).
-
-       Verified by arithmetic rather than in a browser, per AGENTS.md — there
-       is no dev server here and the compiled CSS needs a build. */
-    const col = Number(SECTION.match(/"--fx-col":\s*"(\d+)px"/)?.[1]);
-    expect(col, 'the band no longer sets --fx-col').toBeTruthy();
-
-    const CONTAINER = 1280 - 2 * 48;
-    const GAP = 44;
-    const columns = Math.floor((CONTAINER + GAP) / (col + GAP));
-    expect(columns, `${col}px fits ${columns} plates, not ${CINEMATIC_KEYS.length}`)
-      .toBeGreaterThanOrEqual(CINEMATIC_KEYS.length);
-
-    // And the track still has to be wide enough for the capped plate, or the
-    // cap does nothing and the pictures shrink instead.
-    const track = (CONTAINER - (columns - 1) * GAP) / columns;
-    const cap = Number(SECTION.match(/\.tss-plate \{[^}]*max-width:\s*(\d+)px/)?.[1]);
-    expect(track, `a ${track}px track cannot hold a ${cap}px plate`).toBeGreaterThanOrEqual(cap);
+    const peek = AVAILABLE - width - gap;
+    expect(peek, `a ${width}px card leaves ${peek}px of the next one — no reason to swipe`)
+      .toBeGreaterThan(30);
+    expect(width, 'the card is too narrow to read as an invitation').toBeGreaterThanOrEqual(180);
   });
 
   it('uses only breakpoints on the four-value scale', async () => {

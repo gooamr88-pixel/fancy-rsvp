@@ -77,6 +77,22 @@ export const C = {
   /** Type sitting ON the ink block. */
   ivory: '#F6F2E9',
 
+  /* ── The photographic hero, added 2026-09-09 ──────────────────────────────
+     The page had no dark surface except the closing call to action, and the
+     hero was paper with two screenshots on it. The mockup leads with a
+     photograph instead — which this studio can do honestly, because the
+     artwork behind /images/landing/hero-bg.webp is our own licensed Door of
+     Joy plate (public/templates/bab/hero-poster.jpg), blurred to a depth of
+     field so the invitation in front of it is the only sharp thing in view.
+
+     A photograph is not a colour, so the two tokens below are what makes text
+     on it legible: `scrim` is the wash the picture sits under, `scrimEdge` the
+     darker foot that stops the buttons floating. Both are warm rather than
+     neutral black — a grey scrim over golden light turns the whole frame
+     green. */
+  scrim: 'rgba(24, 19, 12, 0.62)',
+  scrimEdge: 'rgba(16, 13, 9, 0.86)',
+
   /* ── Retained for the invitation/device chrome, which is genuinely dark ──
      These are the bezel gradient stops, not page colours. */
   bezelHi: '#45464C',
@@ -111,6 +127,31 @@ export const ON_INK = {
   hairline: 'rgba(246, 242, 233, 0.20)',
 };
 
+/** The same roles again, for copy sitting on the scrimmed PHOTOGRAPH.
+ *
+ *  DELIBERATELY NOT ON_INK, and the reason is that a contrast ratio can be
+ *  computed against the ink block and cannot be computed against this. The ink
+ *  block is one flat, known colour: 66% ivory on it is 5.9:1 and stays 5.9:1
+ *  forever. A photograph's luminance moves under the text as the crop changes
+ *  with the viewport, and hero-bg.webp is a picture of sunlight — the brightest
+ *  part of it is nearly white.
+ *
+ *  So the rule here is not a measurement, it is a margin: every value is a step
+ *  more opaque than its ON_INK counterpart, the title is effectively opaque,
+ *  and `muted` is used ONLY where the scrim is at its heaviest (the top and
+ *  bottom stops, at 0.86). Nothing at text size is set in `muted` over the lit
+ *  middle of the frame — see the scrim in HeroSection, which is three stops
+ *  precisely so the weight sits where the type does. */
+export const ON_PHOTO = {
+  title: '#FFFDF7',
+  body: 'rgba(252, 249, 240, 0.88)',
+  muted: 'rgba(252, 249, 240, 0.62)',
+  hairline: 'rgba(252, 249, 240, 0.26)',
+  /** The gold on a photograph has to be lighter than `C.gold`, which was
+   *  solved against paper and disappears into golden light. */
+  gold: '#E7C77E',
+};
+
 /* THERE IS NO `BAND` EXPORT, AND THAT IS DELIBERATE.
 
    One existed until 2026-08-20: `{ light: C.paper, warm: C.paper2, deep:
@@ -133,25 +174,81 @@ export const ON_INK = {
  *  a section cannot be reordered into two consecutive bands of one tone
  *  without the arrangement being visible in one place.
  *
- *  The order answers a stranger's questions in the order they ask them:
- *  what is this → what does my guest get → why should I care → what would I
- *  do → what do I get → what else is in it → what else do you make → has
- *  anyone else done this → my last objection, then the button. */
+ *  ── The 2026-09-09 pass: one screen per thing this product does ──────────
+ *
+ *  The page argued in the abstract. Four capabilities carry this business —
+ *  the invitation that opens on film, the seating chart, the messages that
+ *  send themselves, and the door — and all four were four ROWS of an
+ *  editorial list, one line of prose each, no picture. A visitor could read
+ *  the whole page and never see the seating plan.
+ *
+ *  Each of the four now has a band, a real screenshot and one link, in the
+ *  order the work happens: they open it, you watch the replies, you seat
+ *  them, they get reminded, they arrive. That order is also the order of the
+ *  approved mockup.
+ *
+ *  TWO BANDS WENT, and neither was cut for length:
+ *  · `how-it-works` described in three sentences what bands 5–7 now show. A
+ *    list of steps above the screens of those steps is the same page twice.
+ *  · `statement` was one line alone, and its job — a place to stop between the
+ *    guest's half and the organizer's — is now done by the pull quote at the
+ *    foot of the invitations band, which is a real review rather than our own
+ *    voice saying something unfalsifiable.
+ *
+ *  The order still answers a stranger's questions in the order they ask them:
+ *  what is this → what does my guest get → what is it like to receive one →
+ *  what do I see → how do I seat them → who tells them → what happens at the
+ *  door → how does it fit together → what else do you make → has anyone else
+ *  done this → my last objection, then the button. */
 export const BAND_ORDER = [
   'hero:light',
   'invitations:warm',
-  // Third, not seventh: the reader has just been shown three invitations, and
-  // "can I hold one" is the next thought rather than the one after four bands
-  // of software. It swapped places with the statement band, so the light/warm
-  // alternation below is unchanged. See the note on it in page.js.
-  'printed:light',
-  'how-it-works:warm',
-  'dashboard:light',
+  'experience:light',
+  'dashboard:warm',
+  'seating:light',
+  'reminders:warm',
+  'checkin:light',
   'capabilities:warm',
-  'statement:light',
+  // Printed goods sit after the software rather than third, where they were
+  // between 2026-08-21 and this pass. The four feature bands are one argument
+  // told in order, and a catalogue of paper cards halfway through it broke the
+  // sentence. It keeps its light tone, so the alternation is unaffected — and
+  // it renders nothing at all until an admin publishes a piece.
+  'printed:light',
   'proof:deep',
   'faq-cta:light',
   'footer:deep',
+];
+
+/**
+ * THE IN-PAGE INDEX — six anchors, rendered once, at the top of band 2.
+ *
+ * ── Why a long page needs one ────────────────────────────────────────────
+ *
+ * The 2026-09-09 pass gave four capabilities a screen each, which is what the
+ * page needed and is also 14,000px on a phone — about seventeen screens. Every
+ * band is short and every heading is a sentence, so the page READS fast; what
+ * it lost is any way to see its SHAPE, or to go straight to the one thing you
+ * came for. A visitor who wants the seating chart should not have to scroll
+ * past the door to find out there is one.
+ *
+ * Six entries, not twelve. This is a map of what the page SHOWS, so the
+ * conditional bands (printed, proof) are absent — an index that offers a link
+ * to a band which renders nothing on a fresh install is worse than a shorter
+ * index — and so are the hero, the closing ask and the footer, which are
+ * where you already are and where you inevitably end up.
+ *
+ * The `id` of every entry must be a band in BAND_ORDER and the id on that
+ * band's own <section>. landingHomepage.test.jsx checks both, because an
+ * anchor that scrolls nowhere is a dead link that no route checker can see.
+ */
+export const PAGE_INDEX = [
+  { id: 'invitations', label: 'The invitations' },
+  { id: 'experience', label: 'What a guest gets' },
+  { id: 'dashboard', label: 'Your dashboard' },
+  { id: 'seating', label: 'Seating' },
+  { id: 'reminders', label: 'Reminders' },
+  { id: 'checkin', label: 'At the door' },
 ];
 
 /** Shared shadow ramp. Three steps, not eleven improvised ones.
