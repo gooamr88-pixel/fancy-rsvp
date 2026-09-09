@@ -26,8 +26,9 @@ import {
   HOMEPAGE_CAPABILITIES,
   REST_CAPABILITIES,
   REMAINING_CAPABILITY_COUNT,
+  FLOW_LABEL,
 } from '../src/app/components/landing/platformCapabilities';
-import { BAND_ORDER, PAGE_INDEX, C } from '../src/app/components/landing/landingTokens';
+import { BAND_ORDER, C } from '../src/app/components/landing/landingTokens';
 
 const ROOT = process.cwd();
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
@@ -195,11 +196,20 @@ describe('the page explains the platform', () => {
   it('draws eight real capabilities, from the same array /features renders', () => {
     const { container, unmount } = render(<CapabilitiesSection />);
     expect(HOMEPAGE_CAPABILITIES.length).toBe(8);
-    // Every node carries its capability's own one-line caption, which is what
-    // makes the diagram legible rather than eight icons and eight nouns.
+
+    /* EIGHT MARKS AND EIGHT NOUNS. Each node carried its capability's one-line
+       caption underneath until 2026-09-09 — eighty words inside a diagram,
+       which stopped being a diagram and became a table of contents with
+       pictures. The name is what a node needs; the caption is on /features,
+       which the link under the drawing goes to.
+
+       Checked against FLOW_LABEL falling back to the title, exactly as the
+       component resolves it, so a capability added without a short label
+       still has to appear. */
     HOMEPAGE_CAPABILITIES.forEach((c) => {
+      const shown = FLOW_LABEL[c.key] || c.title;
       expect(container.textContent, `${c.title} is missing from the diagram`)
-        .toContain(c.short);
+        .toContain(shown);
     });
     unmount();
 
@@ -222,7 +232,7 @@ describe('the page explains the platform', () => {
     const { container, unmount } = render(<CapabilitiesSection />);
     CAPABILITIES.forEach((c) => {
       const named = HOMEPAGE_CAPABILITIES.includes(c)
-        ? container.textContent.includes(c.short)
+        ? container.textContent.includes(FLOW_LABEL[c.key] || c.title)
         : container.textContent.includes(c.title);
       expect(named, `${c.title} appears nowhere in the capabilities band`).toBe(true);
     });
@@ -384,11 +394,39 @@ describe('the page is not longer than it needs to be', () => {
       footer: 'FooterSection',
     };
 
+    /* ── TWO WAYS A BAND CAN PAINT ITS GROUND, SINCE 2026-09-09 ──────────
+       Six bands now render through FeatureBand, which owns their background:
+       they declare `tone="light"` or `tone="warm"` as a PROP and never name a
+       paper themselves. Reading those files for `background: C.paper2` finds
+       nothing at all, which this test would have reported as a failure on six
+       correct components.
+
+       So the tone is resolved the way the band actually resolves it, and
+       FeatureBand's own mapping from tone to paper is checked once below —
+       which is stricter than before, not looser: previously nothing verified
+       that "warm" meant paper2 anywhere. */
+    const shell = fs.readFileSync(path.join(LANDING, 'FeatureBand.js'), 'utf8');
+    expect(shell, 'FeatureBand no longer maps light -> paper')
+      .toMatch(/\.fb--light\s*\{\s*background:\s*\$\{C\.paper\}/);
+    expect(shell, 'FeatureBand no longer maps warm -> paper2')
+      .toMatch(/\.fb--warm\s*\{\s*background:\s*\$\{C\.paper2\}/);
+
     BAND_ORDER.forEach((entry) => {
       const [name, tone] = entry.split(':');
       const src = fs.readFileSync(path.join(LANDING, `${FILE[name]}.js`), 'utf8');
       const expected = TONE_HEX[tone];
       expect(expected, `BAND_ORDER names an unknown tone "${tone}"`).toBeTruthy();
+
+      const TOKEN_FOR = { light: 'paper', warm: 'paper2', deep: 'paper3' };
+
+      if (src.includes('<FeatureBand')) {
+        const declared = src.match(/tone="(\w+)"/)?.[1];
+        expect(
+          declared,
+          `${FILE[name]} is declared "${tone}" in BAND_ORDER but passes tone="${declared}"`,
+        ).toBe(tone);
+        return;
+      }
 
       /* The section's own ground is the first `background:` that names one of
          the three tones — either as the literal hex or as the token that
@@ -396,7 +434,6 @@ describe('the page is not longer than it needs to be', () => {
          colours and are not matched. */
       const named = [...src.matchAll(/background:\s*(?:\$\{)?C\.(paper3|paper2|paper)\}?/g)]
         .map((m) => m[1]);
-      const TOKEN_FOR = { light: 'paper', warm: 'paper2', deep: 'paper3' };
 
       expect(
         named.includes(TOKEN_FOR[tone]),
@@ -406,52 +443,34 @@ describe('the page is not longer than it needs to be', () => {
     });
   });
 
-  it('the in-page index points at bands that exist and actually render', () => {
-    /* ── AN ANCHOR IS A LINK NO ROUTE CHECKER CAN SEE ────────────────────
-       routeExists() walks the filesystem, so "#seating" is invisible to it: a
-       chip pointing at a band that was renamed, removed or never given an id
-       scrolls nowhere and fails silently, which on a seventeen-screen phone
-       page is the worst kind of dead link — the reader concludes the section
-       does not exist.
+  it('every band still carries the anchor id its section is known by', () => {
+    /* ── THESE OUTLIVED THE THING THAT USED THEM ─────────────────────────
+       An in-page index of six anchor chips sat above the invitations heading
+       for exactly one review; see the note where PAGE_INDEX used to be in
+       landingTokens.js. The chips went because they were more furniture on the
+       band the owner pointed at when they said the page was crowded.
 
-       Three things are pinned. Every entry names a real band in BAND_ORDER;
-       that band's own component carries the matching id="…" on its section;
-       and none of them is a CONDITIONAL band, because an index that offers a
-       tour of something which renders nothing on a fresh install is worse
-       than a shorter index. */
+       The IDS stay, and are pinned here, for two reasons that have nothing to
+       do with that index: /demo and the footer both deep-link into this page,
+       and an anchor is a link no route checker can see — routeExists() walks
+       the filesystem, so "#seating" is invisible to it and a renamed section
+       breaks the link silently. */
     const bands = BAND_ORDER.map((b) => b.split(':')[0]);
-    const FILE = {
+    const ANCHORED = {
       invitations: 'TemplatesShowcaseSection',
       experience: 'GuestExperienceSection',
       dashboard: 'DashboardShowcaseSection',
       seating: 'SeatingSection',
       reminders: 'RemindersSection',
       checkin: 'CheckinSection',
+      capabilities: 'CapabilitiesSection',
     };
-    const CONDITIONAL = ['printed', 'proof'];
 
-    expect(PAGE_INDEX.length).toBeGreaterThan(3);
-    PAGE_INDEX.forEach(({ id, label }) => {
-      expect(bands, `the index offers "${id}", which is not a band`).toContain(id);
-      expect(CONDITIONAL, `"${id}" renders nothing without data and must not be indexed`)
-        .not.toContain(id);
-      expect(label.length, `"${id}" has no label`).toBeGreaterThan(2);
-
-      const file = FILE[id];
-      expect(file, `no component is mapped for the indexed band "${id}"`).toBeTruthy();
+    Object.entries(ANCHORED).forEach(([id, file]) => {
+      expect(bands, `"${id}" is anchored but is not a band`).toContain(id);
       const src = read(`src/app/components/landing/${file}.js`);
-      expect(src, `${file} has no id="${id}" for the index to scroll to`)
-        .toContain(`id="${id}"`);
+      expect(src, `${file} no longer carries id="${id}"`).toContain(`id="${id}"`);
     });
-
-    /* And it is rendered from the array rather than typed out. The DOM side of
-       this — six chips, in order, with the right hrefs — is asserted in
-       templatesShowcase.test.jsx, which is the file that already has the
-       fetch mock that band needs to render at all. */
-    const band = code(read('src/app/components/landing/TemplatesShowcaseSection.js'));
-    expect(band).toContain('PAGE_INDEX.map');
-    expect(band, 'the index labels are typed into the band instead of read')
-      .not.toContain(PAGE_INDEX[0].label);
   });
 
   it('does not wrap the page in scroll-reveal wrappers', () => {

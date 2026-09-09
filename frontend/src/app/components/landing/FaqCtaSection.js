@@ -95,11 +95,10 @@ export default function FaqCtaSection() {
         <div className="fc-inner">
           {/* ── Answers ── */}
           <div className="fc-faq">
-            <span className="fc-kicker">
-              Before you ask
-              <span aria-hidden="true" className="fc-kicker__rule" />
-            </span>
-            <span className="fc-numeral" aria-hidden="true">VIII</span>
+            {/* No numeral and no rule beside the kicker: see the note in
+                landingNumerals.test.jsx. Every band header on this page is a
+                kicker, a headline and — where there is one — a sentence. */}
+            <span className="fc-kicker">Before you ask</span>
             <h2 id="fc-faq-title" className="fc-h2">Questions we get.</h2>
 
             <div className="fc-list">
@@ -114,22 +113,17 @@ export default function FaqCtaSection() {
             </p>
           </div>
 
-          {/* ── A person, for anyone the answers did not settle ── */}
-          <aside className="fc-aside">
-            <span className="fc-aside__label">Still deciding</span>
-            <h3 className="fc-aside__title">
-              Talk to someone who has run the night before.
-            </h3>
-            <p className="fc-aside__body">
-              We will look at your guest count, your venue and your dates, and
-              tell you plainly which plan fits — or that you do not need one yet.
-            </p>
-            <div className="fc-aside__actions">
-              <Link href="/contact" className="fc-btn fc-btn--ink">Talk to us</Link>
-              <a href="mailto:info@fancyrsvp.com" className="fc-btn fc-btn--ghost">Email instead</a>
-            </div>
-            <p className="fc-aside__note">Typically answered the same working day.</p>
-          </aside>
+          {/* ── THE "STILL DECIDING" PANEL WENT ON 2026-09-09 ──────────────
+              A bordered aside beside the FAQ: a label, a heading, a paragraph,
+              two more buttons and a note under them. It was the page's THIRD
+              call to action inside one band — the FAQ's own "Talk to us" link
+              is directly above it and the ink block is directly below — and at
+              a phone width it did not sit beside anything, it stacked, adding
+              400px of furniture between the answers and the ask.
+
+              Nothing was lost: /contact and the mailto are both one line up,
+              in `fc-more`, which is where somebody who has just failed to find
+              their question actually looks. */}
         </div>
 
         {/* ── The ask ── */}
@@ -206,38 +200,19 @@ export default function FaqCtaSection() {
           background: ${C.paper};
           padding: 76px 0;
         }
-        .fc-inner {
-          display: flex;
-          flex-direction: column;
-          gap: 44px;
-        }
+        .fc-inner { max-width: 760px; margin: 0 auto; }
 
+        /* Same three parts, same sizes, as FeatureBand's header — this band
+           cannot render through that component (it owns an accordion and the
+           ink block rather than one picture), so the one thing it must not do
+           is set its kicker or its heading differently from the six that do. */
         .fc-kicker {
-          display: inline-flex;
-          align-items: center;
-          gap: 12px;
+          display: block;
           font-family: ${T.label};
           font-size: 10px;
           letter-spacing: 0.30em;
           text-transform: uppercase;
           color: ${C.goldInk};
-          white-space: nowrap;
-        }
-        .fc-kicker__rule {
-          display: block;
-          flex: none;
-          width: 28px;
-          height: 1px;
-          background: ${C.gold};
-          opacity: 0.55;
-        }
-        .fc-numeral {
-          font-family: ${T.display};
-          font-style: italic;
-          font-size: 13px;
-          color: ${C.goldInk};
-          opacity: 0.75;
-          float: right;
         }
         .fc-h2 {
           font-family: ${T.display};
@@ -326,47 +301,6 @@ export default function FaqCtaSection() {
           padding-bottom: 2px;
         }
 
-        /* ── the panel ─────────────────────────────────────────────────── */
-        .fc-aside {
-          border: 1px solid ${C.border};
-          background: ${C.paper2};
-          padding: 32px 24px 34px;
-        }
-        .fc-aside__label {
-          font-family: ${T.label};
-          font-size: 10px;
-          letter-spacing: 0.3em;
-          text-transform: uppercase;
-          color: ${C.goldInk};
-        }
-        .fc-aside__title {
-          font-family: ${T.display};
-          font-size: 25px;
-          font-weight: 400;
-          line-height: 1.22;
-          color: ${C.ink};
-          margin: 16px 0 0;
-        }
-        .fc-aside__body {
-          font-size: 13.5px;
-          font-weight: 300;
-          line-height: 1.8;
-          color: ${C.inkSoft};
-          margin: 12px 0 0;
-        }
-        .fc-aside__actions {
-          display: flex;
-          flex-direction: column;
-          gap: 10px;
-          margin-top: 26px;
-        }
-        .fc-aside__note {
-          margin: 18px 0 0;
-          font-size: 11px;
-          color: ${C.inkSoft};
-          opacity: 0.75;
-        }
-
         /* ── buttons ───────────────────────────────────────────────────── */
         .fc-btn {
           display: flex;
@@ -380,7 +314,10 @@ export default function FaqCtaSection() {
           text-transform: uppercase;
           white-space: nowrap;
           text-decoration: none;
-          border-radius: 0;
+          /* A PILL, like every other button on this page. See the note on
+             .hero-btn: the page had four button shapes and now has two. */
+          border-radius: 999px;
+          padding: 0 30px;
           transition: background 0.35s ease, color 0.35s ease, border-color 0.35s ease;
         }
         /* The primary label carries a price on a second line — the same
@@ -406,14 +343,19 @@ export default function FaqCtaSection() {
           border-width: 4.5px 0 4.5px 7px;
           border-color: transparent transparent transparent currentColor;
         }
-        .fc-btn--ink { background: ${C.ink}; color: ${C.paper}; border: 1px solid ${C.ink}; }
-        .fc-btn--ink:hover { background: transparent; color: ${C.ink}; }
-        .fc-btn--ghost { background: ${C.paper}; color: ${C.ink}; border: 1px solid ${C.border}; }
-        .fc-btn--ghost:hover { border-color: ${C.ink}; }
+        /* --ink and --ghost went with the "still deciding" panel that was the
+           only thing using them. The two that remain are the two the ink block
+           needs. */
         .fc-btn--ivory { background: ${C.ivory}; color: ${C.ink}; border: 1px solid ${C.ivory}; }
         .fc-btn--ivory:hover { background: transparent; color: ${C.ivory}; }
         .fc-btn--onInk { background: transparent; color: ${C.ivory}; border: 1px solid ${ON_INK.hairline}; }
         .fc-btn--onInk:hover { background: ${C.ivory}; color: ${C.ink}; border-color: ${C.ivory}; }
+        /* 320px. The pill is nowrap, so a label it cannot fit overflows rather
+           than wraps — see the measured note on .fb-cta in FeatureBand.
+           "Explore a live invitation" is the longest label on the page. */
+        @media (max-width: 639.98px) {
+          .fc-btn { padding: 0 18px; letter-spacing: 0.1em; }
+        }
 
         /* ── the one dark block on the page ────────────────────────────── */
         .fc-cta {
@@ -525,24 +467,17 @@ export default function FaqCtaSection() {
         /* ── 768 and up ────────────────────────────────────────────────── */
         @media (min-width: 768px) {
           .fc { padding: 128px 0; }
-          .fc-inner {
-            display: grid;
-            grid-template-columns: minmax(0, 1.42fr) minmax(0, 0.58fr);
-            gap: 80px;
-            align-items: start;
-          }
-          .fc-kicker { font-size: 11px; letter-spacing: 0.38em; gap: 16px; }
-          .fc-kicker__rule { width: 44px; }
-          .fc-numeral { font-size: 15px; }
-          .fc-h2 { font-size: 58px; margin-top: 22px; }
+          /* ONE COLUMN, since the panel beside the answers went. The grid it
+             used to make is gone with it — a 1.42/0.58 split with nothing in
+             the second track leaves the FAQ at 58% of the page for no reason
+             anybody reading it could work out. */
+          .fc-kicker { font-size: 11px; letter-spacing: 0.36em; }
+          .fc-h2 { font-size: 52px; margin-top: 20px; }
           .fc-list { margin-top: 40px; }
           .faq-item summary { padding: 24px 0; }
           .faq-q { font-size: 24px; }
           .faq-a { padding-bottom: 24px; }
           .faq-a p { font-size: 14.5px; }
-          .fc-aside { padding: 40px 36px 42px; }
-          .fc-aside__title { font-size: 28px; }
-          .fc-aside__body { font-size: 14.5px; }
           .fc-cta { margin-top: 96px; padding: 96px 72px; }
           .fc-cta__title { font-size: 52px; margin-top: 28px; }
           .fc-cta__body { font-size: 17px; margin-top: 18px; }
@@ -552,7 +487,6 @@ export default function FaqCtaSection() {
           .fc-stats strong { font-size: clamp(26px, 2.4vw, 32px); }
           .fc-stats span { font-size: 9.5px; }
           .fc-btn { min-height: 60px; padding: 0 40px; }
-          .fc-aside__actions .fc-btn { padding: 0 24px; }
         }
 
         @media (prefers-reduced-motion: reduce) {

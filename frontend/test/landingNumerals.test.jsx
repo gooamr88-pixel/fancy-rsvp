@@ -4,80 +4,92 @@ import path from 'node:path';
 
 const ROOT = process.cwd();
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
+const LANDING = path.join(ROOT, 'src/app/components/landing');
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   THE SECTION NUMERALS ARE A SEQUENCE, NOT BAND POSITIONS.
+   THE SECTION NUMERALS ARE GONE, AND THIS IS WHAT KEEPS THEM GONE.
 
-   They were first written as each section's index in BAND_ORDER, which
-   rendered as II, IV, V, VI, IX — a numbered sequence with four visible gaps,
-   because the bands in between either carry no numeral (hero, statement,
-   footer) or render conditionally.
+   ── What they were ──────────────────────────────────────────────────────
 
-   The conditional ones are the real problem. PrintedInvitationsSection and
-   ProofSection both return null until an admin has data behind them, so ANY
-   numbering keyed to position is wrong on a fresh install and right only on a
-   fully populated one — the kind of defect that never shows up in the
-   environment it was built in.
+   A small roman numeral in the corner of every band's header — I, II, III …
+   set in the display italic, hidden from assistive tech. This file used to
+   assert that they ran in an unbroken sequence across exactly the bands that
+   always render, because keying them to a band's POSITION was wrong on a
+   fresh install: two bands render nothing until an admin has data behind
+   them, so any position-derived numbering was right only on a fully populated
+   site and had visible gaps everywhere else.
 
-   So the numerals run across exactly the sections that always render — I..V
-   until 2026-09-09, I..VIII since the four feature bands were added. This test
-   pins both halves of that: the sequence is complete, and a conditional
-   section never joins it.
+   ── Why they went ────────────────────────────────────────────────────────
 
-   The hero carries no numeral, and that is not an omission: a sequence that
-   starts before the reader has been told what they are looking at is counting
-   for its own sake. I is the first thing being SHOWN.
+   The 2026-09-09 review of the approved mockup. Every band header carried a
+   kicker, a gold rule beside the kicker, a numeral in the opposite corner, a
+   headline and a sub-heading — five elements before the reader reaches the
+   thing the band is about. The mockup gives a band three: kicker, headline,
+   one sentence. The numeral was the piece with the least to say and the most
+   competition for the eye, so it went first, and the rule went with it.
+
+   ── Why this file stayed ────────────────────────────────────────────────
+
+   Because "add a small numeral to each section" is a good idea that will
+   occur to somebody again, and it is not obviously wrong until eight of them
+   are on one page. The test now pins the DECISION rather than the sequence:
+   no landing section prints a roman numeral, and the reason is here in one
+   place rather than in a commit message nobody will find.
+
+   If they come back deliberately, delete this file — do not weaken it. A test
+   that has been loosened until it passes is worse than no test.
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/** In render order — see BAND_ORDER and page.js. */
-const NUMBERED = [
-  ['TemplatesShowcaseSection.js', 'tss-secnum', 'I'],
-  ['GuestExperienceSection.js', 'ge-numeral', 'II'],
-  ['DashboardShowcaseSection.js', 'dash-numeral', 'III'],
-  ['SeatingSection.js', 'seat-numeral', 'IV'],
-  ['RemindersSection.js', 'rem-numeral', 'V'],
-  ['CheckinSection.js', 'door-numeral', 'VI'],
-  ['CapabilitiesSection.js', 'cap-numeral', 'VII'],
-  ['FaqCtaSection.js', 'fc-numeral', 'VIII'],
-];
-
-/** Sections that render null without data, and so must never be numbered. */
-const CONDITIONAL = ['PrintedInvitationsSection.js', 'ProofSection.js'];
-
-const src = (file) => read(`src/app/components/landing/${file}`);
+/** Every band file, including the shared shell they now all render through. */
+const sections = () =>
+  fs.readdirSync(LANDING).filter((f) => f.endsWith('Section.js') || f === 'FeatureBand.js');
 
 describe('landing section numerals', () => {
-  it('run in sequence with no gaps, in render order', () => {
-    NUMBERED.forEach(([file, cls, numeral]) => {
-      const needle = `className="${cls}" aria-hidden="true">${numeral}<`;
-      expect(src(file), `${file} should carry numeral ${numeral}`).toContain(needle);
+  it('no band prints a roman numeral in its header', () => {
+    /* The exact shape they took: an aria-hidden span whose whole content is
+       roman digits. Matched narrowly on purpose — "IV" inside a sentence, or
+       a viewBox, or the word "I" is not what this is about. */
+    sections().forEach((file) => {
+      const src = read(`src/app/components/landing/${file}`);
+      const found = [...src.matchAll(/aria-hidden="true"\s*>\s*([IVXLC]+)\s*</g)].map((m) => m[1]);
+      expect(found, `${file} has grown a section numeral again: ${found.join(', ')}`).toEqual([]);
     });
   });
 
-  it('numbers exactly the sections that always render', () => {
-    const all = fs.readdirSync(path.join(ROOT, 'src/app/components/landing'))
-      .filter((f) => f.endsWith('Section.js'));
-    const numbered = all.filter((f) => /aria-hidden="true">[IVX]+</.test(src(f)));
-    expect(numbered.sort()).toEqual(NUMBERED.map(([f]) => f).sort());
-  });
-
-  it('never numbers a section that can render nothing', () => {
-    CONDITIONAL.forEach((file) => {
-      const body = src(file);
-      // These really are conditional — if one stops returning null this test
-      // is telling you the wrong thing and should be revisited.
-      expect(body, `${file} is no longer conditional`).toMatch(/return null/);
-      expect(body, `${file} must not carry a section numeral`)
-        .not.toMatch(/aria-hidden="true">[IVX]+</);
+  it('no band draws the gold rule that used to sit beside its kicker', () => {
+    /* The numeral's other half. It was a 28px hairline after the kicker text,
+       and with eight bands it read as eight small ticks down the left edge of
+       the page rather than as ornament. */
+    sections().forEach((file) => {
+      const src = read(`src/app/components/landing/${file}`);
+      expect(src, `${file} has a kicker rule again`).not.toMatch(/kicker__rule/);
     });
   });
 
-  it('the numerals are decorative and hidden from assistive tech', () => {
-    // A screen reader announcing "one" before a heading is noise; the numeral
-    // is a typographic device, not content.
-    NUMBERED.forEach(([file, cls]) => {
-      const re = new RegExp(`className="${cls}"[^>]*aria-hidden="true"`);
-      expect(src(file), `${file}'s numeral must be aria-hidden`).toMatch(re);
+  it('every band header is built from the same three parts', () => {
+    /* THE POSITIVE HALF. Deleting the numeral is only half the decision; the
+       other half is that a band header is a kicker, a title and one sentence,
+       and that this is stated in ONE file rather than repeated in seven.
+       FeatureBand is that file — if a band stops rendering through it, the
+       rhythm can drift again without anything failing. */
+    const shell = read('src/app/components/landing/FeatureBand.js');
+    ['fb-kicker', 'fb-title', 'fb-sub'].forEach((cls) => {
+      expect(shell, `FeatureBand no longer renders ${cls}`).toContain(cls);
+    });
+
+    const THROUGH_THE_SHELL = [
+      'GuestExperienceSection.js',
+      'DashboardShowcaseSection.js',
+      'SeatingSection.js',
+      'RemindersSection.js',
+      'CheckinSection.js',
+      'CapabilitiesSection.js',
+    ];
+    THROUGH_THE_SHELL.forEach((file) => {
+      const src = read(`src/app/components/landing/${file}`);
+      expect(src, `${file} stopped rendering through FeatureBand`).toContain('<FeatureBand');
+      expect(src, `${file} declares its own <h2> instead of using the shell's`)
+        .not.toMatch(/<h2/);
     });
   });
 });

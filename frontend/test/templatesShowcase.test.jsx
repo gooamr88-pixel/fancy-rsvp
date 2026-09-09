@@ -10,8 +10,7 @@ import TemplatesShowcaseSection from '../src/app/components/landing/TemplatesSho
 import { TEMPLATES } from '../src/app/utils/curatedTemplates';
 import { CINEMATIC_KEYS } from '../src/app/components/templates/cinematic/cinematicThemes';
 import { occasionPolicyFor } from '../src/app/utils/eventOccasion';
-import { COLLECTION, ARRIVAL, OWN_PHOTO_NOTE } from '../src/app/collection/collectionCatalogue';
-import { PAGE_INDEX } from '../src/app/components/landing/landingTokens';
+import { COLLECTION, OWN_PHOTO_NOTE } from '../src/app/collection/collectionCatalogue';
 
 const ROOT = process.cwd();
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
@@ -191,29 +190,41 @@ describe('the invitations are shown, and they are real', () => {
 
   it('ships no landing image that nothing on the site references', async () => {
     /* THE OTHER HALF OF THE BUDGET, and the half that actually leaked. Three
-       files sat in this folder unreferenced for weeks — 90KB, 30% of the
-       whole allowance — because deleting the code that showed a picture does
-       not delete the picture. Every byte of that was being deployed.
+       files sat in this folder unreferenced for weeks — 90KB, 30% of the whole
+       allowance — because deleting the code that showed a picture does not
+       delete the picture. Every byte of that was being deployed.
 
        Scoped to src/ plus the shots harness: an image referenced only by a
-       test fixture is still dead as far as the site is concerned. */
+       test fixture is still dead as far as the site is concerned.
+
+       ── WHY IT COLLECTS NAMES RATHER THAN CONCATENATING FILES ────────────
+       The first version read every .js under src/ into an array and joined it
+       into one string, then ran 11 `includes` over the result. In isolation
+       that took 14s. In a FULL SUITE RUN it took more than 60 and timed out —
+       and took `committedImports` down with it, which is a whole-tree walk of
+       its own that had been passing. vitest.config.mjs already documents five
+       such walks fighting over one oversubscribed machine; this was the sixth,
+       and it was the greediest.
+
+       One regex pass per file into a Set costs the same reads and none of the
+       megabytes of string joining. */
     const dir = path.join(ROOT, 'public/images/landing');
-    const roots = [path.join(ROOT, 'src'), path.join(ROOT, 'test/shots')];
-    const sources = [];
+    const referenced = new Set();
     const walk = (d) => {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
         const full = path.join(d, e.name);
-        if (e.isDirectory()) walk(full);
-        else if (/\.(js|jsx|mjs|css)$/.test(e.name)) sources.push(fs.readFileSync(full, 'utf8'));
+        if (e.isDirectory()) { walk(full); continue; }
+        if (!/\.(js|jsx|mjs|css)$/.test(e.name)) continue;
+        const src = fs.readFileSync(full, 'utf8');
+        for (const m of src.matchAll(/images\/landing\/([\w.-]+)/g)) referenced.add(m[1]);
       }
     };
-    roots.forEach(walk);
-    const haystack = sources.join('\n');
+    [path.join(ROOT, 'src'), path.join(ROOT, 'test/shots')].forEach(walk);
 
     fs.readdirSync(dir).forEach((f) => {
-      expect(haystack.includes(f), `${f} is shipped and referenced nowhere`).toBe(true);
+      expect(referenced.has(f), `${f} is shipped and referenced nowhere`).toBe(true);
     });
-  });
+  }, 120000);
 
   it('declares dimensions and defers loading', async () => {
     const { container } = await renderBand();
@@ -250,11 +261,16 @@ describe('the words come from the product, not a second copy', () => {
     expect(imports, 'the band is reassembling the catalogue again')
       .not.toMatch(/CINEMATIC_KEYS|curatedTemplates|eventOccasion/);
 
-    await renderBand();
+    /* THE CARD IS A PICTURE, A NAME AND AN OCCASION. It also carried the
+       template's ARRIVAL line ("They break the seal. The card rises out.") in
+       italic underneath — charming, and a fourth line on each of four cards in
+       a band whose subject is photographs. The sentences are not lost: they
+       are still in the catalogue, and /collection prints all four. */
+    const { container } = await renderBand();
     COLLECTION.forEach((c) => {
       expect(screen.getByText(c.label), `${c.label} is missing from the rail`).toBeTruthy();
-      expect(screen.getByText(ARRIVAL[c.key]), `${c.key} lost its arrival line`).toBeTruthy();
     });
+    expect(container.querySelectorAll('.tss-slide').length).toBe(COLLECTION.length);
   });
 
   it('the catalogue it reads still takes its names from the template registry', async () => {
@@ -279,19 +295,26 @@ describe('the words come from the product, not a second copy', () => {
     expect(screen.getAllByText(occasionPolicyFor('bab').label).length).toBeGreaterThan(0);
   });
 
-  it('carries the page index, in order, as real anchors', async () => {
-    /* The six chips under the hero are the only map of a page that runs
-       seventeen screens on a phone. Rendered from PAGE_INDEX so a band that
-       is renamed or removed cannot leave a chip scrolling into nothing — the
-       other half of that guarantee (every id exists on a real band) is in
-       landingHomepage.test.jsx. */
+  it('gives the rail a dot per invitation, and marks where you are', async () => {
+    /* The mockup's carousel indicator, and it is not decoration: a rail with
+       no indicator does not say how much more there is or where you are in it.
+       It is also what let the ARROWS be hidden below 768 — two controls for
+       one gesture is the doubling that made the first pass at this page busy.
+
+       Real buttons, because they move the rail. Labelled by the template each
+       one leads to rather than "slide 2 of 4", which tells a screen-reader
+       user nothing they can act on. */
     const { container } = await renderBand();
-    const chips = [...container.querySelectorAll('nav[aria-label="On this page"] a')];
-    expect(chips.length, 'the in-page index is gone').toBe(PAGE_INDEX.length);
-    expect(chips.map((a) => a.getAttribute('href')))
-      .toEqual(PAGE_INDEX.map((e) => `#${e.id}`));
-    expect(chips.map((a) => a.textContent))
-      .toEqual(PAGE_INDEX.map((e) => e.label));
+    const dots = [...container.querySelectorAll('.tss-dot')];
+    expect(dots.length, 'the rail has no dots').toBe(COLLECTION.length);
+    dots.forEach((d, i) => {
+      expect(d.tagName, 'a dot that moves the rail must be a button').toBe('BUTTON');
+      expect(d.getAttribute('aria-label')).toContain(COLLECTION[i].label);
+    });
+    // Exactly one is current before anything is scrolled, and it is the first.
+    const on = dots.filter((d) => d.getAttribute('aria-current') === 'true');
+    expect(on.length, 'more than one dot is marked current').toBe(1);
+    expect(on[0]).toBe(dots[0]);
   });
 
   it('does not link anywhere that does not exist', async () => {

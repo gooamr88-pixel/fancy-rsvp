@@ -220,36 +220,23 @@ export const BAND_ORDER = [
   'footer:deep',
 ];
 
-/**
- * THE IN-PAGE INDEX — six anchors, rendered once, at the top of band 2.
- *
- * ── Why a long page needs one ────────────────────────────────────────────
- *
- * The 2026-09-09 pass gave four capabilities a screen each, which is what the
- * page needed and is also 14,000px on a phone — about seventeen screens. Every
- * band is short and every heading is a sentence, so the page READS fast; what
- * it lost is any way to see its SHAPE, or to go straight to the one thing you
- * came for. A visitor who wants the seating chart should not have to scroll
- * past the door to find out there is one.
- *
- * Six entries, not twelve. This is a map of what the page SHOWS, so the
- * conditional bands (printed, proof) are absent — an index that offers a link
- * to a band which renders nothing on a fresh install is worse than a shorter
- * index — and so are the hero, the closing ask and the footer, which are
- * where you already are and where you inevitably end up.
- *
- * The `id` of every entry must be a band in BAND_ORDER and the id on that
- * band's own <section>. landingHomepage.test.jsx checks both, because an
- * anchor that scrolls nowhere is a dead link that no route checker can see.
- */
-export const PAGE_INDEX = [
-  { id: 'invitations', label: 'The invitations' },
-  { id: 'experience', label: 'What a guest gets' },
-  { id: 'dashboard', label: 'Your dashboard' },
-  { id: 'seating', label: 'Seating' },
-  { id: 'reminders', label: 'Reminders' },
-  { id: 'checkin', label: 'At the door' },
-];
+/* ── THERE WAS AN IN-PAGE INDEX HERE, AND IT LASTED ONE REVIEW ────────────
+   Six anchor chips under the hero, added because the page runs seventeen
+   screens on a phone and a reader had no way to see its shape or jump to the
+   one band they came for. The reasoning was sound and the result was another
+   row of furniture above a heading that was already competing with a numeral,
+   a rule and a sub-heading — on the exact band the owner pointed at when they
+   said the page was crowded.
+
+   The answer to a long page turned out not to be a control for skipping it.
+   It was to make each screen carry ONE idea, so the scroll itself is legible:
+   every band is now a centred heading, one sentence, one picture and one
+   button (see FeatureBand.js), and the page reads in a swipe.
+
+   If an index comes back, it belongs in the navbar as an anchor menu, not
+   inside the second band — and the anchors it would need are still on every
+   section (id="seating", id="reminders", …), so nothing has to be re-added
+   for that to be possible. */
 
 /** Shared shadow ramp. Three steps, not eleven improvised ones.
  *

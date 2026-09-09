@@ -123,7 +123,7 @@ export const ARRIVAL = {
  * the three that open onto photography we supply.
  */
 export const OWN_PHOTO_NOTE = {
-  letter: 'Sealed Letter opens onto your own photograph — full screen, with your names and your words across it.',
+  letter: 'Sealed Letter opens onto your own photograph, full screen.',
 };
 
 /** The occasion chips, in the order they are offered.

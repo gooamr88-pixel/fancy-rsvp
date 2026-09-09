@@ -121,8 +121,6 @@ export default function DashboardTabs({ shots }) {
           </div>
         ))}
       </div>
-
-      <p className="dash-tabs__note">{shots[active].note}</p>
     </div>
   );
 }

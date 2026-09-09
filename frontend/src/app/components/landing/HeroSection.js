@@ -271,11 +271,16 @@ export default function HeroSection() {
              frame kills the light that is the reason for using this picture;
              this leaves the middle bright and puts the weight where the type
              actually sits, top and bottom. */
+          /* Four stops, and the middle two are the light. A flat wash over the
+             whole frame kills the sunlight that is the reason for using this
+             picture at all — the weight belongs at the top and the bottom,
+             where the type sits, and nowhere else. */
           background:
             linear-gradient(180deg,
               ${C.scrimEdge} 0%,
-              ${C.scrim} 26%,
-              rgba(24, 19, 12, 0.44) 52%,
+              rgba(24, 19, 12, 0.52) 24%,
+              rgba(24, 19, 12, 0.34) 48%,
+              rgba(20, 16, 10, 0.72) 82%,
               ${C.scrimEdge} 100%);
         }
 
@@ -402,6 +407,12 @@ export default function HeroSection() {
           flex-direction: column;
           gap: 10px;
         }
+        /* PILLS, like every other button on this page since 2026-09-09. The
+           page had four button shapes — square ink, square ghost, underlined
+           link, and a round arrow — which is three more than a page needs, and
+           the mixture was a real part of why it read as assembled rather than
+           designed. There are two now: a filled one for the page's own asks
+           and an outlined one for "go and look". */
         .hero-btn {
           display: flex;
           align-items: center;
@@ -411,11 +422,11 @@ export default function HeroSection() {
           font-family: ${T.body};
           font-size: 11px;
           font-weight: 600;
-          letter-spacing: 0.2em;
+          letter-spacing: 0.16em;
           text-transform: uppercase;
           white-space: nowrap;
           text-decoration: none;
-          border-radius: 0;
+          border-radius: 999px;
           transition: background 0.35s ease, color 0.35s ease, border-color 0.35s ease;
         }
         /* The primary label carries a price on a second line. A COLUMN rather
@@ -455,6 +466,12 @@ export default function HeroSection() {
         .hero-btn--ghost:hover {
           background: rgba(252, 249, 240, 0.16);
           border-color: ${ON_PHOTO.body};
+        }
+        /* 320px. The pill is nowrap, so a label it cannot fit overflows rather
+           than wraps — see the measured note on .fb-cta in FeatureBand. */
+        @media (max-width: 639.98px) {
+          .hero-btn { letter-spacing: 0.1em; }
+          .hero-btn--ghost { padding: 0 16px; }
         }
         /* A play mark drawn in CSS rather than shipped as an icon: it is three
            borders, and an SVG for a triangle is a request for a triangle. */
