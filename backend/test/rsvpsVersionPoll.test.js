@@ -38,8 +38,7 @@ const req = () => mockReq({ params: { eventId: 'evt-1' }, user: { id: 'owner-1' 
 
 test('returns the party count and the newest updated_at', async () => {
   mock.setResolver((s) => {
-    if (s.table === 'rsvp_parties' && s.count) return { count: 42 };
-    if (s.table === 'rsvp_parties') return { data: [{ updated_at: '2026-09-10T12:00:00Z' }] };
+    if (s.table === 'rsvp_parties') return { count: 42, data: [{ updated_at: '2026-09-10T12:00:00Z' }] };
     return {};
   });
 
@@ -51,8 +50,7 @@ test('returns the party count and the newest updated_at', async () => {
 
 test('an empty guest list is a valid fingerprint, not an error', async () => {
   mock.setResolver((s) => {
-    if (s.table === 'rsvp_parties' && s.count) return { count: 0 };
-    if (s.table === 'rsvp_parties') return { data: [] };
+    if (s.table === 'rsvp_parties') return { count: 0, data: [] };
     return {};
   });
 
@@ -64,14 +62,13 @@ test('an empty guest list is a valid fingerprint, not an error', async () => {
 
 test('is scoped to the event — a poll must never see another organizer\'s list', async () => {
   mock.setResolver((s) => {
-    if (s.table === 'rsvp_parties' && s.count) return { count: 1 };
-    if (s.table === 'rsvp_parties') return { data: [{ updated_at: '2026-01-01T00:00:00Z' }] };
+    if (s.table === 'rsvp_parties') return { count: 1, data: [{ updated_at: '2026-01-01T00:00:00Z' }] };
     return {};
   });
 
   await invoke(getRsvpsVersion, req());
   const scoped = mock.calls.filter((c) => c.table === 'rsvp_parties');
-  assert.ok(scoped.length >= 2, 'expected the count and the newest-row queries');
+  assert.equal(scoped.length, 1, 'the fingerprint must cost exactly ONE round trip');
   for (const call of scoped) {
     assert.ok(
       JSON.stringify(call).includes('evt-1'),
@@ -82,8 +79,7 @@ test('is scoped to the event — a poll must never see another organizer\'s list
 
 test('never caches — a cached fingerprint would report "no change" forever', async () => {
   mock.setResolver((s) => {
-    if (s.table === 'rsvp_parties' && s.count) return { count: 3 };
-    if (s.table === 'rsvp_parties') return { data: [{ updated_at: '2026-09-10T12:00:00Z' }] };
+    if (s.table === 'rsvp_parties') return { count: 3, data: [{ updated_at: '2026-09-10T12:00:00Z' }] };
     return {};
   });
 
@@ -93,8 +89,7 @@ test('never caches — a cached fingerprint would report "no change" forever', a
 
 test('it does NOT fetch the guest list — that is the entire point', async () => {
   mock.setResolver((s) => {
-    if (s.table === 'rsvp_parties' && s.count) return { count: 5 };
-    if (s.table === 'rsvp_parties') return { data: [{ updated_at: '2026-09-10T12:00:00Z' }] };
+    if (s.table === 'rsvp_parties') return { count: 5, data: [{ updated_at: '2026-09-10T12:00:00Z' }] };
     return {};
   });
 

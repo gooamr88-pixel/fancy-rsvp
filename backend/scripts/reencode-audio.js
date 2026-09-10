@@ -55,7 +55,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execFileSync, execFileSync: run } = require('child_process');
+const { execFileSync } = require('child_process');
+/** Alias kept because the encode call below reads better as `run(...)`. */
+const run = execFileSync;
 
 const ROOT = path.join(__dirname, '..', '..');
 const WORK = path.join(ROOT, '.audio-work');

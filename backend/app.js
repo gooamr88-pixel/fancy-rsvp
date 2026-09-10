@@ -545,8 +545,42 @@ app.use((req, res) => {
 
 // Centralized error handling middleware
 app.use((err, req, res, next) => {
+  /**
+   * ── BODY-PARSER FAILURES ARE THE CLIENT'S FAULT, NOT A SERVER FAULT ──
+   *
+   * `express.raw` and `express.json` reject an oversized or malformed body by
+   * throwing an error that already carries the right HTTP status — 413 for
+   * `entity.too.large`, 400 for bad JSON. This handler used to ignore that and
+   * answer 500 INTERNAL_SERVER_ERROR for all of them.
+   *
+   * That mattered the moment uploads moved server-side: a guest photo over the
+   * 12 MB ceiling produced "An unexpected error occurred on the server" with no
+   * hint that the file was simply too big, and it was logged at error level as
+   * though the API had broken. The controller's own size check could never
+   * report it either, because the parser rejects the body before any handler
+   * runs.
+   *
+   * Only body-parser errors are trusted this way — they set `expose = true` on
+   * exactly the messages that are safe to show. Anything else still falls
+   * through to the opaque 500 below, so a genuine internal fault cannot smuggle
+   * its message out by setting a status.
+   */
+  if (err && err.type && typeof err.status === 'number' && err.status < 500) {
+    const isTooLarge = err.type === 'entity.too.large';
+    logger.warn({
+      type: err.type, status: err.status, url: req.originalUrl, method: req.method,
+    }, 'request body rejected');
+    return res.status(err.status).json({
+      success: false,
+      error: isTooLarge ? 'FILE_TOO_LARGE' : 'INVALID_BODY',
+      message: isTooLarge
+        ? 'That file is too large. The limit is 12 MB.'
+        : 'The request body could not be read.',
+    });
+  }
+
   logger.error({ err, stack: err.stack, url: req.originalUrl, method: req.method }, 'Unhandled error');
-  
+
   // L1: never leak internal error identifiers (err.code / err.name / stack) to
   // clients in production — they aid fingerprinting. The full error is already
   // logged above for cross-referencing. Detail is exposed only in development.

@@ -82,11 +82,44 @@ export async function uploadAsset(file, kind) {
    * apiFetch only defaults Content-Type to JSON when the caller has not set one,
    * so passing it explicitly is enough to opt out.
    */
-  const res = await apiFetch(`/uploads/${kind}`, {
-    method: 'POST',
-    headers: { 'Content-Type': file.type || 'application/octet-stream' },
-    body: file,
-  });
+  /**
+   * ── A LONGER DEADLINE THAN apiFetch'S DEFAULT 30 SECONDS ──
+   *
+   * apiFetch aborts every request after 30s. That is right for a JSON call and
+   * wrong for this one: 12 MB over a hotel or mobile connection at ~500 kbps
+   * takes about three minutes, and the old direct-to-Supabase upload had no
+   * client-side cap at all. Keeping the default would have turned "move uploads
+   * server-side" into "large photos now fail on slow connections", which is
+   * exactly the kind of regression that only shows up on somebody else's phone.
+   *
+   * Passing our own signal is what opts out — apiFetch uses
+   * `options.signal || controller.signal`, so a supplied signal replaces the
+   * 30-second one entirely.
+   *
+   * Built by hand rather than with `AbortSignal.timeout()` so this does not
+   * depend on a browser API newer than the rest of the bundle targets.
+   */
+  const uploadAbort = new AbortController();
+  const deadline = setTimeout(() => uploadAbort.abort(), 3 * 60 * 1000);
+
+  let res;
+  try {
+    res = await apiFetch(`/uploads/${kind}`, {
+      method: 'POST',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file,
+      signal: uploadAbort.signal,
+    });
+  } catch (err) {
+    // An abort surfaces as a bare "The user aborted a request", which tells the
+    // organizer nothing about what to do next.
+    if (err?.name === 'AbortError' || uploadAbort.signal.aborted) {
+      throw new Error('The upload timed out. Check your connection, or try a smaller file.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(deadline);
+  }
 
   if (!res?.success || !res?.data?.url) {
     throw new Error(res?.message || 'The upload did not complete.');

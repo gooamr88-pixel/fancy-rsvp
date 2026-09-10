@@ -633,19 +633,31 @@ async function getPartySeatingMap(eventId, partyId) {
  * for INEQUALITY, not ordering, so a timestamp going backwards still counts.
  */
 async function partiesVersion(eventId) {
-  const { data, error } = await supabase
+  /**
+   * ONE round trip, not two.
+   *
+   * The first version of this ran a `limit(1)` for the newest row and then a
+   * separate `head: true` count — which is two requests every twenty seconds
+   * per open dashboard, in the one function whose entire reason for existing is
+   * to be cheaper than what it replaced. PostgREST returns the exact count in
+   * the Content-Range header of the same response, so asking for both costs
+   * nothing extra.
+   *
+   * `updated_at` is genuinely maintained on this table: 20260705000000 creates
+   * `set_updated_at BEFORE UPDATE ON rsvp_parties` explicitly. Worth stating,
+   * because the blanket trigger loop in 20260610100000 only covered tables that
+   * existed on 2026-06-10 and `rsvp_parties` was created a month later — if that
+   * explicit trigger were ever dropped, this fingerprint would stop noticing
+   * edits while still noticing inserts, and the dashboard would silently go
+   * stale rather than visibly break.
+   */
+  const { data, count, error } = await supabase
     .from('rsvp_parties')
-    .select('updated_at')
+    .select('updated_at', { count: 'exact' })
     .eq('event_id', eventId)
     .order('updated_at', { ascending: false })
     .limit(1);
   if (error) throw error;
-
-  const { count, error: countErr } = await supabase
-    .from('rsvp_parties')
-    .select('id', { count: 'exact', head: true })
-    .eq('event_id', eventId);
-  if (countErr) throw countErr;
 
   return {
     count: count || 0,

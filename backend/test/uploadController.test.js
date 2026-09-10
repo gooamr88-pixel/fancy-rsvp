@@ -123,6 +123,32 @@ test('an animated GIF is passed through, not flattened to one frame', async () =
   assert.equal(uploads[0].opts.contentType, 'image/gif');
 });
 
+test('a GIF over its own tighter ceiling is rejected, not stored uncompressed', async () => {
+  /**
+   * A GIF is the one input that escapes every size reduction here, because
+   * sharp would flatten the animation to a single frame. Without a separate cap
+   * it would ride the 12 MB image ceiling straight into the bucket and be served
+   * whole to every guest — the exact egress this endpoint was built to stop,
+   * arriving through the endpoint itself.
+   */
+  const big = Buffer.alloc(4 * 1024 * 1024);
+  // A real GIF header, so the rejection is provably about size, not parsing.
+  Buffer.from('GIF89a').copy(big);
+
+  const { res } = await invoke(uploadAsset, req('gallery', big, 'image/gif'));
+  assert.equal(res.statusCode, 413);
+  assert.equal(res.body.error, 'GIF_TOO_LARGE');
+  assert.equal(uploads.length, 0);
+});
+
+test('a GIF UNDER that ceiling still passes through untouched', async () => {
+  const gif = await sharp({ create: { width: 40, height: 40, channels: 3, background: { r: 9, g: 9, b: 9 } } }).gif().toBuffer();
+  const { res } = await invoke(uploadAsset, req('gallery', gif, 'image/gif'));
+
+  assert.equal(res.statusCode, 201);
+  assert.equal(uploads[0].bytes, gif.length, 'small GIFs must still be byte-identical');
+});
+
 test('rejects an unknown kind rather than trusting a caller-supplied path', async () => {
   const { res } = await invoke(uploadAsset, req('../../etc', await jpeg(100)));
   assert.equal(res.statusCode, 400);

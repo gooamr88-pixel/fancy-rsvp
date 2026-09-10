@@ -94,6 +94,14 @@ const KINDS = {
 /** 12 MB of raw upload. Generous for a phone photo; the output is a fraction. */
 const MAX_INPUT_BYTES = 12 * 1024 * 1024;
 
+/**
+ * GIFs are stored as-is — sharp would flatten an animation to one frame — so
+ * they are the only input whose STORED size equals its uploaded size. They get
+ * their own ceiling because 12 MB of that is served to every guest, uncompressed
+ * and forever.
+ */
+const MAX_GIF_BYTES = 3 * 1024 * 1024;
+
 const ACCEPTED_IMAGE = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/gif', 'image/tiff']);
 const ACCEPTED_AUDIO = new Set(['audio/mpeg', 'audio/mp3', 'audio/ogg', 'audio/wav', 'audio/x-wav', 'audio/mp4', 'audio/aac', 'audio/webm']);
 const ACCEPTED = new Set([...ACCEPTED_IMAGE, ...ACCEPTED_AUDIO]);
@@ -169,6 +177,25 @@ const uploadAsset = async (req, res, next) => {
       output = input;
       outType = contentType;
       outExt = AUDIO_EXT[contentType] || 'bin';
+    } else if (contentType === 'image/gif' && input.length > MAX_GIF_BYTES) {
+      /**
+       * A GIF is passed through unprocessed (see below), which means it is the
+       * ONE format that escapes every size reduction this endpoint exists to
+       * apply. At the 12 MB ceiling that is a 12 MB animation delivered to every
+       * guest who opens the invitation — precisely the egress that got this
+       * project's services restricted, arriving through the very endpoint built
+       * to stop it.
+       *
+       * So GIFs get their own, much tighter ceiling. Rejected with a message
+       * that names the real fix, because "too large" alone invites the organizer
+       * to re-export the same animation slightly smaller and try again.
+       */
+      return sendFail(res, {
+        status: 413,
+        error: 'GIF_TOO_LARGE',
+        message: `Animated images can't be compressed here, so they are limited to ${MAX_GIF_BYTES / 1048576} MB `
+          + `(this one is ${(input.length / 1048576).toFixed(1)} MB). Upload it as a video, or use a still image.`,
+      });
     } else if (contentType === 'image/gif') {
       output = input;
       outType = 'image/gif';
