@@ -22,7 +22,7 @@ const { escapeHtml, getEmailVerificationTemplate, getPasswordResetTemplate, getO
 const { setAuthCookie, clearAuthCookie, COOKIE_NAME } = require('../middleware/auth');
 const { sendEmailViaBrevo } = require('../utils/notificationService');
 const { newJti, recordSession, revokeByJti, revokeAllForUser, recordLogin } = require('../services/sessionService');
-const { getAccessContext } = require('../services/rbacService');
+const { getAccessContext, invalidate: invalidateAccessContext } = require('../services/rbacService');
 const { generateUniqueReferralCode, resolveReferrerOrgId } = require('../services/referralService');
 const { captureRequestMeta } = require('../middleware/adminAudit');
 const { resolveTimezoneFromIp } = require('../utils/timezoneFromIp');
@@ -36,6 +36,15 @@ if (!JWT_SECRET) throw new Error('FATAL: JWT_SECRET environment variable is requ
 
 const CURRENT_ITERATIONS = 600000;
 const LEGACY_ITERATIONS = 1000;
+
+/**
+ * How many logins this process has accepted on a legacy hash.
+ *
+ * Per-process and never reset — it is a tripwire, not a metric. Its only job is
+ * to make "is anybody still on the old cost?" answerable from the logs, so the
+ * legacy branch can eventually be deleted instead of living forever by default.
+ */
+let legacyHashHits = 0;
 
 /**
  * Password strength regex: at least 8 chars, one uppercase, one lowercase, one digit.
@@ -95,16 +104,32 @@ const verifyPassword = async (password, storedHash, orgEmail) => {
   });
 
   if (legacyMatch && orgEmail) {
-    // Rehash with current iterations and update DB
+    /**
+     * ── A 1,000-ITERATION HASH IS A CREDENTIAL WE WOULD NOT ISSUE TODAY ──
+     *
+     * The dual-hash migration is right: it rehashes transparently on the next
+     * successful login, so nobody is locked out. What it has never had is an
+     * END. There is no cutoff date and no way to tell how many accounts are
+     * still on the old cost — so the answer to "can we drop the legacy branch
+     * yet?" has always been "no idea", and a hash that a modern GPU cracks in
+     * seconds stays a valid credential indefinitely.
+     *
+     * Logged at WARN and counted, rather than at info, for exactly that reason:
+     * this line is the only evidence the legacy path is still load-bearing.
+     * When it stops appearing, LEGACY_ITERATIONS can go.
+     */
+    legacyHashHits += 1;
     try {
       const newHash = await hashPassword(password);
       await supabase
         .from('organizations')
         .update({ password_hash: newHash })
         .eq('email', orgEmail);
-      logger.info({ email: orgEmail }, 'Migrated password hash to current iteration count');
+      logger.warn({ email: orgEmail, legacyHashHits },
+        'Accepted a legacy 1,000-iteration password hash and upgraded it. While this line still appears, the legacy verification branch cannot be removed.');
     } catch (rehashErr) {
-      logger.error({ err: rehashErr }, 'Failed to rehash password during migration');
+      logger.error({ err: rehashErr, email: orgEmail },
+        'Accepted a legacy password hash but FAILED to upgrade it — this account will keep authenticating on the weak hash.');
     }
   }
 
@@ -134,7 +159,21 @@ const issueAuthCookie = async (req, res, payload) => {
   const jti = newJti();
   const token = jwt.sign({ ...payload, jti }, JWT_SECRET, { expiresIn: '24h' });
   setAuthCookie(res, token);
-  await recordSession(req, { userId: payload.id, jti });
+  try {
+    await recordSession(req, { userId: payload.id, jti });
+  } catch (err) {
+    /**
+     * The session row is what makes this token usable — `isSessionValid` fails
+     * closed on a `jti` it cannot find. So if the row could not be written, the
+     * cookie already on the response is worse than no cookie: it looks like a
+     * session and authenticates nothing.
+     *
+     * Clear it and re-raise. The caller's own catch turns this into a normal
+     * error response, which is the honest outcome: the login did not succeed.
+     */
+    clearAuthCookie(res);
+    throw err;
+  }
   return token;
 };
 
@@ -695,10 +734,29 @@ const resetPassword = async (req, res, next) => {
 
     const org = orgs && orgs[0];
     if (!org) {
+      /**
+       * ── THE SAME ANSWER AS A WRONG CODE, IN BOTH SHAPE AND TIMING ──
+       *
+       * This returned `error: 'USER_NOT_FOUND'`. The MESSAGE was already
+       * generic, but the error CODE is what a client reads — so the endpoint
+       * confirmed, to anyone who asked, whether an address had an account.
+       *
+       * That undid the care taken one function above: `forgotPassword` answers
+       * "if the email exists, a code has been dispatched" precisely so it
+       * cannot be used to enumerate customers. Leaving this one distinguishable
+       * meant an attacker simply asked here instead.
+       *
+       * The delay matters as much as the code. A real address walks through an
+       * attempt-count read and a constant-time OTP comparison; returning
+       * instantly here made the two cases separable on latency alone, which is
+       * exactly the gap `getDummyHash` exists to close on the login path. So
+       * this pays a comparable cost before answering.
+       */
+      await new Promise((resolve) => setTimeout(resolve, 120 + crypto.randomInt(80)));
       return res.status(400).json({
         success: false,
-        error: 'USER_NOT_FOUND',
-        message: 'Invalid email or OTP code.'
+        error: 'INVALID_OTP',
+        message: 'The OTP code is invalid or has expired.'
       });
     }
 
@@ -839,6 +897,15 @@ const getProfile = async (req, res, next) => {
       isSuperAdmin: !!req.user.isSuperAdmin,
       impersonating: !!req.user.imp,
       impersonatorEmail,
+      /**
+       * The forced-reset flag, which was previously returned ONLY in the login
+       * response. That made it invisible after a page reload: the client had
+       * nowhere to re-read it from, so a user who dismissed the prompt once
+       * never saw it again. This endpoint is the one every session re-fetches,
+       * and it is deliberately exempt from the gate so the client can always
+       * learn WHY it is being refused elsewhere.
+       */
+      mustResetPassword: !!req.user.access?.mustResetPassword,
     };
     delete profileData.password_hash;
 
@@ -856,13 +923,43 @@ const updateProfile = async (req, res, next) => {
   try {
     const { name, phone, bio, website, logo_url, social_links, timezone } = req.body;
 
+    /**
+     * Coerced before trimming, not trusted to be a string.
+     *
+     * `name.trim()` on a body of `{"name": 123}` is a TypeError, which reached
+     * the outer catch and became an opaque 500 — a client bug reported as a
+     * server fault. The fields here are free text on a profile form, so
+     * stringifying a stray number or boolean is the right reading of the
+     * intent; only an object or array is rejected, because `String({})` would
+     * store the literal "[object Object]" as somebody's business name.
+     */
+    const text = (value, field) => {
+      if (value === null || value === undefined) return null;
+      if (typeof value === 'object') {
+        const err = new Error(`${field} must be a string.`);
+        err.userFacing = true;
+        throw err;
+      }
+      return String(value).trim();
+    };
+
     const updates = {};
-    if (name !== undefined) updates.name = name.trim();
-    if (phone !== undefined) updates.phone = phone.trim();
-    if (bio !== undefined) updates.bio = bio !== null ? bio.trim() : null;
-    if (website !== undefined) updates.website = website !== null ? website.trim() : null;
-    if (logo_url !== undefined) updates.logo_url = logo_url !== null ? logo_url.trim() : null;
-    if (social_links !== undefined) updates.social_links = social_links;
+    if (name !== undefined) updates.name = text(name, 'name');
+    if (phone !== undefined) updates.phone = text(phone, 'phone');
+    if (bio !== undefined) updates.bio = text(bio, 'bio');
+    if (website !== undefined) updates.website = text(website, 'website');
+    if (logo_url !== undefined) updates.logo_url = text(logo_url, 'logo_url');
+    if (social_links !== undefined) {
+      // Stored as-is (it is a JSON column the dashboard owns the shape of), but
+      // it must at least BE an object — an array or a scalar here would be
+      // written verbatim and break every reader of it.
+      if (social_links !== null && (typeof social_links !== 'object' || Array.isArray(social_links))) {
+        return res.status(400).json({
+          success: false, error: 'VALIDATION_ERROR', message: 'social_links must be an object.',
+        });
+      }
+      updates.social_links = social_links;
+    }
 
     /**
      * The escape hatch the IP-detection design requires.
@@ -908,8 +1005,11 @@ const updateProfile = async (req, res, next) => {
       if (error.message && (error.message.includes('column') || error.message.includes('does not exist'))) {
         logger.warn('Failed to update branding columns (columns do not exist); retrying with core fields only');
         const coreUpdates = {};
-        if (name !== undefined) coreUpdates.name = name.trim();
-        if (phone !== undefined) coreUpdates.phone = phone.trim();
+        // Reuse the already-coerced values rather than re-deriving them from the
+        // raw body — re-deriving is how this fallback would drift from the path
+        // above, and it would reintroduce the same TypeError on a non-string.
+        if (name !== undefined) coreUpdates.name = updates.name;
+        if (phone !== undefined) coreUpdates.phone = updates.phone;
         
         if (Object.keys(coreUpdates).length === 0) {
           return res.status(400).json({ success: false, error: 'MIGRATION_REQUIRED', message: 'Branding columns do not exist in the database. Please apply migrations.' });
@@ -1059,6 +1159,11 @@ const updateProfile = async (req, res, next) => {
 
     res.json({ success: true, profile: org, timezonePropagation, message: 'Profile updated successfully' });
   } catch (err) {
+    // A bad field type is the caller's mistake and says so; everything else
+    // falls through to the generic handler.
+    if (err && err.userFacing) {
+      return res.status(400).json({ success: false, error: 'VALIDATION_ERROR', message: err.message });
+    }
     next(err);
   }
 };
@@ -1239,6 +1344,17 @@ const changePassword = async (req, res, next) => {
       .eq('id', org.id);
 
     if (updateError) throw updateError;
+
+    /**
+     * Drop the cached access context immediately.
+     *
+     * `must_reset_password` is now read from that cache on every authenticated
+     * request (rbacService), and the cache holds for 60 seconds. Without this,
+     * an organizer who complied with the forced reset would keep being refused
+     * for up to a minute afterwards — punished for doing the thing they were
+     * asked to do, with an error message telling them to do it again.
+     */
+    invalidateAccessContext(req.user.id);
 
     // SECURITY: revoke all existing sessions on password change (e.g. a stolen
     // session on another device), THEN mint a fresh session below so this device

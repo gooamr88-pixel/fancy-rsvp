@@ -1,4 +1,5 @@
 const express = require('express');
+const { registerUuidParams } = require('../middleware/uuidParam');
 const { body } = require('express-validator');
 const rateLimit = require('express-rate-limit');
 const validate = require('../middleware/validate');
@@ -8,6 +9,10 @@ const authController = require('../controllers/authController');
 
 const router = express.Router();
 
+
+// Identifier guards. app.param() in app.js does NOT fire for parameters
+// declared inside a mounted router — see middleware/uuidParam.js.
+registerUuidParams(router, ['sessionId']);
 // SEC H1: Strict per-endpoint rate limiters for sensitive auth routes.
 const loginLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute

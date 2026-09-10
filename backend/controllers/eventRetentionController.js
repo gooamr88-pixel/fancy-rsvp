@@ -131,6 +131,34 @@ const downloadEventArchive = async (req, res) => {
  * Cancels the scheduled deletion for one event.
  */
 const keepEventData = async (req, res) => {
+  /**
+   * ── A LINK PREFETCHER MUST NOT PRESS THIS BUTTON ──
+   *
+   * This is a GET with a side effect, which it has to be: it is a button in an
+   * email, and a form post from a mail client is not a thing that works. But
+   * mail scanners, link-safety services and browser prefetchers all follow
+   * links in messages, and any one of them cancels the deletion without a human
+   * having read the warning.
+   *
+   * The direction is safe — data is KEPT, never destroyed — so this is not a
+   * security control. It is about the record being true: `purge_opt_out` is
+   * supposed to mean "the organizer decided", and a scanner deciding for them
+   * makes it mean nothing.
+   *
+   * These headers are what a prefetcher sends. Answering them with the page and
+   * no write lets the scanner see a healthy 200 while the decision waits for
+   * the person.
+   */
+  const purpose = String(
+    req.get('Purpose') || req.get('X-Purpose') || req.get('X-Moz') || req.get('Sec-Purpose') || '',
+  ).toLowerCase();
+  if (purpose.includes('prefetch') || purpose.includes('preview')) {
+    return res.status(200).type('html').send(page({
+      title: 'Confirm you want to keep this data',
+      body: '<p>Open this link in your browser to cancel the scheduled deletion.</p>',
+    }));
+  }
+
   let eventId;
   try {
     ({ eventId } = tokenService.verifyEventKeep(req.query.token));

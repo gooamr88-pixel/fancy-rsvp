@@ -151,6 +151,16 @@ const requireAuth = async (req, res, next) => {
       imp: decoded.imp || null,
     };
 
+    /**
+     * The forced-reset gate lives HERE rather than as a separate mount, so that
+     * every authenticated route is covered by construction. Mounting it beside
+     * `requireAuth` on each of the fifteen protected prefixes would work today
+     * and would be one forgotten line away from not working tomorrow — which is
+     * how this flag came to be enforced nowhere at all in the first place.
+     */
+    const blocked = passwordResetBlock(req);
+    if (blocked) return res.status(403).json(blocked);
+
     next();
   } catch (err) {
     return res.status(401).json({
@@ -191,6 +201,98 @@ const optionalAuth = async (req, res, next) => {
     // Ignore errors for optional auth
   }
   next();
+};
+
+/**
+ * ── A FORCED PASSWORD RESET THAT IS ACTUALLY FORCED ───────────────────────
+ *
+ * `organizations.must_reset_password` is set when an admin resets somebody's
+ * password on their behalf (admin/userMgmtController.resetOrganizerPassword).
+ * It was written, returned once in the login response, and cleared on change —
+ * and enforced by nothing. There was no server-side gate, and the flag was not
+ * even included in `GET /auth/profile`, so a user who dismissed the prompt and
+ * reloaded the page never saw it again and kept full access on a password an
+ * administrator had chosen and knows.
+ *
+ * This is the gate. It runs after `requireAuth` has resolved the session and
+ * refuses everything except the handful of routes needed to comply: read your
+ * profile (which now carries the flag), change the password, and log out.
+ *
+ * ── Why an allowlist of paths rather than a flag on each route ──
+ *
+ * The set of things you may do while locked out is small, fixed, and about
+ * ESCAPING the lockout. Expressing it as "these three, nothing else" means a
+ * route added tomorrow is closed by default, which is the correct direction —
+ * the alternative would require every future author to know this flag exists.
+ */
+const PASSWORD_RESET_EXEMPT = [
+  { method: 'GET', path: '/api/v1/auth/profile' },
+  { method: 'POST', path: '/api/v1/auth/change-password' },
+  { method: 'POST', path: '/api/v1/auth/logout' },
+  // The way back out of an impersonation session. See the `imp` check below for
+  // why an impersonating admin should never reach the gate at all — this entry
+  // is the belt for a session that somehow does.
+  { method: 'POST', path: '/api/v1/auth/stop-impersonating' },
+];
+
+/**
+ * Matched case-INSENSITIVELY, because Express routes that way.
+ *
+ * `caseSensitive` is off by default, so `/API/v1/auth/Change-Password` reaches
+ * the change-password handler perfectly well. An exact-case comparison here
+ * therefore blocked the one route that CLEARS the flag, for any client that
+ * differed in case — leaving that user permanently refused with no way to
+ * comply. The mismatch failed in the safe direction (more restrictive, never
+ * less), which is exactly why it would have gone unnoticed.
+ *
+ * Matching the router's own behaviour is the correct rule: if a path resolves
+ * to an exempt handler, it is exempt.
+ */
+const isPasswordResetExempt = (req) => {
+  const path = (req.originalUrl || '').split('?')[0].replace(/\/+$/, '').toLowerCase();
+  const method = String(req.method || '').toUpperCase();
+  return PASSWORD_RESET_EXEMPT.some((r) => r.method === method && r.path === path);
+};
+
+/**
+ * Answers `null` to let the request through, or the response body to refuse it.
+ *
+ * Reads the flag off the already-resolved, already-cached access context, so
+ * this costs nothing per request. FAILS OPEN by construction: a database
+ * without the column resolves `mustResetPassword` to false, which is what was
+ * true before the flag existed.
+ */
+const passwordResetBlock = (req) => {
+  if (!req.user || isPasswordResetExempt(req)) return null;
+
+  // Admins are exempt: the flag is only ever set on an organizer account, and
+  // locking an admin out of the admin surface over it would be a way to lock
+  // the platform's operators out of their own tools.
+  if (req.user.access?.isAdmin) return null;
+
+  /**
+   * An IMPERSONATION session is exempt, and this one is not cosmetic.
+   *
+   * When an admin impersonates an organizer, `req.user.access` is resolved for
+   * the ORGANIZER — so `isAdmin` above is false. If that organizer happens to
+   * be flagged for a forced reset, the gate would refuse the admin every route
+   * INCLUDING the one that ends the impersonation, stranding them in a session
+   * they cannot leave and cannot use. And the demand itself is nonsense: the
+   * person at the keyboard is not the account holder and must not be invited to
+   * choose that account's password.
+   *
+   * `imp` is set only by admin/userMgmtController.impersonateOrganizer, which
+   * is already permission-checked, so trusting it here adds no new authority.
+   */
+  if (req.user.imp) return null;
+
+  if (!req.user.access?.mustResetPassword) return null;
+
+  return {
+    success: false,
+    error: 'PASSWORD_RESET_REQUIRED',
+    message: 'Your password was reset by an administrator. Choose a new password to continue.',
+  };
 };
 
 /**
@@ -252,6 +354,9 @@ module.exports = {
   optionalAuth,
   requireSuperAdmin,
   verifyEventOwner,
+  // Exported for tests and for anything that needs to ask the same question
+  // without going through requireAuth.
+  passwordResetBlock,
   setAuthCookie,
   clearAuthCookie,
   COOKIE_NAME,

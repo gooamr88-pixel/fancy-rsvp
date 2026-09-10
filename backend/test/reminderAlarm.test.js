@@ -126,8 +126,13 @@ test('the alarm only considers events that can actually send', () => {
 
 /* ── Paging ─────────────────────────────────────────────────────────────── */
 
+/* The paging walk is `fetchPartiesByResponse`; `fetchConfirmedParties` and
+   `fetchPendingParties` are one-line bindings of its `response` argument. These
+   assertions are pinned to the walk itself rather than to a binding, for the
+   same reason the `nextDueAt` note above gives: a binding is a call site, and
+   checking it would not tell you whether the query underneath still pages. */
 test('the guest fetch pages instead of capping at one limit', () => {
-  const body = fnBody('async function fetchConfirmedParties');
+  const body = fnBody('async function fetchPartiesByResponse');
   // The bug this replaced: a bare .limit(250) with no cursor re-read the same
   // first 250 rows every run, so guest 251 onward was never selected by any
   // sweep and silently never received their table or entry pass.
@@ -137,8 +142,36 @@ test('the guest fetch pages instead of capping at one limit', () => {
 });
 
 test('the guest fetch is bounded so one event cannot exhaust memory', () => {
-  const body = fnBody('async function fetchConfirmedParties');
+  const body = fnBody('async function fetchPartiesByResponse');
   assert.match(body, /MAX_PARTIES_PER_EVENT/);
+});
+
+test('no guest query in this file reads a capped, unordered page', () => {
+  /* The regression this catches is the one that shipped: `fetchPartiesByResponse`
+     existed and was correct, and `jobRsvpReminders` still had its own
+     `.from('rsvp_parties') … .limit(LIMIT)` with no ordering — so unanswered
+     invitations past the first 250 were reminded unpredictably or not at all.
+
+     Counting query sites would be the wrong guard: there are legitimately three,
+     and they differ in kind. `notifyGuestsOfEventChange` walks a DIFFERENT
+     audience (everyone who has not declined), and `jobSeatingNotices` re-reads a
+     single party's response by id. So the property asserted here is the one that
+     actually matters — every multi-row read of this table pages deterministically,
+     and none of them is a bare limit. */
+  const queries = schedulerSrc.split(/\.from\('rsvp_parties'\)/).slice(1);
+  assert.ok(queries.length >= 1, 'expected at least one rsvp_parties query to check');
+
+  for (const [i, tail] of queries.entries()) {
+    // The query expression ends at the first blank line or statement boundary.
+    const q = tail.slice(0, tail.search(/;\s*\n/) + 1);
+    const isPointLookup = /\.maybeSingle\(\)|\.single\(\)/.test(q);
+    if (isPointLookup) continue;
+
+    assert.match(q, /\.range\(/,
+      `rsvp_parties query #${i + 1} reads many rows and must page with .range`);
+    assert.match(q, /\.order\('id', \{ ascending: true \}\)/,
+      `rsvp_parties query #${i + 1} pages without a deterministic sort — ranges can overlap and skip`);
+  }
 });
 
 /* ── Rescheduling ────────────────────────────────────────────────────────── */

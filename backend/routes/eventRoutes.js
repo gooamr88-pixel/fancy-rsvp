@@ -1,8 +1,22 @@
 const express = require('express');
 const { requireAuth, verifyEventOwner } = require('../middleware/auth');
+const { registerUuidParams } = require('../middleware/uuidParam');
 const { createEvent, getEvents, getEvent, updateEvent, getEventStats, deleteEvent, cancelEvent, notifyGuestsOfChange, getActivityLog } = require('../controllers/eventController');
 
 const router = express.Router();
+
+/**
+ * `:eventId` is declared HERE, not in this router's mount path.
+ *
+ * app.js mounts every other event-scoped router at `/api/v1/events/:eventId/...`,
+ * where its `app.param('eventId')` guard does fire. This one is mounted at
+ * `/api/v1/events` with the parameter inside the router — and an app-level param
+ * callback never fires for a router-declared parameter. So the busiest event
+ * routes in the product (GET, PATCH and DELETE of an event) were the ones
+ * running unguarded, and `/api/v1/events/undefined` reached Postgres as an
+ * invalid uuid literal. See middleware/uuidParam.js.
+ */
+registerUuidParams(router, ['eventId']);
 
 // Fetch events list for organizer
 router.get('/', getEvents);

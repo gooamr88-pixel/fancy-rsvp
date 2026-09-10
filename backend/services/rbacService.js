@@ -37,9 +37,16 @@ const cache = new Map(); // userId -> { value, expires }
  */
 async function loadAccessContext(userId) {
   // Organizer side (legacy model) — confirms the account still exists & status.
+  //
+  // `must_reset_password` rides along on this existing read rather than costing
+  // a query of its own. It is checked on EVERY authenticated request (see
+  // middleware/auth.enforcePasswordReset), and a separate lookup for one boolean
+  // on the hottest path in the API would not be worth it. Cached for the same
+  // 60s as everything else here; `changePassword` invalidates on clear so the
+  // user is not left locked out after complying.
   const orgPromise = supabase
     .from('organizations')
-    .select('id, status')
+    .select('id, status, must_reset_password')
     .eq('owner_user_id', userId)
     .maybeSingle();
 
@@ -50,8 +57,25 @@ async function loadAccessContext(userId) {
     .eq('user_id', userId)
     .maybeSingle();
 
-  const [{ data: org }, { data: admin, error: adminErr }] = await Promise.all([orgPromise, adminPromise]);
+  const [{ data: org, error: orgErr }, { data: admin, error: adminErr }] = await Promise.all([orgPromise, adminPromise]);
   if (adminErr) logger.warn({ err: adminErr, userId }, 'rbacService: admin lookup failed');
+  /**
+   * A database that has not been given `must_reset_password` yet fails this
+   * whole select (PostgREST rejects the request over one unknown column), which
+   * would make every authenticated request answer "user no longer exists". So
+   * the read is retried without it — the same missing-column tolerance
+   * selectEventWithTier applies for the tier columns, and for the same reason:
+   * shipping code ahead of its migration must degrade, never black out.
+   */
+  let orgRow = org;
+  if (orgErr && (orgErr.code === '42703' || /column .* does not exist/i.test(orgErr.message || ''))) {
+    logger.warn({ userId }, 'rbacService: must_reset_password column missing — re-reading without it');
+    const retry = await supabase
+      .from('organizations').select('id, status').eq('owner_user_id', userId).maybeSingle();
+    orgRow = retry.data;
+  } else if (orgErr) {
+    logger.warn({ err: orgErr, userId }, 'rbacService: organization lookup failed');
+  }
 
   const roleKeys = [];
   const permissions = new Set();
@@ -71,9 +95,12 @@ async function loadAccessContext(userId) {
   }
 
   return {
-    isOrganizer: !!org,
-    orgId: org?.id || null,
-    orgStatus: org?.status || null,
+    isOrganizer: !!orgRow,
+    orgId: orgRow?.id || null,
+    orgStatus: orgRow?.status || null,
+    // Undefined (rather than false) on a database without the column, so a
+    // caller can tell "not flagged" from "cannot know". Both read as false.
+    mustResetPassword: orgRow?.must_reset_password === true,
     isAdmin,
     isSuperAdmin,
     roleKeys,

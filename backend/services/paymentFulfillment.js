@@ -685,9 +685,38 @@ const handleDisputeEvent = async (dispute) => {
         .eq('id', eventId);
       if (evtErr) throw evtErr;
     }
-    // 'won' / 'warning_closed': leave the event as-is — no automatic resume,
-    // since an admin should confirm before un-pausing (mirrors manual review
-    // elsewhere in this codebase rather than auto-reactivating).
+    /**
+     * 'won' / 'warning_closed': the event is NOT automatically resumed — an
+     * admin confirms before un-pausing, mirroring manual review elsewhere in
+     * this codebase rather than auto-reactivating.
+     *
+     * ── But somebody has to be told ──
+     *
+     * Opening a dispute sets `status: 'paused'`, and a paused event answers
+     * guests with 403 EVENT_CLOSED — the invitation goes dark the moment a
+     * chargeback is filed. Deciding not to resume automatically is defensible;
+     * doing it with no signal anywhere was not. The organizer WON, their event
+     * was still offline, and the only thing that would bring it back was
+     * somebody happening to notice.
+     *
+     * So a resolved dispute writes an activity-log entry an admin can find, and
+     * logs at warn. Not a resume — a prompt to make one.
+     */
+    else if (dispute.status === 'won' || dispute.status === 'warning_closed') {
+      logger.warn({ eventId, disputeId: dispute.id, status: dispute.status },
+        '[disputes] dispute resolved in our favour — the event is STILL PAUSED and needs an admin to re-activate it');
+      try {
+        await supabase.from('activity_logs').insert({
+          event_id: eventId,
+          action: 'dispute_resolved_event_still_paused',
+          entity_type: 'payment_dispute',
+          entity_id: paymentId,
+          metadata: { dispute_id: dispute.id, status: dispute.status },
+        });
+      } catch (e) {
+        logger.warn({ err: e, eventId }, '[disputes] could not log the resolved dispute');
+      }
+    }
   }
 
   return { ok: true, disputeId: dispute.id, paymentId, eventId };

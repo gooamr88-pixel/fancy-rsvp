@@ -915,6 +915,28 @@ const _processedWebhookEvents = new Map(); // eventId -> timestamp
 const WEBHOOK_DEDUP_TTL_MS = 60 * 60 * 1000; // 1 hour
 const WEBHOOK_DEDUP_MAX_SIZE = 10000;
 
+/**
+ * Is this failure one that redelivering the SAME event can never fix?
+ *
+ * Only two shapes qualify, and both are about the event's own content rather
+ * than about the state of anything here:
+ *
+ *   • a `credit_count` that is not a positive integer — fulfilment throws on it
+ *     explicitly, and it will be exactly as malformed on the tenth delivery;
+ *   • a `record_sms_purchase` refusal, which is the database declining the
+ *     purchase on its own terms rather than failing to reach it.
+ *
+ * Everything else — a dropped connection, a statement timeout, a PostgREST
+ * hiccup, an unapplied migration that is applied ten minutes later — is
+ * transient by nature and is exactly what Stripe's redelivery window exists
+ * for. The default is therefore RETRY; this list is the narrow exception.
+ */
+function isPermanentFailure(err) {
+  const message = String(err?.message || '');
+  return /^Invalid credit_count value:/.test(message)
+    || /^record_sms_purchase failed:/.test(message);
+}
+
 function _cleanupWebhookDedup() {
   const cutoff = Date.now() - WEBHOOK_DEDUP_TTL_MS;
   for (const [id, ts] of _processedWebhookEvents) {
@@ -974,9 +996,45 @@ const stripeWebhook = async (req, res, next) => {
     // Periodic eviction to prevent unbounded growth.
     if (_processedWebhookEvents.size > WEBHOOK_DEDUP_MAX_SIZE) _cleanupWebhookDedup();
   } catch (processingErr) {
-    // Log the error but ALWAYS return 200 to Stripe — never let processing
-    // errors cause 500s which trigger Stripe's retry storm.
-    logger.error({ err: processingErr, eventType: stripeEvent.type }, 'Stripe webhook processing error');
+    /**
+     * ── A FAILED FULFILMENT MUST NOT BE ACKNOWLEDGED AS A SUCCESS ──
+     *
+     * This used to log and fall through to `200 {received:true}` for every
+     * error, on the reasoning that a 5xx would "trigger Stripe's retry storm".
+     * Stripe's retries are not a storm, they are the recovery mechanism — and
+     * services/paymentFulfillment.js is written on exactly that assumption. Its
+     * header says so in as many words: "Throws only on genuine/unexpected DB
+     * failures (so the webhook can 5xx → retry)."
+     *
+     * Swallowing those throws inverted the contract. A transient Supabase error
+     * inside fulfilment meant the card was charged, the event was never
+     * activated, and Stripe was told the event had been handled — so it never
+     * delivered again and nothing anywhere retried. The same swallow covered
+     * `handleChargeRefunded`, where the failure leaves a refunded event still
+     * live and selling.
+     *
+     * So: a processing failure now answers 500 and Stripe redelivers with
+     * backoff for up to three days. Every write behind this is idempotent (the
+     * unique `stripe_checkout_session_id`, `record_sms_purchase`'s payment
+     * intent, the dispute upsert), which is what makes redelivery safe — and
+     * the event id is deliberately NOT recorded in the dedup map above on this
+     * path, so the retry is allowed through rather than skipped as a duplicate.
+     *
+     * The original worry was real, just aimed at the wrong case: a permanently
+     * unprocessable event would retry for three days and never succeed. That is
+     * what `isPermanentFailure` is for — those keep answering 200, because
+     * redelivering them changes nothing.
+     */
+    if (isPermanentFailure(processingErr)) {
+      logger.error({ err: processingErr, eventType: stripeEvent.type, eventId: stripeEvent.id },
+        'Stripe webhook: permanently unprocessable event — acknowledged without retry');
+      _processedWebhookEvents.set(stripeEvent.id, Date.now());
+      return res.json({ received: true, unprocessable: true });
+    }
+
+    logger.error({ err: processingErr, eventType: stripeEvent.type, eventId: stripeEvent.id },
+      'Stripe webhook processing FAILED — returning 500 so Stripe redelivers. If this repeats, the payment is charged and unfulfilled.');
+    return res.status(500).json({ received: false, error: 'FULFILMENT_FAILED' });
   }
 
   return res.json({ received: true });
@@ -1933,7 +1991,11 @@ const initiateManualPayment = async (req, res, next) => {
   // meant that while card payments are switched off — leaving manual as the ONLY
   // path — nobody could buy it at all, and the amount an organizer was told to
   // transfer covered the licence alone.
-  const smsAddonSegments = sanitizeAllowanceRequest(req.body.smsAddonSegments);
+  // Clamped twice, exactly as createCheckoutSession does. This first pass only
+  // establishes whether an add-on was asked for at all; it uses the SHIPPED
+  // defaults, because the admin's configured bounds are not loaded yet. The
+  // re-clamp against those bounds happens inside the try block below.
+  let smsAddonSegments = sanitizeAllowanceRequest(req.body.smsAddonSegments);
 
   if (!tierName && !tierKey) {
     return res.status(400).json({
@@ -1955,6 +2017,19 @@ const initiateManualPayment = async (req, res, next) => {
         error: 'CONFIG_ERROR',
         message: 'Could not retrieve pricing configuration.'
       });
+    }
+
+    /**
+     * Re-clamp against the admin's ACTUAL bounds, now that they are known.
+     *
+     * This was missing, and the omission mattered more here than it would on
+     * the card path: with `PAYMENTS_STRIPE_ENABLED` off, bank transfer is the
+     * ONLY way to buy anything, so a purchase floor or ceiling the admin had
+     * since changed was enforced nowhere at all. The first pass above clamps to
+     * the values that shipped with the code, which is not the same thing.
+     */
+    if (smsAddonSegments) {
+      smsAddonSegments = sanitizeAllowanceRequest(smsAddonSegments, adminConfig.sms_pricing_config);
     }
 
     const { tier } = resolveTier(adminConfig.pricing_tiers, { key: tierKey, name: tierName });

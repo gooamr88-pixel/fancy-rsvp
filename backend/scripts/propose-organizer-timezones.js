@@ -130,113 +130,125 @@ function shiftHours(eventDateIso, zone) {
   return -zoneOffsetMs(ts, zone) / 3600000;
 }
 
-(async () => {
-  let query = supabase
-    .from('organizations')
-    .select('id, owner_user_id, name, email, created_at, timezone, timezone_source')
-    .order('created_at', { ascending: true });
-  if (!INCLUDE_ALL) query = query.is('timezone', null);
+/*
+ * Runs only when invoked directly.
+ *
+ * Without this guard the script executes — and calls process.exit() — the
+ * moment anything REQUIRES the file. That is not hypothetical: any tool that
+ * walks and imports the tree (a coverage run, a dependency graph, a
+ * module-load smoke check) terminates on the first one of these it touches,
+ * with no error and no indication which file did it. Nothing in the
+ * application requires these, so the cost was borne entirely by tooling.
+ */
+if (require.main === module) {
+  (async () => {
+    let query = supabase
+      .from('organizations')
+      .select('id, owner_user_id, name, email, created_at, timezone, timezone_source')
+      .order('created_at', { ascending: true });
+    if (!INCLUDE_ALL) query = query.is('timezone', null);
 
-  const { data: orgs, error } = await query;
-  if (error) {
-    console.error('Could not read organizations:', error.message);
-    console.error('If this is an "unknown column" error, the timezone migration has not been applied yet.');
-    process.exit(1);
-  }
-
-  if (!orgs || orgs.length === 0) {
-    console.log(INCLUDE_ALL ? 'No organizations found.' : 'Every organization already has a timezone. Nothing to propose.');
-    process.exit(0);
-  }
-
-  console.log(`\nExamining ${orgs.length} account(s). No data will be modified.\n`);
-
-  const proposals = [];
-
-  for (const org of orgs) {
-    const evidence = await earliestIpFor(org);
-    const geo = evidence ? await lookup(evidence.ip) : null;
-
-    const proposed = geo ? geo.timeZone : PLATFORM_TIMEZONE;
-    const source = geo ? 'ip' : 'default';
-
-    /* Only the events the apply step will actually touch.
-       That step is scoped to `timezone IS NULL` — its idempotency guard — so
-       counting every event with a date over-reports the blast radius. A human
-       being asked to approve a destructive shift needs the real number: told
-       "47 events will move" when 12 will, they are reviewing a decision that
-       was described to them wrongly. */
-    const { data: events } = await supabase
-      .from('events')
-      .select('id, title, event_date')
-      .eq('org_id', org.id)
-      .is('timezone', null)
-      .not('event_date', 'is', null);
-
-    const shifts = (events || [])
-      .map((e) => shiftHours(e.event_date, safeZone(proposed)))
-      .filter((h) => h !== null);
-    const uniqueShifts = [...new Set(shifts)].sort((a, b) => a - b);
-
-    proposals.push({
-      orgId: org.id,
-      name: org.name,
-      email: org.email,
-      createdAt: org.created_at,
-      currentTimezone: org.timezone || null,
-      proposedTimezone: proposed,
-      proposedSource: source,
-      country: geo ? geo.country : null,
-      evidence: evidence ? { from: evidence.from, seenAt: evidence.seenAt } : null,
-      eventCount: (events || []).length,
-      eventShiftHours: uniqueShifts,
-    });
-  }
-
-  // ── The review table ──────────────────────────────────────────────────────
-  const pad = (v, n) => String(v == null ? '—' : v).slice(0, n).padEnd(n);
-  console.log(
-    pad('ACCOUNT', 26), pad('PROPOSED ZONE', 24), pad('FROM', 9),
-    pad('EVENTS', 7), 'SHIFT',
-  );
-  console.log('─'.repeat(96));
-  for (const p of proposals) {
-    const shift = p.eventShiftHours.length
-      ? p.eventShiftHours.map((h) => `${h > 0 ? '+' : ''}${h}h`).join(', ')
-      : '—';
-    console.log(
-      pad(p.name || p.email, 26),
-      pad(p.proposedTimezone, 24),
-      pad(p.proposedSource === 'ip' ? p.country || 'ip' : 'DEFAULT', 9),
-      pad(p.eventCount, 7),
-      shift,
-    );
-  }
-
-  const guessed = proposals.filter((p) => p.proposedSource === 'default');
-  const affected = proposals.reduce((n, p) => n + p.eventCount, 0);
-
-  console.log('\n' + '─'.repeat(96));
-  console.log(`${proposals.length} account(s) · ${affected} event(s) would be reinterpreted.`);
-
-  if (guessed.length) {
-    console.log(
-      `\n⚠  ${guessed.length} account(s) had NO usable IP on record and fall back to ${PLATFORM_TIMEZONE}.\n` +
-      '   These are guesses, not detections. Check them by hand before applying —\n' +
-      '   a wrong zone here moves real events by real hours:\n',
-    );
-    for (const p of guessed) {
-      console.log(`     · ${p.name || p.email}  (${p.eventCount} event(s))`);
+    const { data: orgs, error } = await query;
+    if (error) {
+      console.error('Could not read organizations:', error.message);
+      console.error('If this is an "unknown column" error, the timezone migration has not been applied yet.');
+      process.exit(1);
     }
-  }
 
-  fs.writeFileSync(OUT_PATH, JSON.stringify(proposals, null, 2));
-  console.log(`\nProposal written to ${OUT_PATH}`);
-  console.log('Nothing has been changed. Review the table above, edit the JSON where it is wrong,');
-  console.log('and only then run the apply step.\n');
+    if (!orgs || orgs.length === 0) {
+      console.log(INCLUDE_ALL ? 'No organizations found.' : 'Every organization already has a timezone. Nothing to propose.');
+      process.exit(0);
+    }
 
-  process.exit(0);
-})().catch((err) => {
-  console.error('Failed:', err);
-  process.exit(1);
-});
+    console.log(`\nExamining ${orgs.length} account(s). No data will be modified.\n`);
+
+    const proposals = [];
+
+    for (const org of orgs) {
+      const evidence = await earliestIpFor(org);
+      const geo = evidence ? await lookup(evidence.ip) : null;
+
+      const proposed = geo ? geo.timeZone : PLATFORM_TIMEZONE;
+      const source = geo ? 'ip' : 'default';
+
+      /* Only the events the apply step will actually touch.
+         That step is scoped to `timezone IS NULL` — its idempotency guard — so
+         counting every event with a date over-reports the blast radius. A human
+         being asked to approve a destructive shift needs the real number: told
+         "47 events will move" when 12 will, they are reviewing a decision that
+         was described to them wrongly. */
+      const { data: events } = await supabase
+        .from('events')
+        .select('id, title, event_date')
+        .eq('org_id', org.id)
+        .is('timezone', null)
+        .not('event_date', 'is', null);
+
+      const shifts = (events || [])
+        .map((e) => shiftHours(e.event_date, safeZone(proposed)))
+        .filter((h) => h !== null);
+      const uniqueShifts = [...new Set(shifts)].sort((a, b) => a - b);
+
+      proposals.push({
+        orgId: org.id,
+        name: org.name,
+        email: org.email,
+        createdAt: org.created_at,
+        currentTimezone: org.timezone || null,
+        proposedTimezone: proposed,
+        proposedSource: source,
+        country: geo ? geo.country : null,
+        evidence: evidence ? { from: evidence.from, seenAt: evidence.seenAt } : null,
+        eventCount: (events || []).length,
+        eventShiftHours: uniqueShifts,
+      });
+    }
+
+    // ── The review table ──────────────────────────────────────────────────────
+    const pad = (v, n) => String(v == null ? '—' : v).slice(0, n).padEnd(n);
+    console.log(
+      pad('ACCOUNT', 26), pad('PROPOSED ZONE', 24), pad('FROM', 9),
+      pad('EVENTS', 7), 'SHIFT',
+    );
+    console.log('─'.repeat(96));
+    for (const p of proposals) {
+      const shift = p.eventShiftHours.length
+        ? p.eventShiftHours.map((h) => `${h > 0 ? '+' : ''}${h}h`).join(', ')
+        : '—';
+      console.log(
+        pad(p.name || p.email, 26),
+        pad(p.proposedTimezone, 24),
+        pad(p.proposedSource === 'ip' ? p.country || 'ip' : 'DEFAULT', 9),
+        pad(p.eventCount, 7),
+        shift,
+      );
+    }
+
+    const guessed = proposals.filter((p) => p.proposedSource === 'default');
+    const affected = proposals.reduce((n, p) => n + p.eventCount, 0);
+
+    console.log('\n' + '─'.repeat(96));
+    console.log(`${proposals.length} account(s) · ${affected} event(s) would be reinterpreted.`);
+
+    if (guessed.length) {
+      console.log(
+        `\n⚠  ${guessed.length} account(s) had NO usable IP on record and fall back to ${PLATFORM_TIMEZONE}.\n` +
+        '   These are guesses, not detections. Check them by hand before applying —\n' +
+        '   a wrong zone here moves real events by real hours:\n',
+      );
+      for (const p of guessed) {
+        console.log(`     · ${p.name || p.email}  (${p.eventCount} event(s))`);
+      }
+    }
+
+    fs.writeFileSync(OUT_PATH, JSON.stringify(proposals, null, 2));
+    console.log(`\nProposal written to ${OUT_PATH}`);
+    console.log('Nothing has been changed. Review the table above, edit the JSON where it is wrong,');
+    console.log('and only then run the apply step.\n');
+
+    process.exit(0);
+  })().catch((err) => {
+    console.error('Failed:', err);
+    process.exit(1);
+  });
+}

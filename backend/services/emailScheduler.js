@@ -41,6 +41,24 @@ const LIMIT = 250; // rows per page when walking an event's guest list
  * runaway or corrupted event from taking the scheduler down with it.
  */
 const MAX_PARTIES_PER_EVENT = 20000;
+/**
+ * How many events one sweep will process.
+ *
+ * Every job in this file selects its due events with `.limit(EVENT_PAGE)`. That
+ * is a genuine memory bound and not a bug on its own — but a cap that binds
+ * SILENTLY is, because the events past it are simply never processed and the
+ * run still reports success. `reportEventCap` says so when it happens, which is
+ * the difference between "we are near the ceiling, raise it" and a wedding that
+ * quietly got no reminders.
+ */
+const EVENT_PAGE = 100;
+const reportEventCap = (job, events) => {
+  if ((events || []).length >= EVENT_PAGE) {
+    logger.warn({ job, cap: EVENT_PAGE },
+      '[email-scheduler] this sweep filled its event page — events beyond the cap were NOT processed this run');
+  }
+  return events || [];
+};
 const MAX_RETRIES = 3; // max retry attempts for failed email sends
 const RETRY_BASE_MS = 1000; // base delay for exponential backoff (1s, 2s, 4s)
 const nowISO = () => new Date().toISOString();
@@ -80,8 +98,22 @@ async function dispatchWithRetry(payload) {
     try {
       const res = await dispatch(payload);
       if (res.sent) return res;
-      // dispatch returned but didn't send (e.g. dedup) — don't retry
-      if (res.deduplicated) return res;
+      /**
+       * Outcomes that are NOT failures and must never be retried.
+       *
+       * This checked `res.deduplicated` alone, and `dispatch` never set that
+       * property — it returned `skipped: 'duplicate'`. So the short-circuit was
+       * dead: every already-delivered message fell through to the retry path,
+       * slept 1s + 2s + 4s, and finished by logging "permanently failed after
+       * max retries" about a message that had been delivered correctly. On a
+       * sweep walking a few hundred guests that is minutes of wall clock and a
+       * log full of false alarms.
+       *
+       * `dispatch` now sets `deduplicated`, and both spellings are accepted so
+       * the two files cannot drift apart again. `no_recipient` joins them for
+       * the same reason: retrying an address that does not exist cannot help.
+       */
+      if (res.deduplicated || res.skipped === 'duplicate' || res.skipped === 'no_recipient') return res;
     } catch (err) {
       if (attempt >= MAX_RETRIES) {
         logger.error({ err, kind: payload.kind, ref: payload.ref, attempt }, '[email-scheduler] permanently failed after max retries');
@@ -198,12 +230,12 @@ async function trySms(ev, { type, partyId = null, ref, context, lang = 'en' }) {
  * `.range()` windows can overlap and skip. Ordering by the primary key gives a
  * stable sequence for the length of the walk.
  */
-async function fetchConfirmedParties(eventId, select) {
+async function fetchPartiesByResponse(eventId, select, response) {
   const out = [];
   for (let from = 0; from < MAX_PARTIES_PER_EVENT; from += LIMIT) {
     const { data, error } = await supabase
       .from('rsvp_parties').select(select)
-      .eq('event_id', eventId).eq('response', 'yes')
+      .eq('event_id', eventId).eq('response', response)
       .order('id', { ascending: true })
       .range(from, from + LIMIT - 1);
 
@@ -219,10 +251,27 @@ async function fetchConfirmedParties(eventId, select) {
     if (data.length < LIMIT) break;
   }
   if (out.length >= MAX_PARTIES_PER_EVENT) {
-    logger.warn({ eventId, cap: MAX_PARTIES_PER_EVENT }, '[email-scheduler] guest list hit the memory cap — remaining guests not processed this run');
+    logger.warn({ eventId, response, cap: MAX_PARTIES_PER_EVENT }, '[email-scheduler] guest list hit the memory cap — remaining guests not processed this run');
   }
   return out;
 }
+
+/** Every confirmed ('yes') party for an event. The common case. */
+const fetchConfirmedParties = (eventId, select) => fetchPartiesByResponse(eventId, select, 'yes');
+
+/**
+ * Every party that has NOT answered yet.
+ *
+ * Split out of `fetchConfirmedParties` rather than given its own query, because
+ * `jobRsvpReminders` was the one walk in this file still doing a bare
+ * `.limit(250)` — the exact shape the note above describes and fixes for
+ * everything else. It was worse there than the original bug, in fact: with no
+ * `.order()` at all, PostgREST may return a different arbitrary 250 pending
+ * guests on every run, so coverage was not merely capped at 250, it was
+ * unpredictable. An event with 300 unanswered invitations reminded some
+ * shifting subset and nobody could tell which.
+ */
+const fetchPendingParties = (eventId, select) => fetchPartiesByResponse(eventId, select, 'pending');
 
 /* ─── 1. RSVP reminders — invited, still-pending guests as the deadline nears ─── */
 async function jobRsvpReminders() {
@@ -234,13 +283,13 @@ async function jobRsvpReminders() {
     .select('id, title, slug, event_date, timezone, rsvp_deadline, sms_addon_purchased_at, sms_settings, sms_templates')
     .eq('status', 'active').eq('is_paid', true)
     .not('rsvp_deadline', 'is', null).gte('rsvp_deadline', nowISO()).lte('rsvp_deadline', soon)
-    .limit(100);
+    .limit(EVENT_PAGE);
   let sent = 0;
-  for (const ev of (events || [])) {
-    const { data: parties } = await supabase
-      .from('rsvp_parties').select('id, label, response, preferred_lang, guests(is_primary_contact, email)')
-      .eq('event_id', ev.id).eq('response', 'pending').limit(LIMIT);
-    for (const party of (parties || [])) {
+  for (const ev of reportEventCap('rsvp_reminders', events)) {
+    const parties = await fetchPendingParties(
+      ev.id, 'id, label, response, preferred_lang, guests(is_primary_contact, email)',
+    );
+    for (const party of parties) {
       // EMAIL ONLY. The `rsvp_reminder` SMS type is retired.
       //
       // Chasing a non-responder is the least valuable thing a charged message can
@@ -372,10 +421,10 @@ async function sweepRunUpWindow(windowMs, handleParty) {
     .select('id, title, slug, event_date, timezone, location_name, location_address, location_lat, location_lng, sms_addon_purchased_at, sms_settings, sms_templates')
     .eq('status', 'active').eq('is_paid', true)
     .gte('event_date', nowISO()).lte('event_date', soon)
-    .limit(100);
+    .limit(EVENT_PAGE);
 
   let sent = 0;
-  for (const ev of (events || [])) {
+  for (const ev of reportEventCap('run_up_sweep', events)) {
     /**
      * THE DEDUPE KEY CARRIES THE DATE IT IS ABOUT.
      *
@@ -592,33 +641,83 @@ async function jobFinalReports() {
     .select('id, title, slug, event_date, timezone, notification_preferences, sms_addon_purchased_at, sms_settings, sms_templates, organizations(name, email)')
     .eq('status', 'active').eq('is_paid', true)
     .gte('event_date', nowISO()).lte('event_date', soon)
-    .is('final_report_sent_at', null).limit(100);
+    .is('final_report_sent_at', null).limit(EVENT_PAGE);
   let sent = 0;
-  for (const ev of (events || [])) {
+  for (const ev of reportEventCap('final_reports', events)) {
     const org = ev.organizations;
 
     // The organizer gets BOTH: the email carries the actual headcount table, the
     // text is the heads-up that it has landed. This is the one type addressed to
     // the customer rather than a guest, so it reads organizations.sms_consent —
     // their own opt-in — not any guest consent record (see resolveRecipient).
-    const stats = (org && org.email && orgEmailOk(ev)) ? await getEventStats(ev.id) : null;
-    await trySms(ev, {
+    const wantsEmail = !!(org && org.email && orgEmailOk(ev));
+
+    /**
+     * THE HEADCOUNT IS READ FOR THE REPORT, NOT FOR THE EMAIL.
+     *
+     * `stats` used to be computed only when the EMAIL was going out, while the
+     * text was sent unconditionally reading `stats?.attending ?? 0`. So an
+     * organizer who had turned email notifications off — a reasonable thing to
+     * do once you have bought texting — received a CHARGED message the day
+     * before their event stating "0 attending, 0 pending". A wrong number in a
+     * final headcount is worse than no message at all: it is the figure they
+     * give the caterer.
+     *
+     * Read once now, and used by whichever channels actually send.
+     */
+    const stats = await getEventStats(ev.id).catch((err) => {
+      logger.warn({ err, eventId: ev.id }, '[email-scheduler] final headcount stats unavailable');
+      return null;
+    });
+
+    /**
+     * A report with no numbers in it is not a report.
+     *
+     * If the stats read failed there is nothing to say, and saying it anyway
+     * costs a text message and misinforms. Skip both channels and leave the
+     * event UNSTAMPED so the next sweep tries again — the send window is
+     * 24-30h wide, so there is room for another attempt.
+     */
+    if (!stats) continue;
+
+    const smsSent = await trySms(ev, {
       type: 'organizer_report',
       ref: `event:${ev.id}`,
       context: {
         eventTitle: ev.title,
-        attending: stats?.attending ?? 0,
-        pending: stats?.pending ?? 0,
+        attending: stats.attending ?? 0,
+        pending: stats.pending ?? 0,
         dashboardUrl: `${frontendBase()}/dashboard`,
       },
     });
 
-    if (org && org.email && orgEmailOk(ev)) {
+    let emailSent = false;
+    if (wantsEmail) {
       const html = T.getFinalHeadcountReportTemplate({ orgName: org.name, event: ev, stats });
       const res = await dispatchWithRetry({ kind: 'final_report', ref: `event:${ev.id}`, to: org.email, subject: `Final headcount: ${ev.title}`, html, eventId: ev.id });
+      emailSent = !!(res.sent || res.deduplicated);
       if (res.sent) sent++;
     }
-    await stamp('events', ev.id, 'final_report_sent_at');
+
+    /**
+     * STAMPED ONLY WHEN SOMETHING ACTUALLY WENT OUT.
+     *
+     * `final_report_sent_at` is the flag this job filters on, so writing it
+     * unconditionally meant a Brevo failure, or an organizer with no address on
+     * file, permanently marked the report as delivered. Combined with the
+     * email_log dedupe (see emailService.alreadyLogged, which had the same
+     * shape) a single transient error lost the message for good, with two
+     * independent guards agreeing it had been sent.
+     *
+     * An organizer who wants neither channel is stamped too — nothing was
+     * owed, so nothing is pending.
+     */
+    if (emailSent || smsSent || !wantsEmail) {
+      await stamp('events', ev.id, 'final_report_sent_at');
+    } else {
+      logger.warn({ eventId: ev.id },
+        '[email-scheduler] final headcount could not be delivered — leaving unstamped to retry');
+    }
   }
   return sent;
 }
@@ -631,18 +730,25 @@ async function jobPostEvent() {
     .select('id, title, slug, event_date, timezone, recap_sent_at, notification_preferences, organizations(name, email)')
     .in('status', ['active', 'completed']).eq('is_paid', true)
     .lt('event_date', nowISO()).gte('event_date', since)
-    .limit(100);
+    .limit(EVENT_PAGE);
   let sent = 0;
-  for (const ev of (events || [])) {
+  for (const ev of reportEventCap('post_event', events)) {
     if (!ev.recap_sent_at) {
       const org = ev.organizations;
-      if (org && org.email && orgEmailOk(ev)) {
+      const wantsRecap = !!(org && org.email && orgEmailOk(ev));
+      let recapDone = !wantsRecap;   // nothing owed → nothing pending
+      if (wantsRecap) {
         const stats = await getEventStats(ev.id);
         const html = T.getPostEventRecapTemplate({ orgName: org.name, event: ev, stats });
         const res = await dispatchWithRetry({ kind: 'recap', ref: `event:${ev.id}`, to: org.email, subject: `Recap: ${ev.title}`, html, eventId: ev.id });
+        recapDone = !!(res.sent || res.deduplicated);
         if (res.sent) sent++;
       }
-      await stamp('events', ev.id, 'recap_sent_at');
+      // Stamped only on a real outcome — see the note in jobFinalReports. The
+      // post-event window is three days wide, so a failed attempt has room to
+      // be retried on a later sweep instead of being lost.
+      if (recapDone) await stamp('events', ev.id, 'recap_sent_at');
+      else logger.warn({ eventId: ev.id }, '[email-scheduler] recap could not be delivered — leaving unstamped to retry');
     }
     const parties = await fetchConfirmedParties(ev.id, 'id, label, guests(is_primary_contact, email)');
     for (const party of parties) {
@@ -664,16 +770,20 @@ async function jobPendingPayments() {
     .from('events')
     .select('id, title, slug, created_at, organizations(name, email)')
     .eq('is_paid', false).eq('status', 'draft')
-    .lte('created_at', cutoff).is('payment_reminder_sent_at', null).limit(100);
+    .lte('created_at', cutoff).is('payment_reminder_sent_at', null).limit(EVENT_PAGE);
   let sent = 0;
-  for (const ev of (events || [])) {
+  for (const ev of reportEventCap('pending_payments', events)) {
     const org = ev.organizations;
+    let nudged = true;              // no address on file → nothing owed
     if (org && org.email) {
       const html = T.getPendingPaymentReminderTemplate({ orgName: org.name, event: ev });
       const res = await dispatchWithRetry({ kind: 'pending_payment', ref: `event:${ev.id}`, to: org.email, subject: `Activate your event: ${ev.title}`, html, eventId: ev.id });
+      nudged = !!(res.sent || res.deduplicated);
       if (res.sent) sent++;
     }
-    await stamp('events', ev.id, 'payment_reminder_sent_at');
+    // Stamped only on a real outcome — see the note in jobFinalReports.
+    if (nudged) await stamp('events', ev.id, 'payment_reminder_sent_at');
+    else logger.warn({ eventId: ev.id }, '[email-scheduler] payment nudge could not be delivered — leaving unstamped to retry');
   }
   return sent;
 }

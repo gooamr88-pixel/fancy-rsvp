@@ -269,4 +269,17 @@ async function main() {
   );
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+/*
+ * Runs only when invoked directly.
+ *
+ * Without this guard the script executes — and calls process.exit() — the
+ * moment anything REQUIRES the file. That is not hypothetical: any tool that
+ * walks and imports the tree (a coverage run, a dependency graph, a
+ * module-load smoke check) terminates on the first one of these it touches,
+ * with no error and no indication which file did it. Nothing in the
+ * application requires these, so the cost was borne entirely by tooling.
+ */
+if (require.main === module) {
+  main().catch((e) => { console.error(e); process.exit(1); });
+}
+

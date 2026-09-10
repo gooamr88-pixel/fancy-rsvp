@@ -783,10 +783,19 @@ async function resolveRecipient({ audience, eventId, partyId }) {
   }
 
   if (!partyId) return { phone: null, consented: false };
+  // SCOPED TO THE EVENT. This looked a party up by id alone, which made the
+  // caller's `eventId` and the party it resolved two independent facts — so a
+  // wrong or stale id would have texted somebody on a different event and
+  // billed this one for it. No current caller can do that (invitationService
+  // filters its ids by event before it gets here), and that is exactly why the
+  // scoping belongs on the query rather than in a caller's discipline: this
+  // function is now the only consent check that actually runs. See the note at
+  // the `verified` set in sendTransactionalSms.
   const { data, error } = await supabase
     .from('rsvp_parties')
     .select('sms_consent, guests(phone, is_primary_contact)')
     .eq('id', partyId)
+    .eq('event_id', eventId)
     .single();
   if (error || !data) return { phone: null, consented: false };
 
@@ -907,6 +916,21 @@ async function sendTransactionalSms({ type, eventId, partyId = null, ref, event 
     //    above has already verified the right consent record for this audience, so
     //    the verified number is handed down as the permitted set. Guest messages
     //    reach the same conclusion through the same gate, one step earlier.
+    //
+    //    ── WHAT THIS COSTS, AND WHY IT IS PAID FOR ELSEWHERE ──
+    //
+    //    Handing down a set means sendRecipient's OWN consent lookup does not
+    //    run, so the "re-verified per message" guarantee written on that
+    //    function is, for every message this platform now sends, satisfied by
+    //    step ④ rather than by a second independent query. That was true before
+    //    this comment existed; it is written down because campaigns are gone,
+    //    so this is no longer one caller of two — it is the only one.
+    //
+    //    The mitigation is that step ④'s query is now scoped by event as well as
+    //    by party (see resolveRecipient), which is the property the second
+    //    lookup was really providing. Both checks read `rsvp_parties.sms_consent`
+    //    for a primary contact on THIS event; the difference was never the rule,
+    //    only how many times it was asked.
     const verified = new Set([canonicalPhone(phone)].filter(Boolean));
 
     const result = await sendRecipient({

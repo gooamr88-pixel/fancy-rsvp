@@ -190,3 +190,60 @@ test('the columns our own export writes are never reported as unknown', () => {
   // mystery columns this platform put there itself.
   assert.deepEqual(unknownColumns(exportedHeaders()), []);
 });
+
+/* ── The .xlsx import branch reads the .xlsx export's own headers ────────── */
+
+/**
+ * The object literal the Excel importer builds per row.
+ *
+ * Anchored the same way `exportedHeaders` is, and for the same reason: this
+ * controller is long, the same key names appear in several places, and a
+ * whole-file match would pass against the wrong one.
+ */
+function xlsxRowMapping() {
+  const src = read('backend/controllers/rsvpController.js');
+  const at = src.indexOf('const mappedRow = {');
+  assert.notEqual(at, -1, 'the .xlsx per-row mapping was not found — this test has drifted');
+  const rest = src.slice(at);
+  const end = rest.indexOf('\n          };');
+  assert.notEqual(end, -1, 'could not find the end of the .xlsx per-row mapping');
+  return rest.slice(0, end);
+}
+
+test('the .xlsx importer maps each column exactly once', () => {
+  /* THE BUG THIS EXISTS FOR.
+   *
+   * `table_name` and `meal_selections` were each declared TWICE in this object
+   * literal. Duplicate keys are legal JavaScript and the last wins, so the
+   * first pair — the one carrying the .xlsx export's own header names — was
+   * silently dead. Nothing errored; the round-trip tests all passed, because
+   * they only ever exercised the CSV branch.
+   *
+   * Checked for every mapped column, not just the two that broke: the failure
+   * is invisible by construction, so the guard has to be about the shape rather
+   * than about the specific keys that happened to be wrong once. */
+  const body = xlsxRowMapping();
+  const keys = [...body.matchAll(/^\s{12}([a-z_]+):/gm)].map((m) => m[1]);
+  assert.ok(keys.length >= 8, `found only ${keys.length} mapped keys — the anchor has drifted`);
+
+  const seen = new Set();
+  const duplicated = keys.filter((k) => (seen.has(k) ? true : (seen.add(k), false)));
+  assert.deepEqual(duplicated, [],
+    `duplicate keys in the .xlsx row mapping silently discard the earlier definition: ${duplicated.join(', ')}`);
+});
+
+test('the .xlsx importer answers to the headers the .xlsx export writes', () => {
+  /* The round trip that matters most in practice: an organizer downloads the
+     Excel guest list, edits it, and uploads it again. Its headers fold to
+     `assigned_table` and `primary_meal_selection`, which are NOT the canonical
+     names — so the importer has to accept them explicitly, and did not. */
+  const body = xlsxRowMapping();
+  for (const alias of ['assigned_table', 'primary_meal_selection']) {
+    // A plain substring test, deliberately: building this as a RegExp needs
+    // `\\.` and `\\b`, and getting either escape wrong yields a pattern that
+    // silently never matches — which is the same shape of invisible failure
+    // this whole test exists to catch.
+    assert.ok(body.includes(`rowObj.${alias}`),
+      `the .xlsx importer must read '${alias}' — it is a header our own Excel export writes`);
+  }
+});

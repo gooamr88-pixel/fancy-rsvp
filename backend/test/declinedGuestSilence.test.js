@@ -81,9 +81,20 @@ const scheduler = read('services/emailScheduler.js');
  * fail the caller test, not slip past this one.
  */
 test('the shared guest fetch selects only parties at yes', () => {
-  const body = fnBody(scheduler, 'async function fetchConfirmedParties');
-  assert.match(body, /\.eq\('response', 'yes'\)/,
-    'fetchConfirmedParties is the single audience filter for the guest sweeps');
+  /* `fetchConfirmedParties` is now a one-line binding of the paging walk's
+     `response` argument, so the audience filter is proven in two halves: the
+     walk filters on whatever response it is given, and the binding gives it
+     'yes'. Both are asserted, because either one drifting reopens the leak
+     this test exists to prevent. */
+  const walk = fnBody(scheduler, 'async function fetchPartiesByResponse');
+  assert.match(walk, /\.eq\('response', response\)/,
+    'the paging walk must filter on the response it was asked for');
+
+  assert.match(
+    scheduler,
+    /const fetchConfirmedParties = \(eventId, select\) => fetchPartiesByResponse\(eventId, select, 'yes'\);/,
+    "fetchConfirmedParties must bind the audience to 'yes' — it is the single audience filter for the guest sweeps",
+  );
 });
 
 test('every run-up reminder goes to confirmed guests only', () => {
@@ -111,8 +122,16 @@ test('the RSVP nudge chases only guests who have not answered', () => {
   // A guest who said no HAS answered. Chasing them for an answer they already
   // gave is the most obviously wrong message on this list.
   const body = fnBody(scheduler, 'async function jobRsvpReminders');
-  assert.match(body, /\.eq\('response', 'pending'\)/,
-    'jobRsvpReminders must select only parties at pending');
+  assert.match(body, /fetchPendingParties\(/,
+    'jobRsvpReminders must take its audience from the pending-only fetch');
+  assert.doesNotMatch(body, /\.from\('rsvp_parties'\)/,
+    'jobRsvpReminders must not query guests directly — that bypasses both the audience filter and the paging walk');
+
+  assert.match(
+    scheduler,
+    /const fetchPendingParties = \(eventId, select\) => fetchPartiesByResponse\(eventId, select, 'pending'\);/,
+    "fetchPendingParties must bind the audience to 'pending'",
+  );
 });
 
 test('the post-event thank-you goes to attendees only', () => {

@@ -6,7 +6,10 @@ const tokenService = require('../services/tokenService');
 const invitationService = require('../services/invitationService');
 const { parseCSV, generateCSV } = require('../utils/csvHelper');
 const { normalizeHeader, unknownColumns } = require('../config/guestImportColumns');
-const { escapeHtml, getDeclineConfirmationTemplate, getNewRsvpOrganizerTemplate, getRsvpClaimTemplate } = require('../utils/emailTemplates');
+// `escapeHtml` is deliberately NOT imported here any more. Its only uses in
+// this file were wrapped around email SUBJECT lines, which are plain text —
+// see the note at the decline subject below.
+const { getDeclineConfirmationTemplate, getNewRsvpOrganizerTemplate, getRsvpClaimTemplate } = require('../utils/emailTemplates');
 // This controller no longer SENDS any SMS — both of its send sites (the RSVP
 // confirmation and the decline acknowledgement) were retired with their types.
 // It still needs the opt-out helpers, which it uses to report reachability back
@@ -14,6 +17,7 @@ const { escapeHtml, getDeclineConfirmationTemplate, getNewRsvpOrganizerTemplate,
 const { getOptedOutSet, canonicalPhone } = require('../services/smsDispatch');
 const { getPublicBaseUrl } = require('../utils/publicUrl');
 const { isEventLiveForGuests } = require('../utils/eventAccess');
+const { publicTemplateData } = require('../utils/publicTemplateData');
 const { normalizeToE164 } = require('../utils/phone');
 const { normalizeEmail, escapeLikePattern } = require('../utils/normalize');
 const { SMS_CONSENT_TEXT_VERSION, CONSENT_METHOD_GUEST, normalizeConsentSource, logSmsConsentDecision } = require('../utils/smsConsent');
@@ -235,17 +239,36 @@ const submitPublicRSVP = async (req, res, next) => {
   // party server-side too, regardless of whether submit_rsvp_v2 also checks
   // this internally. A first-time response (party.response still 'pending',
   // or no partyId at all) is never blocked by this.
+  //
+  // ── WRAPPED, because this is the one await outside the handler's try ──
+  //
+  // Express 4 does not catch a rejected promise returned from a handler: the
+  // central error middleware never runs, no response is ever written, and the
+  // request hangs until a socket timeout. This read sits on the unauthenticated
+  // endpoint every guest on the platform posts to, so a transient Supabase blip
+  // here was a silently hung RSVP rather than a 500.
+  //
+  // It is also a DEFENCE-IN-DEPTH check, not the authority: submit_rsvp_v2
+  // re-enforces the same allow_guest_edits rule inside the transaction. So a
+  // failure to read is logged and allowed through to the RPC, which will refuse
+  // it properly, rather than failing an otherwise valid RSVP.
   if (partyId) {
-    const { data: existingParty } = await supabase
-      .from('rsvp_parties')
-      .select('response, events(slug, allow_guest_edits, rsvp_deadline)')
-      .eq('id', partyId)
-      .maybeSingle();
+    let existingParty = null;
+    try {
+      ({ data: existingParty } = await supabase
+        .from('rsvp_parties')
+        .select('response, events(slug, allow_guest_edits, rsvp_deadline)')
+        .eq('id', partyId)
+        .maybeSingle());
+    } catch (lookupErr) {
+      logger.warn({ err: lookupErr, partyId, slug },
+        'submitPublicRSVP: edit pre-check lookup failed — deferring to submit_rsvp_v2');
+    }
 
     const ev = existingParty?.events;
     // Only an EDIT to an already-answered party is gated here — a first-time
     // response (still 'pending', or no partyId) is never blocked by this.
-    const editingAnswered = ev?.slug === slug && ['yes', 'no', 'maybe'].includes(existingParty.response);
+    const editingAnswered = ev?.slug === slug && ['yes', 'no', 'maybe'].includes(existingParty?.response);
 
     if (editingAnswered && !ev?.allow_guest_edits) {
       return sendFail(res, {
@@ -426,9 +449,15 @@ const submitPublicRSVP = async (req, res, next) => {
         { title: result.event_title, event_date: result.event_date, slug: result.event_slug },
         guestLang,
       );
+      // NOT escaped. A subject line is plain text, not HTML — Brevo takes it as
+      // a `subject` field (notificationService.sendEmailViaBrevo). Running it
+      // through escapeHtml put the entities themselves in the inbox: an event
+      // called "Sara & Khalid" arrived as "Sara &amp; Khalid", and a guest
+      // called O'Brien as "O&#039;Brien". Every other subject in this codebase
+      // is unescaped, which is what made these three stand out.
       const declineSubject = guestLang === 'ar'
-        ? `شكرًا لإخبارنا – ${escapeHtml(result.event_title)}`
-        : `Thank You – ${escapeHtml(result.event_title)}`;
+        ? `شكرًا لإخبارنا – ${result.event_title}`
+        : `Thank You – ${result.event_title}`;
       notificationService.sendEmailViaBrevo(result.guest_email, declineSubject, declineHtml)
         .catch((err) => logger.error({ err }, 'Decline email error'));
     }
@@ -512,8 +541,8 @@ const submitPublicRSVP = async (req, res, next) => {
           ...submissionDetail,
         });
         const orgSubject = result.is_update
-          ? `RSVP updated: ${escapeHtml(guestName)} - ${escapeHtml(result.event_title)}`
-          : `New RSVP: ${escapeHtml(guestName)} - ${escapeHtml(result.event_title)}`;
+          ? `RSVP updated: ${guestName} - ${result.event_title}`
+          : `New RSVP: ${guestName} - ${result.event_title}`;
         notificationService.sendEmailViaBrevo(result.org_email, orgSubject, orgEmailHtml)
           .catch((err) => logger.error({ err }, 'Failed to notify organizer via email'));
       }
@@ -535,8 +564,8 @@ const submitPublicRSVP = async (req, res, next) => {
               ...submissionDetail,
             });
             const partnerSubject = result.is_update
-              ? `RSVP updated: ${escapeHtml(guestName)} - ${escapeHtml(result.event_title)}`
-              : `New RSVP: ${escapeHtml(guestName)} - ${escapeHtml(result.event_title)}`;
+              ? `RSVP updated: ${guestName} - ${result.event_title}`
+              : `New RSVP: ${guestName} - ${result.event_title}`;
             notificationService.sendEmailViaBrevo(partnerEmail.trim(), partnerSubject, partnerEmailHtml)
               .catch((err) => logger.error({ err }, 'Failed to notify partner recipient via email'));
           }
@@ -860,9 +889,29 @@ const importGuestsCSV = async (req, res, next) => {
             notes: rowObj.notes || rowObj.note || '',
             party_size: rowObj.party_size || '',
             side: rowObj.side || '',
-            // `assigned_table` and `primary_meal_selection` are what the .xlsx
-            // export's own headers become once lowercased and underscored, so
-            // they are read here alongside the CSV names.
+            /**
+             * `assigned_table` and `primary_meal_selection` are what the .xlsx
+             * export's own headers become once lowercased and underscored
+             * ("Assigned Table" / "Primary Meal Selection" — see
+             * utils/excelHelper.js), so they are read here alongside the CSV
+             * names.
+             *
+             * ── THESE TWO LINES USED TO EXIST TWICE ──
+             *
+             * A second, narrower pair of `table_name` / `meal_selections` keys
+             * was declared further down this same object literal. Duplicate
+             * keys are legal JavaScript and the LAST one wins, so the
+             * .xlsx-specific aliases above were silently discarded — despite
+             * this comment saying they were read.
+             *
+             * The effect was not a crash. `blankIfPlaceholder(row.table_name)`
+             * downstream received an empty STRING rather than undefined, so the
+             * `??` fallback chain could not recover it either: an organizer who
+             * exported their guest list to Excel, edited it and re-uploaded got
+             * every table assignment and every meal choice blanked, under a
+             * green "Import Complete" panel. The CSV round-trip tests passed
+             * throughout, because they never exercised this branch.
+             */
             table_name: rowObj.table_name || rowObj.table || rowObj.assigned_table || '',
             meal_selections: rowObj.meal_selections || rowObj.meal || rowObj.meals
               || rowObj.primary_meal_selection || '',
@@ -876,8 +925,6 @@ const importGuestsCSV = async (req, res, next) => {
             // the shared loop below — so the two file formats cannot disagree
             // about what "attending" means.
             response: rowObj.response || rowObj.rsvp || rowObj.status || '',
-            table_name: rowObj.table_name || rowObj.table || '',
-            meal_selections: rowObj.meal_selections || rowObj.meal || rowObj.meals || '',
           };
 
           // Three spellings accepted because organizers build these files by hand
@@ -2005,7 +2052,15 @@ const getRsvpInvite = async (req, res, next) => {
       // Add new guest-visible columns to BOTH or neither.
       event: (() => {
         const { access_password, ...publicEvent } = event;
-        return { ...publicEvent, location: event.location_name || event.location_address || null };
+        return {
+          ...publicEvent,
+          // Same strip as getPublicEventBySlug. This endpoint is reached from an
+          // emailed link and is just as public; spreading the raw column here
+          // served the hosts' own email addresses to every guest who clicked
+          // through. See utils/publicTemplateData.js.
+          template_data: publicTemplateData(event.template_data),
+          location: event.location_name || event.location_address || null,
+        };
       })(),
     });
   } catch (err) {
@@ -2092,7 +2147,7 @@ const respondViaToken = async (req, res, next) => {
         notificationService.sendConfirmationEmail(event.id, payload.partyId).catch((err) => logger.error({ err }, 'Confirmation email error'));
       } else if (mapped === 'no') {
         const declineHtml = getDeclineConfirmationTemplate({ guest_name: guestName, id: payload.partyId }, event);
-        notificationService.sendEmailViaBrevo(primaryEmail, `Thank You – ${escapeHtml(event.title)}`, declineHtml)
+        notificationService.sendEmailViaBrevo(primaryEmail, `Thank You – ${event.title}`, declineHtml)
           .catch((err) => logger.error({ err }, 'Decline email error'));
       }
     } else {
@@ -2139,8 +2194,8 @@ const respondViaToken = async (req, res, next) => {
               timeZone: event.timezone,
             });
             const subject = ['yes', 'no', 'maybe'].includes(existingParty?.response)
-              ? `RSVP updated: ${escapeHtml(guestName)} - ${escapeHtml(event.title)}`
-              : `New RSVP: ${escapeHtml(guestName)} - ${escapeHtml(event.title)}`;
+              ? `RSVP updated: ${guestName} - ${event.title}`
+              : `New RSVP: ${guestName} - ${event.title}`;
             notificationService.sendEmailViaBrevo(recipientEmail.trim(), subject, html)
               .catch((err) => logger.error({ err, role }, 'Failed to notify RSVP recipient via email'));
           }

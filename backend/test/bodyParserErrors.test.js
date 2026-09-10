@@ -58,7 +58,34 @@ test('an oversized body answers 413 FILE_TOO_LARGE, not 500', () => {
   const res = run(err);
   assert.equal(res.statusCode, 413);
   assert.equal(res.body.error, 'FILE_TOO_LARGE');
-  assert.match(res.body.message, /12 MB/);
+  assert.match(res.body.message, /too large/i);
+});
+
+test('the 413 names the limit of the parser that actually rejected the body', () => {
+  /* The message used to be the fixed sentence "The limit is 12 MB." That was
+     true of the upload parser and of nothing else. There are four parsers with
+     four ceilings — 8kb for the analytics beacon, 64kb for the public guest
+     writes, 12MB for uploads, 50mb for authenticated payloads — so the fixed
+     sentence told a caller rejected at 64kb that it had 12 MB to work with.
+
+     body-parser puts the real ceiling on `err.limit`, in bytes (verified
+     against express 4.22.2: a 8kb json parser raises limit: 8192). */
+  const at = (limit) => run(Object.assign(new Error('request entity too large'), {
+    type: 'entity.too.large', status: 413, statusCode: 413, expose: true, limit,
+  })).body.message;
+
+  assert.match(at(8192), /8 KB/, 'the beacon parser must report KB, not MB');
+  assert.match(at(65536), /64 KB/);
+  assert.match(at(12 * 1024 * 1024), /12 MB/);
+  assert.match(at(50 * 1024 * 1024), /50 MB/);
+
+  // And an error carrying no limit still produces a sensible sentence rather
+  // than "undefined".
+  const noLimit = run(Object.assign(new Error('request entity too large'), {
+    type: 'entity.too.large', status: 413, statusCode: 413, expose: true,
+  })).body.message;
+  assert.match(noLimit, /too large/i);
+  assert.doesNotMatch(noLimit, /undefined|NaN/);
 });
 
 test('malformed JSON answers 400, not 500', () => {

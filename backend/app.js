@@ -69,9 +69,29 @@ app.use(cookieParser());
 // tight parser mounted on these paths first sets req._body, so the global parser
 // below short-circuits for them. An RSVP — even a party of 20 with custom answers
 // — is well under 64kb.
+//
+// ── EVERY public write, not just the RSVP one ──
+//
+// This used to cover the RSVP paths alone, which left the other unauthenticated
+// writes on the same prefix — the analytics beacon, the seating verifier, the
+// self-check-in — inheriting the 50mb ceiling. The beacon in particular stores
+// caller-supplied JSON (`metadata`), so a 50mb body was a 50mb row, written by
+// anybody, on the endpoint least likely to be watched. Egress and storage are
+// the resource class that has already restricted this project's services once.
+//
+// The beacon gets its own, much tighter parser: it carries an event name, a
+// session id and a small metadata object, and nothing legitimate approaches
+// even 8kb.
 const tightJson = express.json({ limit: '64kb' });
+const beaconJson = express.json({ limit: '8kb' });
+app.use('/api/v1/public/events/:slug/analytics', beaconJson);
 app.use('/api/v1/public/events/:slug/rsvp', tightJson);
+app.use('/api/v1/public/events/:slug/seating/verify', tightJson);
+app.use('/api/v1/public/events/:slug/self-checkin', tightJson);
 app.use('/api/v1/public/rsvp', tightJson);
+app.use('/api/v1/public/sms-opt-in', tightJson);
+app.use('/api/v1/public/newsletter-subscribe', tightJson);
+app.use('/api/v1/public/contact', tightJson);
 
 app.use(express.json({
   limit: '50mb',
@@ -121,6 +141,28 @@ if (redisClient) {
   }
 }
 
+/**
+ * Say it at boot, once, when the limiters are per-process AND there is more than
+ * one process.
+ *
+ * The comment inside storeFor() has always described this, but a comment is read
+ * by whoever is already in this file. `ecosystem.config.js` runs the API with
+ * `instances: 'max'` in cluster mode, so with no REDIS_URL the effective ceiling
+ * on EVERY limiter — including the 15-attempt auth limiter — is N× the
+ * configured value and varies by which worker answered. Both optional packages
+ * are already installed; this is one environment variable away from correct, and
+ * the only reason it stayed unnoticed is that nothing ever said so out loud.
+ */
+if (!RATE_LIMIT_DISABLED && !redisClient) {
+  const clustered = process.env.NODE_APP_INSTANCE !== undefined;
+  const msg = 'Rate limiting is using the per-process in-memory store (no REDIS_URL).';
+  if (clustered) {
+    logger.warn(`⚠️  ${msg} This process is one of a pm2 CLUSTER, so every limit is effectively multiplied by the worker count and is not deterministic. Set REDIS_URL to make limits coherent.`);
+  } else {
+    logger.info(`${msg} Fine for a single process; set REDIS_URL before scaling out.`);
+  }
+}
+
 const storeFor = (prefix) => {
   // undefined => express-rate-limit's default MemoryStore. NOTE: MemoryStore is
   // PER PROCESS, and ecosystem.config.js runs the API with `instances: 'max'` in
@@ -156,6 +198,27 @@ const TWILIO_WEBHOOK_PATHS = new Set([
 ]);
 const isTwilioWebhook = (req) => TWILIO_WEBHOOK_PATHS.has((req.originalUrl || '').split('?')[0]);
 
+/**
+ * The guest surface, which has its OWN budget below and must not be capped by
+ * the general one first.
+ *
+ * `publicReadLimiter` is deliberately set to 1200/15min with a note explaining
+ * that households, offices and mobile CGNAT put many real guests behind one
+ * address. That number never applied: `apiLimiter` is mounted on `/api` before
+ * it, at 1000, and skipped only loopback and the carrier webhooks — so guests
+ * were cut off at 1000 and the wider budget was unreachable. Exempting these
+ * prefixes here is what makes the specific limiter the one that decides.
+ *
+ * Safe because nothing is left uncapped: every path below is covered by
+ * publicReadLimiter, and the state-changing ones additionally by
+ * publicWriteLimiter.
+ */
+const PUBLIC_GUEST_PREFIXES = ['/api/v1/public/events', '/api/v1/public/rsvp'];
+const isPublicGuestSurface = (req) => {
+  const path = (req.originalUrl || '').split('?')[0];
+  return PUBLIC_GUEST_PREFIXES.some((p) => path === p || path.startsWith(`${p}/`));
+};
+
 if (RATE_LIMIT_DISABLED) {
   logger.warn('⚠️  Rate limiting is DISABLED (DISABLE_RATE_LIMIT=true). Do NOT run production like this.');
 } else {
@@ -166,7 +229,7 @@ if (RATE_LIMIT_DISABLED) {
     message: { success: false, error: 'TOO_MANY_REQUESTS', message: 'Too many requests. Please try again later.' },
     standardHeaders: true,
     legacyHeaders: false,
-    skip: (req) => skipInternal(req) || isTwilioWebhook(req),
+    skip: (req) => skipInternal(req) || isTwilioWebhook(req) || isPublicGuestSurface(req),
     store: storeFor('api'),
   });
   app.use('/api', apiLimiter);
@@ -361,16 +424,29 @@ app.use((req, res, next) => {
  * INVALID_PARAM tells whoever wrote that caller exactly what is wrong — which
  * `invalid input syntax for type uuid` buried in a Postgres log did not.
  *
- * `code`, `slug` and `token` are deliberately NOT in this list: short-link codes,
- * event slugs and signed JWTs are not UUIDs and each has its own validation.
+ * ── WHAT THIS LAYER CAN AND CANNOT REACH ──────────────────────────────────
+ *
+ * This list once carried twenty-two names and read as though it covered the
+ * whole routing table. It never did, and the reason is a documented Express
+ * rule rather than a bug in the regex: an `app.param()` callback fires only for
+ * parameters that appear in the APP's own routing — which includes an
+ * `app.use()` MOUNT path, but never a parameter declared inside a mounted
+ * Router. Verified against express 4.22.2.
+ *
+ * So the only names worth registering here are the ones that genuinely appear
+ * in a mount path below, and that is `:eventId` alone. Every other identifier
+ * is declared inside a router and is guarded THERE, by
+ * `middleware/uuidParam.js` — see that file for the full account.
+ *
+ * Keeping the long list would have been worse than useless: it looked like
+ * coverage, so nobody went looking for the routers that had none.
+ *
+ * `code`, `slug` and `token` are deliberately NOT guarded as UUIDs anywhere:
+ * short-link codes, event slugs and signed JWTs are not UUIDs and each has its
+ * own validation.
  */
-const UUID_PARAMS = [
-  'eventId', 'partyId', 'guestId', 'tableId', 'fieldId', 'deviceId', 'sessionId',
-  'userId', 'roleId', 'paymentId', 'productId', 'categoryId', 'imageId', 'postId',
-  'badgeId', 'inquiryId', 'logId', 'packageId', 'pressMentionId', 'promoCodeId',
-  'testimonialId',
-];
-for (const name of UUID_PARAMS) {
+const MOUNT_PATH_UUID_PARAMS = ['eventId'];
+for (const name of MOUNT_PATH_UUID_PARAMS) {
   app.param(name, (req, res, next, value) => {
     if (!UUID_REGEX.test(value)) {
       return res.status(400).json({
@@ -568,13 +644,36 @@ app.use((err, req, res, next) => {
   if (err && err.type && typeof err.status === 'number' && err.status < 500) {
     const isTooLarge = err.type === 'entity.too.large';
     logger.warn({
-      type: err.type, status: err.status, url: req.originalUrl, method: req.method,
+      type: err.type, status: err.status, limit: err.limit, url: req.originalUrl, method: req.method,
     }, 'request body rejected');
+
+    /**
+     * The limit is read off the error, not hardcoded.
+     *
+     * This said "The limit is 12 MB." for every oversized body, which was true
+     * only of the upload parser. There are now four parsers with four different
+     * ceilings — 8kb for the analytics beacon, 64kb for the public guest
+     * writes, 12MB for uploads, 50mb for authenticated CSV/JSON — so a fixed
+     * sentence is wrong for three of them, and wrong in the unhelpful
+     * direction: it tells a caller rejected at 64kb that they have 12 MB to
+     * play with.
+     *
+     * body-parser sets `err.limit` in bytes on exactly this error type.
+     */
+    const describeLimit = (bytes) => {
+      if (!Number.isFinite(bytes)) return null;
+      if (bytes >= 1048576) return `${+(bytes / 1048576).toFixed(1)} MB`;
+      return `${Math.round(bytes / 1024)} KB`;
+    };
+    const limit = describeLimit(err.limit);
+
     return res.status(err.status).json({
       success: false,
       error: isTooLarge ? 'FILE_TOO_LARGE' : 'INVALID_BODY',
       message: isTooLarge
-        ? 'That file is too large. The limit is 12 MB.'
+        ? (limit
+          ? `That request body is too large. The limit for this endpoint is ${limit}.`
+          : 'That request body is too large.')
         : 'The request body could not be read.',
     });
   }

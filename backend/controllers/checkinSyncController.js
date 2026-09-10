@@ -216,9 +216,34 @@ const deleteCheckIn = async (req, res, next) => {
   let actorStaff = null;
 
   if (!req.user) {
-    const auth = await checkinDevice.authorizeStaff(
-      eventId, req.body?.staffId || null, 'supervisor',
-    );
+    /**
+     * Wrapped, because this is the one await outside the try below.
+     *
+     * Express 4 does not catch a promise rejected by a handler: no response is
+     * written and the request hangs. On this endpoint that is worse than a 500 —
+     * the tablet marks the guest reversed LOCALLY before queueing the undo, and
+     * only takes that mark back on a definite answer. A request that never
+     * answers leaves the two devices at the door disagreeing about whether
+     * somebody is inside, which is exactly the state §10 requires be reported.
+     *
+     * A lookup failure is an authorization failure: it cannot confirm the actor
+     * is a supervisor, so it refuses rather than proceeding.
+     */
+    let auth;
+    try {
+      auth = await checkinDevice.authorizeStaff(
+        eventId, req.body?.staffId || null, 'supervisor',
+      );
+    } catch (authErr) {
+      logger.error(
+        { err: authErr, eventId, clientCheckinId, deviceId: req.device?.id || null },
+        '[checkinSync] undo refused — staff authorization could not be resolved',
+      );
+      return sendFail(res, {
+        status: 503, error: 'AUTHORIZATION_UNAVAILABLE',
+        message: 'We could not confirm your supervisor access just now. Try again in a moment.',
+      });
+    }
     if (!auth.ok) {
       logger.warn(
         { eventId, clientCheckinId, deviceId: req.device?.id || null, staffId: req.body?.staffId || null, reason: auth.error },

@@ -38,6 +38,20 @@
 const fs = require('fs');
 const path = require('path');
 
+/*
+ * Runs only when invoked directly.
+ *
+ * This file is top-level script code that ends in `process.exit(0)`, so
+ * REQUIRING it used to run the whole audit and then kill the requiring process.
+ * Any tool that walks and imports the tree — a coverage run, a dependency
+ * graph, a module-load smoke check — died on it silently, with nothing naming
+ * the file responsible.
+ *
+ * A bare `return` is legal at the top level of a CommonJS module (Node wraps
+ * every module in a function), which makes this the whole fix.
+ */
+if (require.main !== module) return;
+
 const VERBOSE = process.argv.includes('--verbose');
 const ROOT = path.join(__dirname, '..', '..');
 const TRACKED = path.join(ROOT, 'supabase', 'migrations');

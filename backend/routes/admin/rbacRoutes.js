@@ -1,4 +1,5 @@
 const express = require('express');
+const { registerUuidParams } = require('../../middleware/uuidParam');
 const { requirePermission } = require('../../middleware/permissions');
 const {
   listPermissions,
@@ -12,6 +13,10 @@ const {
 // requireAuth is applied by the parent admin router (routes/admin/index.js).
 const router = express.Router();
 
+
+// Identifier guards. app.param() in app.js does NOT fire for parameters
+// declared inside a mounted router — see middleware/uuidParam.js.
+registerUuidParams(router, ['roleId', 'userId']);
 // Viewing the role/permission matrix
 router.get('/permissions', requirePermission('rbac.view'), listPermissions);
 router.get('/roles', requirePermission('rbac.view'), listRoles);

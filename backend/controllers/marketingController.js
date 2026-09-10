@@ -48,19 +48,32 @@ const subscribeNewsletter = async (req, res, next) => {
 /**
  * Give a standalone /sms-opt-in submission real effect on deliverability.
  *
- * Two writes, both deliberately narrow:
+ * ONE write, deliberately narrow, and one refusal.
  *
- *  1. LIFT SUPPRESSION. Someone who once replied STOP and has now returned to the
- *     public page and affirmatively opted in has plainly changed their mind — the
- *     same thing START would express over SMS. Without this the row in
- *     sms_opt_outs silences them forever and no UI anywhere can undo it. The row
- *     is kept and stamped (never deleted) so the history stays auditable.
+ *  GRANT CONSENT ON PARTIES THAT NEVER DECIDED. A party whose primary contact
+ *  holds this number, and which has NO recorded decision (sms_consent_at IS
+ *  NULL), becomes messageable. The IS-NULL guard is the same precedence rule the
+ *  host attestation obeys: a guest who was shown our checkbox and declined has a
+ *  stamped timestamp, and nothing here may write over their refusal.
  *
- *  2. GRANT CONSENT ON PARTIES THAT NEVER DECIDED. A party whose primary contact
- *     holds this number, and which has NO recorded decision (sms_consent_at IS
- *     NULL), becomes messageable. The IS-NULL guard is the same precedence rule
- *     the host attestation obeys: a guest who was shown our checkbox and declined
- *     has a stamped timestamp, and nothing here may write over their refusal.
+ *  NEVER LIFT A SUPPRESSION. See the note in the body — that write used to be
+ *  here and was the one thing on this endpoint an anonymous visitor could do to
+ *  somebody else's phone number.
+ *
+ * ── THE RESIDUAL RISK, STATED PLAINLY ─────────────────────────────────────
+ *
+ * This endpoint still takes a phone number from an unauthenticated form and,
+ * for a number that has never opted out, treats the submission as that person's
+ * consent. It is bounded — a rate limiter, a required checkbox, no effect on
+ * anyone who has refused or replied STOP, and every send re-verifies consent at
+ * dispatch time — but the form itself does not prove the submitter owns the
+ * number.
+ *
+ * Closing that properly means a verification round trip: text a short code to
+ * the number and require it back before any of this runs. That is a product
+ * decision (it changes the page, and the code has to be sent outside the
+ * per-event billing path, which is currently the only door to the carrier), so
+ * it is named here rather than half-built.
  *
  * Best-effort: the consent record is already durably stored by the caller, so a
  * failure here degrades to "recorded but not yet applied" rather than losing the
@@ -70,17 +83,53 @@ async function applyStandaloneOptIn(phone) {
   try {
     const nowISO = new Date().toISOString();
 
-    // 1. Lift any active suppression for this number.
-    const { error: unsuppressErr } = await supabase
+    /**
+     * ── A STOP IS NOT REVERSIBLE FROM AN ANONYMOUS WEB FORM ────────────────
+     *
+     * This used to stamp `opted_back_in_at` here, lifting the suppression for
+     * whatever number was typed into a public, unauthenticated page. Nothing
+     * established that the person filling the form owned the number, so any
+     * visitor could put a stranger's mobile in the box and switch that
+     * stranger's opt-out off, across every event on the platform.
+     *
+     * That contradicts the rule this whole subsystem is built on, stated once
+     * in services/smsDispatch.js: a STOP "suppresses the number globally,
+     * across every event, permanently, until they text START". The word that
+     * matters is THEY. An opt-out belongs to the subscriber, and only the
+     * subscriber can take it back.
+     *
+     * There is already a correct channel for that, and it proves ownership by
+     * construction: replying START / UNSTOP / YES from the handset, which
+     * campaignController's inbound webhook records. The carrier also honours it
+     * network-side on toll-free. Nothing is lost by removing this; a route that
+     * required no proof has simply stopped existing.
+     *
+     * A suppressed number therefore ends the function here — the submission is
+     * still recorded by the caller (that is the audit trail the Toll-Free
+     * Verification asks for), it just no longer grants anything.
+     */
+    const { data: suppressed, error: suppressedErr } = await supabase
       .from('sms_opt_outs')
-      .update({ opted_back_in_at: nowISO })
+      .select('phone')
       .eq('phone', phone)
-      .is('opted_back_in_at', null);
-    if (unsuppressErr) logger.warn({ err: unsuppressErr }, 'sms opt-in: lifting suppression failed');
+      .is('opted_back_in_at', null)
+      .limit(1);
 
-    // 2. Find undecided parties whose PRIMARY contact is this number. Only the
-    //    primary matters: SMS is addressed to the party's primary contact, so a
-    //    companion sharing the number would attach consent to the wrong person.
+    if (suppressedErr) {
+      // FAIL CLOSED. Not being able to read the suppression list is not
+      // permission to write around it — the whole point of the list is that it
+      // outranks every other consent record.
+      logger.warn({ err: suppressedErr }, 'sms opt-in: suppression check failed — not propagating consent');
+      return;
+    }
+    if (suppressed && suppressed.length > 0) {
+      logger.info({ phone }, 'sms opt-in recorded for a number that has replied STOP — consent NOT propagated; they must text START');
+      return;
+    }
+
+    // Find undecided parties whose PRIMARY contact is this number. Only the
+    // primary matters: SMS is addressed to the party's primary contact, so a
+    // companion sharing the number would attach consent to the wrong person.
     const { data: matches, error: matchErr } = await supabase
       .from('guests')
       .select('party_id, event_id')

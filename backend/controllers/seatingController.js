@@ -95,11 +95,20 @@ const assignSeat = async (req, res, next) => {
 
     // The EMAIL goes immediately — it is free, and it is the thing that actually
     // carries the scannable pass.
-    try {
-      await invitationService.sendQrTicketEmail(eventId, rsvpId);
-    } catch (emailErr) {
+    //
+    // NOT awaited, matching the batch path below. A Brevo round trip is
+    // hundreds of milliseconds and this endpoint is fired once per drop on a
+    // drag-and-drop chart, so awaiting it made the organizer wait on a mail API
+    // for every guest they moved — while the batch save, which the comment
+    // there says must not "hold up the response", already did the opposite.
+    // Two paths through the same action should not disagree about that.
+    //
+    // Nothing downstream reads the outcome: the response reports the SEATING,
+    // and a failed pass email is recoverable from the guest list's resend
+    // button. A rejection is logged rather than left unhandled.
+    invitationService.sendQrTicketEmail(eventId, rsvpId).catch((emailErr) => {
       logger.error({ err: emailErr, rsvpId }, 'Failed to auto-send QR ticket email');
-    }
+    });
 
     // The TEXT is queued, not sent. See queueSeatingNotice.
     await queueSeatingNotice(eventId, rsvpId, tableId);
@@ -375,7 +384,21 @@ const saveSeatingBatch = async (req, res, next) => {
     // Check if there was any failure in the batch
     const failures = results.filter(r => !r.success);
     if (failures.length > 0) {
-      const errorMsg = failures.map(f => f.error).join(', ');
+      /**
+       * `f.error` is either an RPC message string or a PostgrestError OBJECT,
+       * because the loop above stores `error || data?.message`. Joining them
+       * raw produced "Some seating assignments failed: [object Object]" for
+       * every genuine database failure — the exact case where the organizer
+       * most needs to be told what happened.
+       */
+      const describe = (e) => {
+        if (!e) return 'unknown error';
+        if (typeof e === 'string') return e;
+        return e.message || e.details || e.code || 'unknown error';
+      };
+      // De-duplicated: a batch of 200 rows that all hit the same full table
+      // should say so once, not print the same sentence two hundred times.
+      const errorMsg = [...new Set(failures.map((f) => describe(f.error)))].join(', ');
       return res.status(400).json({
         success: false,
         error: 'BATCH_SAVE_FAILED',

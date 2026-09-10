@@ -1,4 +1,5 @@
 const express = require('express');
+const { registerUuidParams } = require('../../middleware/uuidParam');
 const rateLimit = require('express-rate-limit');
 const { requirePermission } = require('../../middleware/permissions');
 const {
@@ -13,6 +14,10 @@ const {
 // requireAuth is applied by the parent admin router.
 const router = express.Router();
 
+
+// Identifier guards. app.param() in app.js does NOT fire for parameters
+// declared inside a mounted router — see middleware/uuidParam.js.
+registerUuidParams(router, ['userId', 'sessionId']);
 // Caps the blast radius if an admin token is compromised — these two actions
 // (issuing a temp password, minting an impersonation session) are the most
 // sensitive mutations in the admin surface.

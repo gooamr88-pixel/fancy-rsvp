@@ -11,6 +11,7 @@ const {
 } = require('../utils/tierResolver');
 const { isTrialExpired } = require('../utils/trialTier');
 const { hashEventPassword, verifyEventPassword, isHashedEventPassword } = require('../utils/eventPassword');
+const { publicTemplateData } = require('../utils/publicTemplateData');
 const {
   safeZone, wallClockToInstant, instantToWallClock, formatInZone, isValidTimeZone,
 } = require('../utils/timezone');
@@ -219,14 +220,40 @@ async function withResolvedTier(rawEvent) {
   // baseline is added on the way OUT instead, by the same withBaseline() the
   // server-side gates use — so the padlocks the dashboard draws and the 403s
   // the API returns are computed from one list, not two.
-  supabase.from('events').update({
-    tier_name: tierName,
-    tier_key: tierKey,
-    tier_max_guests: tierMaxGuests,
-    tier_remove_watermark: tierRemoveWatermark,
-    tier_white_label: tierWhiteLabel,
-    ...(tierFeatures.length > 0 ? { tier_features: tierFeatures } : {}),
-  }).eq('id', event.id).then(() => {}, () => {});
+  //
+  // ── AND ONLY WHEN SOMETHING ACTUALLY CHANGED ──
+  //
+  // This UPDATE used to fire unconditionally, on every event, on every read.
+  // `getEvents` lists an organizer's whole portfolio, so opening the dashboard
+  // rewrote every row in it — for values that are almost always already
+  // correct. Postgres has no in-place update: each one becomes a new row
+  // version with every index entry rewritten, and the dead tuples wait for
+  // vacuum. A heal that runs when nothing needs healing is pure write
+  // amplification on the most-loaded read in the product.
+  //
+  // `syncBrandingSnapshots` in paymentController solves exactly this with
+  // `.neq()` filters and explains why; the same discipline belongs here. The
+  // difference is only in shape — that one filters server-side because it
+  // touches many rows blind, this one already holds both the stored and the
+  // resolved value and can simply compare them.
+  const drifted = event.tier_name !== tierName
+    || event.tier_key !== tierKey
+    || event.tier_max_guests !== tierMaxGuests
+    || !!event.tier_remove_watermark !== tierRemoveWatermark
+    || !!event.tier_white_label !== tierWhiteLabel
+    || (tierFeatures.length > 0
+      && JSON.stringify(event.tier_features || []) !== JSON.stringify(tierFeatures));
+
+  if (drifted) {
+    supabase.from('events').update({
+      tier_name: tierName,
+      tier_key: tierKey,
+      tier_max_guests: tierMaxGuests,
+      tier_remove_watermark: tierRemoveWatermark,
+      tier_white_label: tierWhiteLabel,
+      ...(tierFeatures.length > 0 ? { tier_features: tierFeatures } : {}),
+    }).eq('id', event.id).then(() => {}, () => {});
+  }
 
   return {
     ...event,
@@ -619,6 +646,18 @@ function buildRetentionBlock(event) {
  * copies of a 30-column list differing by one line is how the fallback ends up
  * quietly missing a column the renderer needs, months later, on the one code
  * path nobody exercises until a deploy goes out of order.
+ *
+ * ── That warning came true, and this is the repair ──
+ *
+ * `cancelled_at` and `cancellation_reason` were written by `cancelEvent` and
+ * read by the cancelled branch of `getPublicEventBySlug`, and were in NEITHER
+ * copy of this list. So both were always null: the organizer typed a reason for
+ * calling their wedding off, the API promised to carry it, and every guest who
+ * followed their link got a bare "This event has been cancelled" instead — on
+ * the one message they were actively checking for.
+ *
+ * These two are the reason this is a function rather than a literal. Add a
+ * guest-visible column HERE, once, and both rungs of the fallback get it.
  */
 const buildPublicEventColumns = (withWhiteLabel, withTrial = true) => `
   id,
@@ -653,6 +692,8 @@ const buildPublicEventColumns = (withWhiteLabel, withTrial = true) => `
   reveal_enabled,
   reveal_replay,
   tier_remove_watermark,${withWhiteLabel ? '\n  tier_white_label,' : ''}${withTrial ? '\n  trial_ends_at,' : ''}
+  cancelled_at,
+  cancellation_reason,
   updated_at,
   custom_form_fields(*)
 `;
@@ -874,8 +915,14 @@ const getPublicEventBySlug = async (req, res, next) => {
       }
     }
 
-    // Strip sensitive fields from public response
+    // Strip sensitive fields from public response.
+    //
+    // `template_data` needs its own pass, not just an omission: it is content
+    // the guest page renders, but it also carries the hosts' personal email
+    // addresses (partner1_email / partner2_email), which were being served to
+    // anybody who could open the invitation. See utils/publicTemplateData.js.
     const { access_password, is_paid, ...publicEvent } = event;
+    publicEvent.template_data = publicTemplateData(event.template_data);
 
     // guestRsvp is included only when a valid invitation token resolved to this event.
     return res.json({ success: true, event: publicEvent, guestRsvp });
@@ -889,304 +936,318 @@ const getPublicEventBySlug = async (req, res, next) => {
  * PATCH /api/v1/events/:eventId
  */
 const updateEvent = async (req, res, next) => {
-  const { eventId } = req.params;
+  /**
+   * ── ONE try, COVERING THE WHOLE HANDLER ──
+   *
+   * The try used to open further down, after this handler had already awaited
+   * twice: `hashEventPassword` for a new access password, and the read of the
+   * event's current dates and zone. Express 4 does not catch a rejected promise
+   * returned from a handler — the error middleware never runs, nothing is ever
+   * written to the response, and the request hangs until a socket timeout. So a
+   * transient failure in either of those produced no status, no log line from
+   * the error handler, and a client left waiting.
+   *
+   * Opening it here instead is the same shape every other handler in this file
+   * already uses. Nothing else changed.
+   */
+  try {
+    const { eventId } = req.params;
 
-  const allowedFields = [
-    'slug',
-    'template_type',
-    'title',
-    'description',
-    'event_date',
-    'event_end_date',
-    'location_name',
-    'location_address',
-    'location_lat',
-    'location_lng',
-    'location_place_id',
-    'dress_code',
-    'rsvp_deadline',
-    'privacy_mode',
-    'access_password',
-    'cover_image_url',
-    'gallery_urls',
-    'custom_colors',
-    'custom_fonts',
-    'template_data',
-    'event_type',
-    'background_music_url',
-    'notification_preferences',
-    'allow_guest_edits',
-    'track_guest_side',
-    'no_kids_allowed',
-    'collect_dietary_restrictions',
-    // The sealed-envelope reveal. Both default true in the schema, so an
-    // organizer who never opens the setting keeps exactly today's behaviour.
-    'reveal_enabled',
-    'reveal_replay',
+    const allowedFields = [
+      'slug',
+      'template_type',
+      'title',
+      'description',
+      'event_date',
+      'event_end_date',
+      'location_name',
+      'location_address',
+      'location_lat',
+      'location_lng',
+      'location_place_id',
+      'dress_code',
+      'rsvp_deadline',
+      'privacy_mode',
+      'access_password',
+      'cover_image_url',
+      'gallery_urls',
+      'custom_colors',
+      'custom_fonts',
+      'template_data',
+      'event_type',
+      'background_music_url',
+      'notification_preferences',
+      'allow_guest_edits',
+      'track_guest_side',
+      'no_kids_allowed',
+      'collect_dietary_restrictions',
+      // The sealed-envelope reveal. Both default true in the schema, so an
+      // organizer who never opens the setting keeps exactly today's behaviour.
+      'reveal_enabled',
+      'reveal_replay',
+      /**
+       * THE EVENT'S OWN ZONE — correctable, deliberately, despite being a snapshot.
+       *
+       * It was left out of this list on purpose: `events.timezone` is frozen at
+       * creation so that correcting an ACCOUNT's zone never silently moves events
+       * whose invitations already went out. That reasoning is still right, and
+       * nothing below reads the organization's zone.
+       *
+       * What it missed is that a zone can be frozen WRONG. An event created while
+       * the organization had no zone froze the platform default instead, and from
+       * that moment the stored instant was hours away from the hour the organizer
+       * typed — so the day-before reminder, the seating reveal and every "is this
+       * event over?" check ran on the wrong clock. With no way to edit the column
+       * and no screen displaying it, that was permanent AND invisible: the
+       * organizer's only visible symptom was reminders arriving at strange times,
+       * and the one thing they would naturally try — fixing their account
+       * timezone — cannot help, because this column never reads it.
+       *
+       * Frozen from ACCIDENTAL change, not from deliberate repair. See the
+       * re-anchoring below for what changing it actually does.
+       */
+      'timezone',
+    ];
+
+    // Status transitions the organizer may request:
+    //   • → 'paused' / 'completed' : always allowed.
+    //   • → 'active'               : ONLY as a RESUME of an already-paid, currently-paused
+    //                                event. First activation still happens via the Stripe
+    //                                webhook, so an organizer can never self-activate an
+    //                                unpaid event — but they can lift a pause they applied.
+    if (req.body.status && ['paused', 'completed'].includes(req.body.status)) {
+      allowedFields.push('status');
+    } else if (req.body.status === 'active') {
+      let isResume = false;
+      try {
+        const { data: ev } = await supabase
+          .from('events')
+          .select('status, is_paid')
+          .eq('id', eventId)
+          .single();
+        // Fail closed: only a paid event currently in 'paused' may return to 'active'.
+        isResume = !!(ev && ev.is_paid === true && ev.status === 'paused');
+      } catch {
+        isResume = false;
+      }
+      if (!isResume) {
+        return res.status(403).json({
+          success: false,
+          error: 'STATUS_FORBIDDEN',
+          message: 'Event status cannot be set to active manually. It is activated upon payment.'
+        });
+      }
+      allowedFields.push('status'); // legitimate paused → active resume
+    }
+
+    const filteredUpdates = {};
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) {
+        let val = req.body[field];
+        // Normalize empty strings to null for date and numeric fields to prevent database syntax errors
+        if (val === '') {
+          if (['rsvp_deadline', 'event_end_date', 'location_lat', 'location_lng'].includes(field)) {
+            val = null;
+          }
+        }
+        filteredUpdates[field] = val;
+      }
+    }
+
+    // SEC-9: never persist a plaintext access password. Hash a supplied value; an
+    // empty value clears protection. Defense-in-depth: getEvent/getEvents now mask
+    // the hash from the client entirely (see withResolvedTier), but if a stored
+    // hash ever reaches this endpoint verbatim regardless, re-hashing it would
+    // silently replace the real password with an unusable hash-of-a-hash — reject
+    // instead of corrupting it.
+    if (filteredUpdates.access_password !== undefined) {
+      if (filteredUpdates.access_password && isHashedEventPassword(filteredUpdates.access_password)) {
+        return res.status(400).json({
+          success: false,
+          error: 'VALIDATION_ERROR',
+          message: 'Invalid access password value.',
+        });
+      }
+      filteredUpdates.access_password = filteredUpdates.access_password
+        ? await hashEventPassword(filteredUpdates.access_password)
+        : null;
+    }
+
+    // Handle URL Slug format validation if the slug is being updated
+    if (filteredUpdates.slug) {
+      const slugRegex = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+      if (!slugRegex.test(filteredUpdates.slug)) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_SLUG',
+          message: 'Slug must contain only lowercase alphanumeric characters and single dashes.'
+        });
+      }
+    }
+
+    const themeError = validateCustomTheme(filteredUpdates.custom_colors, filteredUpdates.custom_fonts);
+    if (themeError) {
+      return res.status(400).json({ success: false, error: 'VALIDATION_ERROR', message: themeError });
+    }
+
+    // Wall clock → instant, BEFORE the ordering checks below.
+    //
+    // The settings form posts naive strings ("2027-05-15T18:30") exactly as the
+    // create wizard does, while the stored values they are about to be compared
+    // against are real instants. Converting afterwards would leave the
+    // comparison mixing the two conventions — `new Date()` reads a naive string
+    // in the SERVER's zone, so an organizer eight hours away could be told their
+    // deadline was after their event when it was not, or worse, not told when it
+    // was. Both sides have to be instants before any of them are compared.
+    const touchesDates = filteredUpdates.event_date !== undefined
+      || filteredUpdates.event_end_date !== undefined
+      || filteredUpdates.rsvp_deadline !== undefined;
+
+    let eventTimezone = null;
+    // Kept as a local rather than stashed on `filteredUpdates` — that object is
+    // the update payload itself, and any extra key on it is a column PostgREST
+    // does not know, which fails the whole write.
+    let currentEventDate = null;
     /**
-     * THE EVENT'S OWN ZONE — correctable, deliberately, despite being a snapshot.
-     *
-     * It was left out of this list on purpose: `events.timezone` is frozen at
-     * creation so that correcting an ACCOUNT's zone never silently moves events
-     * whose invitations already went out. That reasoning is still right, and
-     * nothing below reads the organization's zone.
-     *
-     * What it missed is that a zone can be frozen WRONG. An event created while
-     * the organization had no zone froze the platform default instead, and from
-     * that moment the stored instant was hours away from the hour the organizer
-     * typed — so the day-before reminder, the seating reveal and every "is this
-     * event over?" check ran on the wrong clock. With no way to edit the column
-     * and no screen displaying it, that was permanent AND invisible: the
-     * organizer's only visible symptom was reminders arriving at strange times,
-     * and the one thing they would naturally try — fixing their account
-     * timezone — cannot help, because this column never reads it.
-     *
-     * Frozen from ACCIDENTAL change, not from deliberate repair. See the
-     * re-anchoring below for what changing it actually does.
+     * True when the stored instants moved ONLY because the zone was corrected,
+     * and the organizer did not retype any date. Read much further down to decide
+     * whether guests should be offered a "the event moved" notice — see there for
+     * why the honest answer is no.
      */
-    'timezone',
-  ];
+    let reanchoredOnly = false;
+    const changesZone = filteredUpdates.timezone !== undefined;
+    const DATE_FIELDS = ['event_date', 'event_end_date', 'rsvp_deadline'];
 
-  // Status transitions the organizer may request:
-  //   • → 'paused' / 'completed' : always allowed.
-  //   • → 'active'               : ONLY as a RESUME of an already-paid, currently-paused
-  //                                event. First activation still happens via the Stripe
-  //                                webhook, so an organizer can never self-activate an
-  //                                unpaid event — but they can lift a pause they applied.
-  if (req.body.status && ['paused', 'completed'].includes(req.body.status)) {
-    allowedFields.push('status');
-  } else if (req.body.status === 'active') {
-    let isResume = false;
-    try {
-      const { data: ev } = await supabase
+    if (touchesDates || changesZone) {
+      const { data: current } = await supabase
         .from('events')
-        .select('status, is_paid')
+        .select('event_date, event_end_date, rsvp_deadline, timezone')
         .eq('id', eventId)
         .single();
-      // Fail closed: only a paid event currently in 'paused' may return to 'active'.
-      isResume = !!(ev && ev.is_paid === true && ev.status === 'paused');
-    } catch {
-      isResume = false;
-    }
-    if (!isResume) {
-      return res.status(403).json({
-        success: false,
-        error: 'STATUS_FORBIDDEN',
-        message: 'Event status cannot be set to active manually. It is activated upon payment.'
-      });
-    }
-    allowedFields.push('status'); // legitimate paused → active resume
-  }
 
-  const filteredUpdates = {};
-  for (const field of allowedFields) {
-    if (req.body[field] !== undefined) {
-      let val = req.body[field];
-      // Normalize empty strings to null for date and numeric fields to prevent database syntax errors
-      if (val === '') {
-        if (['rsvp_deadline', 'event_end_date', 'location_lat', 'location_lng'].includes(field)) {
-          val = null;
+      // The event's own frozen zone — never the organization's current one. An
+      // admin correcting a misdetected account must not silently move the times
+      // on events whose invitations already went out.
+      const oldZone = safeZone(current?.timezone);
+
+      if (changesZone) {
+        // Rejected here rather than absorbed by safeZone(), which would quietly
+        // substitute the platform default: a typo'd zone that silently becomes
+        // San Diego is the exact failure this whole endpoint exists to repair.
+        if (!isValidTimeZone(filteredUpdates.timezone)) {
+          return res.status(400).json({
+            success: false,
+            error: 'INVALID_TIMEZONE',
+            message: 'That is not a recognised timezone name.',
+          });
         }
       }
-      filteredUpdates[field] = val;
-    }
-  }
+      eventTimezone = changesZone ? filteredUpdates.timezone : oldZone;
 
-  // SEC-9: never persist a plaintext access password. Hash a supplied value; an
-  // empty value clears protection. Defense-in-depth: getEvent/getEvents now mask
-  // the hash from the client entirely (see withResolvedTier), but if a stored
-  // hash ever reaches this endpoint verbatim regardless, re-hashing it would
-  // silently replace the real password with an unusable hash-of-a-hash — reject
-  // instead of corrupting it.
-  if (filteredUpdates.access_password !== undefined) {
-    if (filteredUpdates.access_password && isHashedEventPassword(filteredUpdates.access_password)) {
-      return res.status(400).json({
-        success: false,
-        error: 'VALIDATION_ERROR',
-        message: 'Invalid access password value.',
-      });
-    }
-    filteredUpdates.access_password = filteredUpdates.access_password
-      ? await hashEventPassword(filteredUpdates.access_password)
-      : null;
-  }
-
-  // Handle URL Slug format validation if the slug is being updated
-  if (filteredUpdates.slug) {
-    const slugRegex = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-    if (!slugRegex.test(filteredUpdates.slug)) {
-      return res.status(400).json({
-        success: false,
-        error: 'INVALID_SLUG',
-        message: 'Slug must contain only lowercase alphanumeric characters and single dashes.'
-      });
-    }
-  }
-
-  const themeError = validateCustomTheme(filteredUpdates.custom_colors, filteredUpdates.custom_fonts);
-  if (themeError) {
-    return res.status(400).json({ success: false, error: 'VALIDATION_ERROR', message: themeError });
-  }
-
-  // Wall clock → instant, BEFORE the ordering checks below.
-  //
-  // The settings form posts naive strings ("2027-05-15T18:30") exactly as the
-  // create wizard does, while the stored values they are about to be compared
-  // against are real instants. Converting afterwards would leave the
-  // comparison mixing the two conventions — `new Date()` reads a naive string
-  // in the SERVER's zone, so an organizer eight hours away could be told their
-  // deadline was after their event when it was not, or worse, not told when it
-  // was. Both sides have to be instants before any of them are compared.
-  const touchesDates = filteredUpdates.event_date !== undefined
-    || filteredUpdates.event_end_date !== undefined
-    || filteredUpdates.rsvp_deadline !== undefined;
-
-  let eventTimezone = null;
-  // Kept as a local rather than stashed on `filteredUpdates` — that object is
-  // the update payload itself, and any extra key on it is a column PostgREST
-  // does not know, which fails the whole write.
-  let currentEventDate = null;
-  /**
-   * True when the stored instants moved ONLY because the zone was corrected,
-   * and the organizer did not retype any date. Read much further down to decide
-   * whether guests should be offered a "the event moved" notice — see there for
-   * why the honest answer is no.
-   */
-  let reanchoredOnly = false;
-  const changesZone = filteredUpdates.timezone !== undefined;
-  const DATE_FIELDS = ['event_date', 'event_end_date', 'rsvp_deadline'];
-
-  if (touchesDates || changesZone) {
-    const { data: current } = await supabase
-      .from('events')
-      .select('event_date, event_end_date, rsvp_deadline, timezone')
-      .eq('id', eventId)
-      .single();
-
-    // The event's own frozen zone — never the organization's current one. An
-    // admin correcting a misdetected account must not silently move the times
-    // on events whose invitations already went out.
-    const oldZone = safeZone(current?.timezone);
-
-    if (changesZone) {
-      // Rejected here rather than absorbed by safeZone(), which would quietly
-      // substitute the platform default: a typo'd zone that silently becomes
-      // San Diego is the exact failure this whole endpoint exists to repair.
-      if (!isValidTimeZone(filteredUpdates.timezone)) {
-        return res.status(400).json({
-          success: false,
-          error: 'INVALID_TIMEZONE',
-          message: 'That is not a recognised timezone name.',
-        });
-      }
-    }
-    eventTimezone = changesZone ? filteredUpdates.timezone : oldZone;
-
-    // Captured BEFORE re-anchoring writes into the payload, because afterwards
-    // the two cases are indistinguishable — and they must be converted from
-    // different sources.
-    const retypedByOrganizer = new Set(DATE_FIELDS.filter((f) => filteredUpdates[f] !== undefined));
-    // The raw wall clocks exactly as submitted, kept because the conversion
-    // below overwrites them in place and the pure-re-anchor test needs the
-    // original digits.
-    const submitted = {};
-    for (const f of retypedByOrganizer) submitted[f] = filteredUpdates[f];
-
-    /**
-     * RE-ANCHORING — what correcting a zone actually means.
-     *
-     * The organizer typed "18:30" meaning the clock on the venue wall. If the
-     * event was filed under the wrong zone, that 18:30 is the half that was
-     * right and the stored instant is the half that was wrong. So the wall
-     * clock is recovered by reading the instant back in the OLD zone — which
-     * returns exactly the digits that were typed, because that is how the
-     * instant was built — and re-converted through the corrected zone.
-     *
-     * The alternative, keeping the instant and letting the displayed hour move,
-     * would preserve the bug and relabel it.
-     *
-     * Only fields the organizer did NOT retype: anything they typed in this
-     * same request is a fresh wall clock and belongs to the new zone already.
-     */
-    if (changesZone && eventTimezone !== oldZone) {
-      for (const field of DATE_FIELDS) {
-        if (retypedByOrganizer.has(field)) continue;
-        const stored = current?.[field];
-        if (!stored) continue;
-        const wall = instantToWallClock(stored, oldZone);
-        if (!wall) continue;
-        filteredUpdates[field] = wallClockToInstant(wall, eventTimezone);
-      }
+      // Captured BEFORE re-anchoring writes into the payload, because afterwards
+      // the two cases are indistinguishable — and they must be converted from
+      // different sources.
+      const retypedByOrganizer = new Set(DATE_FIELDS.filter((f) => filteredUpdates[f] !== undefined));
+      // The raw wall clocks exactly as submitted, kept because the conversion
+      // below overwrites them in place and the pure-re-anchor test needs the
+      // original digits.
+      const submitted = {};
+      for (const f of retypedByOrganizer) submitted[f] = filteredUpdates[f];
 
       /**
-       * IS THIS PURELY A ZONE CORRECTION?
+       * RE-ANCHORING — what correcting a zone actually means.
        *
-       * The obvious test — "the organizer sent no dates" — is wrong here, and
-       * wrong in the only way that matters: it is never true from the actual
-       * settings screen. EventSettings submits `{ ...form }`, so `event_date`
-       * rides along on every save whether it was touched or not. The guard
-       * would have been permanently dead, and a correction of nothing but the
-       * timezone would still have offered to tell every guest their event
-       * moved.
+       * The organizer typed "18:30" meaning the clock on the venue wall. If the
+       * event was filed under the wrong zone, that 18:30 is the half that was
+       * right and the stored instant is the half that was wrong. So the wall
+       * clock is recovered by reading the instant back in the OLD zone — which
+       * returns exactly the digits that were typed, because that is how the
+       * instant was built — and re-converted through the corrected zone.
        *
-       * So ask the question about the VALUE instead of about the payload: read
-       * each submitted wall clock back in the OLD zone and compare it to what
-       * the row already held. If they name the same instant, those digits are
-       * unchanged and every bit of movement came from the zone.
+       * The alternative, keeping the instant and letting the displayed hour move,
+       * would preserve the bug and relabel it.
        *
-       * Compared as instants, not as strings: Postgres returns
-       * "…T01:30:00+00:00" while wallClockToInstant produces "…T01:30:00.000Z".
-       * The same moment, and never equal with ===.
+       * Only fields the organizer did NOT retype: anything they typed in this
+       * same request is a fresh wall clock and belongs to the new zone already.
        */
-      const sameInstant = (a, b) => {
-        if (!a && !b) return true;
-        if (!a || !b) return false;
-        const ta = new Date(a).getTime();
-        const tb = new Date(b).getTime();
-        return Number.isFinite(ta) && ta === tb;
-      };
-      reanchoredOnly = DATE_FIELDS.every((field) => (
-        retypedByOrganizer.has(field)
-          ? sameInstant(wallClockToInstant(submitted[field], oldZone), current?.[field])
-          : true // not submitted at all — this loop re-anchored it a moment ago
-      ));
-    }
+      if (changesZone && eventTimezone !== oldZone) {
+        for (const field of DATE_FIELDS) {
+          if (retypedByOrganizer.has(field)) continue;
+          const stored = current?.[field];
+          if (!stored) continue;
+          const wall = instantToWallClock(stored, oldZone);
+          if (!wall) continue;
+          filteredUpdates[field] = wallClockToInstant(wall, eventTimezone);
+        }
 
-    for (const field of retypedByOrganizer) {
-      filteredUpdates[field] = wallClockToInstant(filteredUpdates[field], eventTimezone);
-    }
-
-    currentEventDate = current?.event_date;
-  }
-
-  // Date ordering: end date must be after the start date, and the RSVP
-  // deadline must not be after the event itself. Previously unchecked
-  // anywhere (client or server) — an event could be saved ending before it
-  // started, or with a deadline weeks after the event happened.
-  if (filteredUpdates.event_end_date !== undefined || filteredUpdates.rsvp_deadline !== undefined) {
-    let effectiveEventDate = filteredUpdates.event_date;
-    if (effectiveEventDate === undefined) {
-      effectiveEventDate = currentEventDate;
-    }
-    if (effectiveEventDate) {
-      if (filteredUpdates.event_end_date && new Date(filteredUpdates.event_end_date) < new Date(effectiveEventDate)) {
-        return res.status(400).json({
-          success: false,
-          error: 'VALIDATION_ERROR',
-          message: 'The event end date must be after the start date.'
-        });
+        /**
+         * IS THIS PURELY A ZONE CORRECTION?
+         *
+         * The obvious test — "the organizer sent no dates" — is wrong here, and
+         * wrong in the only way that matters: it is never true from the actual
+         * settings screen. EventSettings submits `{ ...form }`, so `event_date`
+         * rides along on every save whether it was touched or not. The guard
+         * would have been permanently dead, and a correction of nothing but the
+         * timezone would still have offered to tell every guest their event
+         * moved.
+         *
+         * So ask the question about the VALUE instead of about the payload: read
+         * each submitted wall clock back in the OLD zone and compare it to what
+         * the row already held. If they name the same instant, those digits are
+         * unchanged and every bit of movement came from the zone.
+         *
+         * Compared as instants, not as strings: Postgres returns
+         * "…T01:30:00+00:00" while wallClockToInstant produces "…T01:30:00.000Z".
+         * The same moment, and never equal with ===.
+         */
+        const sameInstant = (a, b) => {
+          if (!a && !b) return true;
+          if (!a || !b) return false;
+          const ta = new Date(a).getTime();
+          const tb = new Date(b).getTime();
+          return Number.isFinite(ta) && ta === tb;
+        };
+        reanchoredOnly = DATE_FIELDS.every((field) => (
+          retypedByOrganizer.has(field)
+            ? sameInstant(wallClockToInstant(submitted[field], oldZone), current?.[field])
+            : true // not submitted at all — this loop re-anchored it a moment ago
+        ));
       }
-      if (filteredUpdates.rsvp_deadline && new Date(filteredUpdates.rsvp_deadline) > new Date(effectiveEventDate)) {
-        return res.status(400).json({
-          success: false,
-          error: 'VALIDATION_ERROR',
-          message: 'The RSVP deadline must be on or before the event date.'
-        });
+
+      for (const field of retypedByOrganizer) {
+        filteredUpdates[field] = wallClockToInstant(filteredUpdates[field], eventTimezone);
+      }
+
+      currentEventDate = current?.event_date;
+    }
+
+    // Date ordering: end date must be after the start date, and the RSVP
+    // deadline must not be after the event itself. Previously unchecked
+    // anywhere (client or server) — an event could be saved ending before it
+    // started, or with a deadline weeks after the event happened.
+    if (filteredUpdates.event_end_date !== undefined || filteredUpdates.rsvp_deadline !== undefined) {
+      let effectiveEventDate = filteredUpdates.event_date;
+      if (effectiveEventDate === undefined) {
+        effectiveEventDate = currentEventDate;
+      }
+      if (effectiveEventDate) {
+        if (filteredUpdates.event_end_date && new Date(filteredUpdates.event_end_date) < new Date(effectiveEventDate)) {
+          return res.status(400).json({
+            success: false,
+            error: 'VALIDATION_ERROR',
+            message: 'The event end date must be after the start date.'
+          });
+        }
+        if (filteredUpdates.rsvp_deadline && new Date(filteredUpdates.rsvp_deadline) > new Date(effectiveEventDate)) {
+          return res.status(400).json({
+            success: false,
+            error: 'VALIDATION_ERROR',
+            message: 'The RSVP deadline must be on or before the event date.'
+          });
+        }
       }
     }
-  }
 
-  try {
     // Slug uniqueness check if slug is being updated
     if (filteredUpdates.slug) {
       const { data: existingEvent } = await supabase

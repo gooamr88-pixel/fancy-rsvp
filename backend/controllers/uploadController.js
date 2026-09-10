@@ -95,6 +95,62 @@ const KINDS = {
 const MAX_INPUT_BYTES = 12 * 1024 * 1024;
 
 /**
+ * Audio gets its own, tighter ceiling — for the same reason GIFs do.
+ *
+ * Both escape the compression step this endpoint exists to apply, so their
+ * STORED size is their uploaded size. Background music is then served to every
+ * guest who opens the invitation, which is precisely the egress that got this
+ * project's services restricted. 6 MB is a comfortable four-minute MP3 at
+ * 192 kbps and a hard stop on somebody uploading a WAV.
+ */
+const MAX_AUDIO_BYTES = 6 * 1024 * 1024;
+
+/**
+ * ── AUDIO IS NOT TRANSCODED, SO IT MUST AT LEAST BE IDENTIFIED ──
+ *
+ * Every image kind is validated by being decoded and re-encoded through sharp:
+ * bytes that are not the image they claim to be throw, and are answered with
+ * NOT_AN_IMAGE. Audio has no such step — it is stored exactly as uploaded (see
+ * the `music` kind) — so the ONLY thing asserting what the file was is the
+ * caller's own `Content-Type` header. Anybody with an organizer session could
+ * therefore put an arbitrary 12 MB file into a public bucket by labelling it
+ * `audio/mpeg`.
+ *
+ * A container sniff closes that without adding an ffmpeg dependency. It is not
+ * a full decode and does not claim to be: it establishes that the bytes begin
+ * the way that format begins, which is the difference between "an audio file"
+ * and "anything at all".
+ *
+ * Each entry is a magic-number test against the head of the buffer.
+ */
+const AUDIO_SIGNATURES = {
+  mp3: (b) =>
+    // ID3v2 tag, or a raw MPEG frame sync (11 set bits).
+    (b.length > 3 && b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33)
+    || (b.length > 1 && b[0] === 0xff && (b[1] & 0xe0) === 0xe0),
+  ogg: (b) => b.length > 4 && b.toString('ascii', 0, 4) === 'OggS',
+  wav: (b) => b.length > 12 && b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WAVE',
+  // ISO base media (m4a/aac-in-mp4): a `ftyp` box at offset 4.
+  m4a: (b) => b.length > 12 && b.toString('ascii', 4, 8) === 'ftyp',
+  // Bare ADTS AAC.
+  aac: (b) => (b.length > 1 && b[0] === 0xff && (b[1] & 0xf6) === 0xf0)
+    || (b.length > 12 && b.toString('ascii', 4, 8) === 'ftyp'),
+  // WebM/Matroska EBML header.
+  weba: (b) => b.length > 4 && b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3,
+};
+
+/** True when `buf` plausibly begins the container `ext` names. */
+function looksLikeAudio(buf, ext) {
+  const check = AUDIO_SIGNATURES[ext];
+  if (!check) return false;
+  try {
+    return check(buf);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * GIFs are stored as-is — sharp would flatten an animation to one frame — so
  * they are the only input whose STORED size equals its uploaded size. They get
  * their own ceiling because 12 MB of that is served to every guest, uncompressed
@@ -174,9 +230,32 @@ const uploadAsset = async (req, res, next) => {
 
     if (wantsAudio) {
       // Stored as uploaded. See the note on the `music` kind above.
+      outExt = AUDIO_EXT[contentType] || 'bin';
+
+      // Its own ceiling, because audio escapes compression and is then served
+      // to every guest — see MAX_AUDIO_BYTES.
+      if (input.length > MAX_AUDIO_BYTES) {
+        return sendFail(res, {
+          status: 413,
+          error: 'AUDIO_TOO_LARGE',
+          message: `Audio files are limited to ${MAX_AUDIO_BYTES / 1048576} MB (this one is `
+            + `${(input.length / 1048576).toFixed(1)} MB). Export it as an MP3 at a lower bitrate.`,
+        });
+      }
+
+      // The bytes have to begin the way the declared format begins. Without
+      // this the Content-Type header was the only claim being made about the
+      // file, and this endpoint writes to a public bucket.
+      if (!looksLikeAudio(input, outExt)) {
+        return sendFail(res, {
+          status: 400,
+          error: 'NOT_AUDIO',
+          message: 'That file could not be read as audio. Upload an MP3, OGG, WAV, M4A or AAC file.',
+        });
+      }
+
       output = input;
       outType = contentType;
-      outExt = AUDIO_EXT[contentType] || 'bin';
     } else if (contentType === 'image/gif' && input.length > MAX_GIF_BYTES) {
       /**
        * A GIF is passed through unprocessed (see below), which means it is the
@@ -283,4 +362,9 @@ const uploadAsset = async (req, res, next) => {
   }
 };
 
-module.exports = { uploadAsset, KINDS, MAX_INPUT_BYTES, ACCEPTED, ACCEPTED_IMAGE, ACCEPTED_AUDIO };
+module.exports = {
+  uploadAsset, KINDS, MAX_INPUT_BYTES, MAX_AUDIO_BYTES, MAX_GIF_BYTES,
+  ACCEPTED, ACCEPTED_IMAGE, ACCEPTED_AUDIO,
+  // Exported so the container sniff can be tested without standing up a request.
+  looksLikeAudio,
+};

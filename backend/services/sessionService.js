@@ -129,21 +129,47 @@ function newJti() {
  * @param {import('express').Request} req
  * @param {{ userId: string, jti: string, deviceLabel?: string }} info
  */
+/**
+ * ── THIS WRITE IS NOT BEST-EFFORT ANY MORE, AND IT CANNOT BE ──────────────
+ *
+ * It used to swallow its own failure, on the stated principle that "an auth
+ * flow must never fail because session bookkeeping hiccuped". That was true
+ * when `isSessionValid` tolerated a token whose `jti` had no row.
+ *
+ * It stopped being true when SEC-6 made that check FAIL CLOSED: a token
+ * asserting a `jti` with no matching session is now denied outright. The two
+ * halves were left written under opposite assumptions, and the result was the
+ * worst of both — a failed insert returned 200, set the cookie, and handed the
+ * user a token that answered SESSION_REVOKED on their very next request. From
+ * their side: a successful login that immediately logs them out, repeatably,
+ * with nothing to explain it.
+ *
+ * So a failure now throws, the login returns an honest error, and the user can
+ * try again. Whichever way the session table behaves, the token and the row
+ * agree about whether the session exists.
+ *
+ * @throws when the session row cannot be written
+ */
 async function recordSession(req, { userId, jti, deviceLabel }) {
-  try {
-    const { ip, userAgent, browser, os } = captureRequestMeta(req);
-    await supabase.from('sessions').insert({
-      user_id: userId,
-      jti,
-      ip,
-      user_agent: userAgent,
-      device_label: deviceLabel || `${browser} on ${os}`,
-      expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
-    });
-  } catch (err) {
-    logger.warn({ err, userId }, 'sessionService: failed to record session');
+  const { ip, userAgent, browser, os } = captureRequestMeta(req);
+  const { error } = await supabase.from('sessions').insert({
+    user_id: userId,
+    jti,
+    ip,
+    user_agent: userAgent,
+    device_label: deviceLabel || `${browser} on ${os}`,
+    expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
+  });
+
+  if (error) {
+    logger.error({ err: error, userId },
+      'sessionService: could not record the session — refusing the login rather than issuing a token that cannot authenticate');
+    throw new Error('SESSION_NOT_RECORDED');
   }
+
   // Fire-and-forget new-device security alert (never blocks the auth flow).
+  // THIS one is genuinely best-effort: it is a courtesy email, and nothing
+  // downstream reads its outcome.
   maybeAlertNewDevice(req, userId).catch(() => {});
 }
 

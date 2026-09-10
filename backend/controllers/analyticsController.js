@@ -28,6 +28,58 @@ function hashIP(ip) {
   return crypto.createHash('sha256').update(ip + IP_HASH_SALT).digest('hex').substring(0, 16);
 }
 
+/**
+ * What a beacon's `metadata` may contain.
+ *
+ * The aggregates below read exactly three things out of this column — `via`,
+ * `msToTap` and `reason`, all on the reveal funnel — so everything else is
+ * stored and never looked at. That is fine as headroom for a field somebody
+ * adds next month; it is not fine as an unbounded write on an anonymous
+ * endpoint, which is what it was.
+ *
+ * Bounded on all three axes that can grow: how many keys, how long a key is,
+ * and how big a value is. Objects and arrays are rejected outright rather than
+ * walked — nothing sends them today, and accepting nested structure is how a
+ * size limit becomes something you have to compute recursively.
+ *
+ * Silently truncating rather than 400-ing is deliberate. This is a
+ * fire-and-forget beacon whose reply nobody reads; refusing the request would
+ * lose the event entirely to protect a field that is mostly decorative. The
+ * caller gets its 202 either way.
+ */
+/**
+ * The ceiling on how many rows one analytics request will read per query.
+ *
+ * A busy 500-guest event produces a few thousand beacons across its whole life,
+ * so this is roughly two orders of magnitude of headroom for a real event and a
+ * hard stop for anything else. See the note on `inRange`.
+ */
+const ANALYTICS_ROW_CAP = 50000;
+
+const METADATA_MAX_KEYS = 20;
+const METADATA_MAX_KEY_LENGTH = 64;
+const METADATA_MAX_VALUE_LENGTH = 500;
+
+function boundedMetadata(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = {};
+  let kept = 0;
+  for (const [key, value] of Object.entries(raw)) {
+    if (kept >= METADATA_MAX_KEYS) break;
+    if (typeof key !== 'string' || key.length > METADATA_MAX_KEY_LENGTH) continue;
+
+    if (typeof value === 'number' || typeof value === 'boolean' || value === null) {
+      out[key] = value;
+    } else if (typeof value === 'string') {
+      out[key] = value.slice(0, METADATA_MAX_VALUE_LENGTH);
+    } else {
+      continue; // objects, arrays, functions — not accepted
+    }
+    kept += 1;
+  }
+  return out;
+}
+
 /* The envelope reveal funnel. Declared once and shared by the ingest
    whitelist and the organizer aggregate below, so a type can never be
    accepted at one end and invisible at the other. */
@@ -121,10 +173,17 @@ const trackGuestEvent = async (req, res) => {
         party_id: partyId || null,
         session_id: sessionId || null,
         event_type: eventType,
-        metadata: metadata || {},
+        // BOUNDED. This is an unauthenticated write, and these two were the only
+        // caller-supplied fields with no ceiling on them — note `user_agent`
+        // right beside them has been truncated at 500 all along. `metadata` in
+        // particular is free-form JSON, so an uncapped value was an uncapped
+        // ROW, written by anybody, on the endpoint least likely to be watched.
+        // Storage and egress are the resource class that has already had this
+        // project's services restricted once.
+        metadata: boundedMetadata(metadata),
         user_agent: (req.headers['user-agent'] || '').substring(0, 500),
         ip_hash: hashIP(req.ip),
-        referrer: referrer || req.headers.referer || null,
+        referrer: String(referrer || req.headers.referer || '').slice(0, 500) || null,
       });
 
     if (insertError) {
@@ -208,11 +267,26 @@ const getEventAnalytics = async (req, res, next) => {
     const rangeApplied = !!(from || to);
     const fromInstant = from ? wallClockToInstant(`${from}T00:00:00`, zone) : null;
     const toInstant = to ? wallClockToInstant(`${to}T23:59:59`, zone) : null;
+    /**
+     * ── EVERY ANALYTICS READ IS BOUNDED ──
+     *
+     * These queries had no `.limit()` at all, so each one asked for the whole of
+     * `guest_analytics` for the event and pulled it into Node. That table is fed
+     * by a PUBLIC, unauthenticated beacon, which made this an amplification
+     * path: anonymous writes inflate the table, and then every load of the
+     * organizer's analytics tab drags all of it back out.
+     *
+     * `ANALYTICS_ROW_CAP` is a memory and egress bound, not a product decision —
+     * it sits far above any real event's traffic. `truncated` is reported in the
+     * response when it binds, because a silently capped aggregate is a chart
+     * that quietly stops being true, and this file already carries one comment
+     * about a range control that filtered nothing.
+     */
     const inRange = (query) => {
       let q = query;
       if (fromInstant) q = q.gte('created_at', fromInstant);
       if (toInstant) q = q.lte('created_at', toInstant);
-      return q;
+      return q.limit(ANALYTICS_ROW_CAP);
     };
 
     // Run all analytics queries in parallel
@@ -401,6 +475,19 @@ const getEventAnalytics = async (req, res, next) => {
       analytics: {
         // Lets the UI say which blocks the date range actually applies to.
         rangeApplied,
+        /**
+         * True when an event has produced more beacons than one request will
+         * read, so the aggregates below are computed from a prefix of the data
+         * rather than all of it.
+         *
+         * Reported rather than hidden. A capped aggregate is a chart that has
+         * quietly stopped being true, and the organizer looking at it has no
+         * other way to know — the same failure this file already carries a note
+         * about, where ?from/?to were validated in detail and then applied to
+         * nothing.
+         */
+        truncated: (analytics.length >= ANALYTICS_ROW_CAP)
+          || (timelineData.length >= ANALYTICS_ROW_CAP),
         overview: {
           totalPageViews,
           uniqueVisitors: uniqueSessions,
@@ -474,4 +561,12 @@ const getEventAnalytics = async (req, res, next) => {
 module.exports = {
   trackGuestEvent,
   getEventAnalytics,
+  // Exported so the bound on untrusted beacon input can be tested directly.
+  // This is the only function in the file that shapes a value written to the
+  // database from an unauthenticated request, which makes it the one worth
+  // being able to hammer without standing up a route.
+  boundedMetadata,
+  ANALYTICS_ROW_CAP,
+  METADATA_MAX_KEYS,
+  METADATA_MAX_VALUE_LENGTH,
 };
