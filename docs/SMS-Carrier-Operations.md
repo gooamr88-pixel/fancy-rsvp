@@ -263,11 +263,14 @@ no database change. The same drain caution applies in reverse.
 > is harmless. **None of this is carrier-specific** — the same database serves both.
 
 ```
-# Paste into the Supabase SQL editor and run:
-supabase/APPLY_SMS_SCHEMA.sql      # 9 steps, safe to re-run
+# The SMS schema now lives ONLY in the migration chain. Apply it the same way
+# as any other migration — the bundled APPLY_SMS_SCHEMA.sql was deleted on
+# 2026-09-10 because it was generated verbatim from those same files, and a
+# second copy of the same DDL is a second thing to keep in step.
+supabase/migrations/20260809000000_sms_compliance.sql   … onwards
 
 # Then paste this and confirm every row says "ok":
-supabase/check_sms_schema.sql      # 25 objects verified
+supabase/checks/check_sms_schema.sql      # 25 objects verified
 ```
 
 | Step | Migration | What it adds |
@@ -323,7 +326,8 @@ without a build is invisible, with no error anywhere to explain why.
 
 ```bash
 # 1 · database — Supabase SQL editor
-run APPLY_SMS_SCHEMA.sql, then check_sms_schema.sql
+apply the SMS migrations from supabase/migrations/, then paste
+supabase/checks/check_sms_schema.sql and confirm every row says "ok"
 
 # 2 · code
 git pull

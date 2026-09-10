@@ -60,6 +60,16 @@ android/.gradle/
 # Anchored, for the reason given above `/templates/`.
 /app-release.apk
 
+# Supabase CLI scratch. These were TRACKED until 2026-09-10 — they are rewritten
+# by every `supabase link` / `db` command, so each one produced a diff nobody
+# read, and `.temp/pooler-url` and `linked-project.json` carry connection details
+# that have no business in a repo.
+#
+# Leading slashes on purpose: an unanchored `.temp/` matches at every depth,
+# which is exactly the mistake the /templates/ note below documents.
+/supabase/.temp/
+/supabase/.branches/
+
 # Scratch space for backend/scripts/reencode-audio.js: downloaded originals and
 # their re-encoded copies. Tens of megabytes of customer audio that already
 # lives in the bucket — there is nothing here worth versioning.
