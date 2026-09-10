@@ -25,6 +25,19 @@ router.post('/import', requireFeature('import_guests_csv'), rsvpController.impor
 // Route to fetch aggregated RSVP statistics for the dashboard cards (free)
 router.get('/stats', rsvpController.getRsvpStats);
 
+/**
+ * The dashboard's 20-second poll target.
+ *
+ * Mounted BEFORE '/:partyId' for the same reason '/clear-preview' is: Express
+ * matches in order, and '/:partyId' would otherwise swallow '/version' and hand
+ * the string "version" to a UUID validator.
+ *
+ * Free and read-only — it is the cheap substitute for re-downloading the list,
+ * so gating it behind a paid feature would push callers straight back to the
+ * expensive path this exists to avoid.
+ */
+router.get('/version', rsvpController.getRsvpsVersion);
+
 // Route to export guests to downloadable CSV stream — paid feature
 router.get('/export', requireFeature('guest_export_csv'), rsvpController.exportGuestsCSV);
 

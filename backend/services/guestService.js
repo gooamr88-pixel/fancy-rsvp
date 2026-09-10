@@ -597,6 +597,63 @@ async function getPartySeatingMap(eventId, partyId) {
  * and wrong totals. The RPC returns the SAME nested shape the old PostgREST embed
  * did (see migration 20260713000000), so the frontend mapping is unchanged.
  */
+/**
+ * A cheap fingerprint of an event's guest list: how many parties, and when one
+ * last changed.
+ *
+ * ── WHY THIS EXISTS ──
+ *
+ * The organizer dashboard polls for new RSVPs every 20 seconds, and the way it
+ * did that was to re-download the ENTIRE guest list: `fetchAllRsvps` walks every
+ * page of `get_event_parties` — each page carrying every party with its guests,
+ * custom answers, seating assignments and invitations — plus /stats, /tables,
+ * /fields and /auth/profile alongside.
+ *
+ * For a 500-guest event that is five paged requests of heavy nested JSON, three
+ * times a minute, per open tab, forever. A dashboard left open for an eight-hour
+ * working day made roughly 1,440 of them, and answered "has anything changed?"
+ * — which is almost always "no" — by transferring the whole answer every time.
+ *
+ * pg_stat_statements bears it out: `get_event_parties` is the heaviest
+ * application statement on the database (277,464 ms across 14,476 calls), and
+ * this poll is where those calls come from. On 2026-09-10 this project was
+ * restricted by Supabase for exceeding its egress allowance.
+ *
+ * This returns two numbers. The client polls THIS, and only re-downloads the
+ * list when one of them moves.
+ *
+ * ── WHY count + max(updated_at) AND NOT JUST ONE ──
+ *
+ * `max(updated_at)` alone misses a DELETION: remove the most recently edited
+ * party and the maximum goes DOWN, but a client comparing for "newer" sees
+ * nothing. `count` alone misses an EDIT in place, and also misses the case where
+ * one party is deleted and another added between two polls.
+ *
+ * Together they catch every change the dashboard renders. The pair is compared
+ * for INEQUALITY, not ordering, so a timestamp going backwards still counts.
+ */
+async function partiesVersion(eventId) {
+  const { data, error } = await supabase
+    .from('rsvp_parties')
+    .select('updated_at')
+    .eq('event_id', eventId)
+    .order('updated_at', { ascending: false })
+    .limit(1);
+  if (error) throw error;
+
+  const { count, error: countErr } = await supabase
+    .from('rsvp_parties')
+    .select('id', { count: 'exact', head: true })
+    .eq('event_id', eventId);
+  if (countErr) throw countErr;
+
+  return {
+    count: count || 0,
+    // null on an empty list, which is a perfectly good fingerprint of "empty".
+    latest: data && data[0] ? data[0].updated_at : null,
+  };
+}
+
 async function listParties(eventId, {
   response, search, seated, sort, meal, customFieldId, customFieldValue, page = 1, limit = 50,
 } = {}) {
@@ -1860,6 +1917,7 @@ module.exports = {
   verifyGuestSeating,
   getPartySeatingMap,
   listParties,
+  partiesVersion,
   updateParty,
   deleteParty,
   getStats,

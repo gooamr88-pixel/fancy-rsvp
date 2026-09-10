@@ -778,6 +778,29 @@ const getRSVPs = async (req, res, next) => {
 };
 
 /**
+ * GET /api/v1/events/:eventId/rsvps/version
+ *
+ * Two numbers the dashboard can poll instead of re-downloading the guest list.
+ *
+ * The poll used to be `fetchAllRsvps` — every page of every party with its
+ * nested guests, answers, seating and invitations — every 20 seconds per open
+ * tab, in order to answer a question whose answer is nearly always "nothing
+ * changed". This answers that question in about eighty bytes.
+ *
+ * `Cache-Control: no-store` because the entire point is freshness; a cached
+ * fingerprint would report "no change" forever.
+ */
+const getRsvpsVersion = async (req, res, next) => {
+  try {
+    const version = await guestService.partiesVersion(req.params.eventId);
+    res.set('Cache-Control', 'no-store');
+    return sendOk(res, version);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
  * Imports guest records in bulk from a CSV/XLSX payload.
  * POST /api/v1/events/:eventId/rsvps/import
  */
@@ -2153,6 +2176,7 @@ const getRsvpStats = async (req, res, next) => {
 module.exports = {
   submitPublicRSVP,
   getRSVPs,
+  getRsvpsVersion,
   importGuestsCSV,
   getRsvpInvite,
   claimRsvpByEmail,
