@@ -2,6 +2,7 @@
 import React, { useMemo, useState } from 'react';
 import Link from 'next/link';
 import GoldDivider from '../components/GoldDivider';
+import { assetUrl, assetSrcSet } from '../utils/assetUrl';
 
 /* ═══════════════════════════════════════════════════════════
    Blog Listing — Fancy RSVP
@@ -49,7 +50,15 @@ function ArticleCard({ article, colors }) {
         }}>
           {article.cover_image_url ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={article.cover_image_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            <img
+              src={assetUrl(article.cover_image_url, 'card')}
+              srcSet={assetSrcSet(article.cover_image_url, [400, 800])}
+              sizes="(max-width: 700px) 92vw, 360px"
+              alt=""
+              loading="lazy"
+              decoding="async"
+              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            />
           ) : (
             <PlaceholderArt />
           )}
@@ -180,7 +189,14 @@ export default function BlogListClient({ posts = [] }) {
                     <div className="featured-media" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '48px', position: 'relative', minHeight: '220px' }}>
                       {featured.cover_image_url ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={featured.cover_image_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', position: 'absolute', inset: 0, opacity: 0.5 }} />
+                        <img
+                          src={assetUrl(featured.cover_image_url, 'hero')}
+                          srcSet={assetSrcSet(featured.cover_image_url)}
+                          sizes="(max-width: 900px) 100vw, 900px"
+                          alt=""
+                          decoding="async"
+                          style={{ width: '100%', height: '100%', objectFit: 'cover', position: 'absolute', inset: 0, opacity: 0.5 }}
+                        />
                       ) : (
                         <svg width="220" height="220" viewBox="0 0 220 220" fill="none">
                           <circle cx="110" cy="110" r="100" stroke="rgba(184,148,79,0.15)" strokeWidth="1" />

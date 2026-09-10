@@ -430,6 +430,19 @@ app.use('/api/v1/checkin', checkinSyncRoutes);
 app.use('/api/v1/dashboard', requireAuth, dashboardRoutes);
 app.use('/api/v1/referrals', requireAuth, referralRoutes);
 /**
+ * Image upload, replacing the browser's direct-to-Storage path.
+ *
+ * The browser used to upload with the anon key, which meant (a) anyone holding
+ * that key — i.e. anyone who opened the site — could write to the bucket, and
+ * (b) nothing was ever resized, which is how 0.4 GB of stored assets turned
+ * into 8.7 GB of egress in six days. See controllers/uploadController.js.
+ *
+ * Mounted AFTER the global express.json above, and that ordering is fine: the
+ * router's own express.raw only claims image Content-Types, which json never
+ * matches, so the two parsers cannot fight over a body.
+ */
+app.use('/api/v1/uploads', requireAuth, require('./routes/uploadRoutes'));
+/**
  * The two links in the post-event data-deletion warning email. Token-authorized
  * rather than session-authorized, so they MUST be mounted before the line below
  * — which wraps the whole organizer router in `requireAuth`. See

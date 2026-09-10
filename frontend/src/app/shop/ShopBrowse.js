@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link';
 import { S, ST, SHADOW, artFor, markFor, ALL_MARK, ART_VIEWBOX } from './shopTheme';
 import { formatPrice, unitFor, SHOP_MIN_ORDER_QTY } from '../utils/shopLinks';
+import { assetUrl, assetSrcSet } from '../utils/assetUrl';
 
 /* ═══════════════════════════════════════════════════════════════════════════
    THE SHOP — browse.
@@ -102,7 +103,7 @@ function CategoryPlate({ category, index, count, cover }) {
               plate right beside the picture, so an alt that repeats it is read
               twice. An admin who writes one is describing the PHOTOGRAPH. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img className="plate__img" src={cover.url} alt={cover.alt || ''} loading="lazy" />
+          <img className="plate__img" src={assetUrl(cover.url, 'card')} srcSet={assetSrcSet(cover.url, [400, 800])} sizes="(max-width: 700px) 46vw, 320px" alt={cover.alt || ''} loading="lazy" decoding="async" />
           <span className="plate__scrim" aria-hidden="true" />
         </>
       )}
@@ -143,7 +144,7 @@ function ProductCard({ product, categorySlug, href }) {
             the way out, and the API shape is what this component receives. */}
         {img
           /* eslint-disable-next-line @next/next/no-img-element */
-          ? <img className="sp-img" src={img.url} alt={img.alt || product.title} loading="lazy" />
+          ? <img className="sp-img" src={assetUrl(img.url, 'card')} srcSet={assetSrcSet(img.url, [400, 800])} sizes="(max-width: 700px) 46vw, 320px" alt={img.alt || product.title} loading="lazy" decoding="async" />
           : <PlaceholderArt slug={categorySlug} />}
       </Link>
 
@@ -373,7 +374,7 @@ export default function ShopBrowse({ products, categories, badges, settings, cat
                     <span className={`sf-cat__art${art ? ' sf-cat__art--photo' : ''}`} aria-hidden="true">
                       {art
                         /* eslint-disable-next-line @next/next/no-img-element */
-                        ? <img src={art.url} alt="" loading="lazy" />
+                        ? <img src={assetUrl(art.url, 'thumb')} alt="" loading="lazy" decoding="async" />
                         : (
                           <svg viewBox={ART_VIEWBOX} fill="none" stroke={S.gold} strokeWidth="1.7"
                             strokeLinecap="round" strokeLinejoin="round"
@@ -531,7 +532,7 @@ export default function ShopBrowse({ products, categories, badges, settings, cat
                     <span className={`shelf__mark${art ? ' shelf__mark--photo' : ' shelf__mark--art'}`} aria-hidden="true">
                       {art
                         /* eslint-disable-next-line @next/next/no-img-element */
-                        ? <img src={art.url} alt="" loading="lazy" />
+                        ? <img src={assetUrl(art.url, 'thumb')} alt="" loading="lazy" decoding="async" />
                         : (
                           <svg viewBox={ART_VIEWBOX} fill="none" stroke={on ? S.goldInk : S.gold}
                             strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"

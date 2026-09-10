@@ -7,7 +7,7 @@ import {
 import React, { useCallback, useEffect, useState } from 'react';
 import PlacesAutocomplete from '../../components/PlacesAutocomplete';
 import FontPicker from './FontPicker';
-import { supabase } from '../../utils/supabaseClient';
+import { uploadAsset } from '../../utils/uploadAsset';
 import { extractYouTubeId, checkYouTubeEmbeddable } from '../../utils/youtube';
 import RepeatableListEditor from './RepeatableListEditor';
 import ConfirmGuestNotifyModal from './ConfirmGuestNotifyModal';
@@ -393,143 +393,74 @@ export default function EventSettings({ eventId, event, onEventUpdated, onEventD
   const [revealPreviewOpen, setRevealPreviewOpen] = useState(false);
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
 
+  /*
+    ── ALL FOUR UPLOADERS BELOW NOW GO THROUGH THE APP'S OWN API ──
+
+    They used to call supabase.storage directly with the anon key, and on any
+    failure fall back to embedding the file as a base64 `data:` URI in the
+    event row. Both halves are gone, and the fallback is the one worth
+    explaining, because deleting error handling usually makes things worse.
+
+    A base64 asset in a database column is re-sent through the API on every
+    single page load, inflated ~33% by the encoding, and cacheable by nothing.
+    A 3.5 MB song embedded that way costs more egress in a day than the same
+    song uploaded properly costs in a year — and because it LOOKED like it
+    worked, nobody would ever go looking. On 2026-09-10 this project's services
+    were restricted by Supabase for exceeding its egress allowance.
+
+    Verified before removing it: zero rows in `events` or `organizations`
+    currently hold a `data:` URI, so nothing in production depends on it.
+
+    What replaces it is a visible error. See utils/uploadAsset.js.
+  */
+
   const handleMusicUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    if (file.size > 8 * 1024 * 1024) {
-      toast.error("File size exceeds 8MB. Please use a smaller file.");
-      return;
-    }
+    e.target.value = '';
 
     setMusicUploading(true);
     try {
-      if (!supabase) {
-        throw new Error("Supabase client is not initialized.");
-      }
-
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${eventId}-${Date.now()}.${fileExt}`;
-      const filePath = `music/${fileName}`;
-
-      const { data, error: uploadErr } = await supabase.storage
-        .from('event-assets')
-        .upload(filePath, file, {
-          cacheControl: '3600',
-          upsert: true
-        });
-
-      if (uploadErr) {
-        throw uploadErr;
-      }
-
-      const { data: { publicUrl } } = supabase.storage
-        .from('event-assets')
-        .getPublicUrl(filePath);
-
-      setForm(prev => ({ ...prev, background_music_url: publicUrl }));
+      // Audio is stored as uploaded — the server does not transcode (that needs
+      // ffmpeg, and is a separate decision). It is routed here anyway so that
+      // NO upload path is left using the anon key, which is what finally makes
+      // the bucket's anon INSERT policy removable.
+      const { url } = await uploadAsset(file, 'music');
+      setForm(prev => ({ ...prev, background_music_url: url }));
       setSuccess(false);
     } catch (err) {
-      console.error("Storage upload failed, falling back to base64 encoding:", err);
-      // base64 inflates the payload by ~33%; the API server rejects bodies over 5MB.
-      // Keep the embedded data URL safely under that limit.
-      if (file.size > 3.5 * 1024 * 1024) {
-        toast.error("Couldn't upload to storage, and this file is too large to embed directly (max ~3.5MB). Please use a smaller file.");
-        setMusicUploading(false);
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        setForm(prev => ({ ...prev, background_music_url: event.target.result }));
-        setSuccess(false);
-        setMusicUploading(false);
-      };
-      reader.onerror = () => {
-        toast.error("Failed to read the audio file. Please try again.");
-        setMusicUploading(false);
-      };
-      reader.readAsDataURL(file);
-      return;
+      toast.error(err?.message || 'The music upload did not complete.');
+    } finally {
+      setMusicUploading(false);
     }
-    setMusicUploading(false);
   };
 
   const handleCoverUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 8 * 1024 * 1024) {
-      toast.error('File size exceeds 8MB. Please use a smaller file.');
-      return;
-    }
+    e.target.value = '';
+
     setCoverUploading(true);
     try {
-      if (!supabase) throw new Error('Supabase client is not initialized.');
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${eventId}-${Date.now()}.${fileExt}`;
-      const filePath = `covers/${fileName}`;
-      const { error: uploadErr } = await supabase.storage
-        .from('event-assets')
-        .upload(filePath, file, { cacheControl: '3600', upsert: true });
-      if (uploadErr) throw uploadErr;
-      const { data: { publicUrl } } = supabase.storage
-        .from('event-assets')
-        .getPublicUrl(filePath);
-      setForm(prev => ({ ...prev, cover_image_url: publicUrl }));
+      const { url } = await uploadAsset(file, 'cover');
+      setForm(prev => ({ ...prev, cover_image_url: url }));
       setSuccess(false);
     } catch (err) {
-      console.error('Cover image upload failed, falling back to base64:', err);
-      if (file.size > 3.5 * 1024 * 1024) {
-        toast.error("Couldn't upload to storage, and this file is too large to embed directly (max ~3.5MB). Please use a smaller file.");
-        setCoverUploading(false);
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        setForm(prev => ({ ...prev, cover_image_url: event.target.result }));
-        setSuccess(false);
-        setCoverUploading(false);
-      };
-      reader.onerror = () => {
-        toast.error('Failed to read the image file. Please try again.');
-        setCoverUploading(false);
-      };
-      reader.readAsDataURL(file);
-      return;
+      toast.error(err?.message || 'The cover upload did not complete.');
+    } finally {
+      setCoverUploading(false);
     }
-    setCoverUploading(false);
   };
 
-  /* Shared upload path for the gallery/seal/background fields below — tries
-     Supabase storage first, falls back to an embedded base64 data URL (capped
-     at ~3.5MB) so a misconfigured bucket never silently loses the upload. */
-  const uploadFile = async (file, folder) => {
-    if (file.size > 8 * 1024 * 1024) {
-      toast.error('File size exceeds 8MB. Please use a smaller file.');
-      return null;
-    }
+  /* Shared upload path for the gallery/seal/background fields below. Returns
+     null on failure, having already told the person why. */
+  const uploadFile = async (file, kind) => {
     try {
-      if (!supabase) throw new Error('Supabase client is not initialized.');
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${eventId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${fileExt}`;
-      const filePath = `${folder}/${fileName}`;
-      const { error: uploadErr } = await supabase.storage
-        .from('event-assets')
-        .upload(filePath, file, { cacheControl: '3600', upsert: true });
-      if (uploadErr) throw uploadErr;
-      const { data: { publicUrl } } = supabase.storage.from('event-assets').getPublicUrl(filePath);
-      return publicUrl;
+      const { url } = await uploadAsset(file, kind);
+      return url;
     } catch (err) {
-      console.error(`${folder} upload failed, falling back to base64:`, err);
-      if (file.size > 3.5 * 1024 * 1024) {
-        toast.error("Couldn't upload to storage, and this file is too large to embed directly (max ~3.5MB). Please use a smaller file.");
-        return null;
-      }
-      return await new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = (ev) => resolve(ev.target.result);
-        reader.onerror = () => { toast.error('Failed to read the file. Please try again.'); resolve(null); };
-        reader.readAsDataURL(file);
-      });
+      toast.error(err?.message || 'The upload did not complete.');
+      return null;
     }
   };
 
@@ -2450,7 +2381,7 @@ export default function EventSettings({ eventId, event, onEventUpdated, onEventD
               <LetterPortraitFields
                 value={templateData}
                 onChange={(patch) => setTemplateData(prev => ({ ...prev, ...patch }))}
-                onUploadImage={(file) => uploadFile(file, 'portraits')}
+                onUploadImage={(file) => uploadFile(file, 'portrait')}
                 onError={(msg) => toast.error(msg)}
               />
             </div>
@@ -2497,7 +2428,7 @@ export default function EventSettings({ eventId, event, onEventUpdated, onEventD
               <DaysEditor
                 days={templateData.ha_days}
                 onChange={(nextDays) => { setTemplateData(prev => ({ ...prev, ha_days: nextDays })); setSuccess(false); }}
-                onUploadImage={(file) => uploadFile(file, 'venues')}
+                onUploadImage={(file) => uploadFile(file, 'venue')}
               />
             </div>
 
@@ -2506,7 +2437,7 @@ export default function EventSettings({ eventId, event, onEventUpdated, onEventD
               <RepeatableListEditor
                 items={templateData.ha_accommodation}
                 onChange={(items) => setTemplateData(prev => ({ ...prev, ha_accommodation: items }))}
-                onUploadImage={(file) => uploadFile(file, 'venues')}
+                onUploadImage={(file) => uploadFile(file, 'venue')}
                 itemNoun="Hotel"
                 addLabel="+ Add hotel"
                 emptyLabel="No hotels yet — falls back to a sample hotel on the guest page."

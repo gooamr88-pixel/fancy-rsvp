@@ -500,7 +500,7 @@ function ProductEditor({ open, onClose, form, setForm, categories, badges, editi
      another, and `setForm({ ...form, ... })` would close over a stale `form`
      and leave each photo overwriting the one before it. */
   const addImages = makeMultiImageUploadHandler({
-    pathPrefix: 'shop',
+    kind: 'shop',
     onImage: (url) => setForm((f) => ({ ...f, images: [...f.images, { url, alt: '' }] })),
     setUploading,
     showAlert,
@@ -922,7 +922,7 @@ function CategoryCoverField({ form, setForm, disabled }) {
   const [uploading, setUploading] = useState(false);
 
   const upload = makeImageUploadHandler({
-    pathPrefix: 'shop-categories',
+    kind: 'shop-category',
     setField: (url) => setForm((f) => ({ ...f, coverImageUrl: url })),
     setUploading,
     showAlert,

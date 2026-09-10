@@ -190,6 +190,25 @@ END $$;
 --
 -- So this NAMES them and stops. Read the NOTICE, confirm which of the pair you
 -- want gone, and drop it by hand:  DROP INDEX CONCURRENTLY public.<name>;
+-- ── A BUG THIS QUERY HAD, AND WHAT IT TAUGHT ──
+--
+-- The first version joined `pg_constraint` to label each index CONSTRAINT or
+-- plain:
+--
+--     LEFT JOIN pg_constraint con ON con.conindid = i.indexrelid
+--
+-- and reported `events_pkey` as duplicated TWENTY-NINE TIMES. It is not
+-- duplicated at all. For a FOREIGN KEY, `conindid` is the index on the
+-- REFERENCED table that enforces it — so every one of the 29 tables with an FK
+-- to `events` produced another row for the single `events_pkey`, and the
+-- aggregate counted them. `guests_pkey` came back four times, `tables_pkey`
+-- five, for exactly the same reason.
+--
+-- A report that cries wolf 20 times to name one real finding is worse than no
+-- report: the one real row (`events_slug_key` vs `idx_events_slug`) was buried.
+-- The constraint check is now a scalar subquery, which cannot multiply rows,
+-- and the HAVING counts DISTINCT index oids so a repeated join can never again
+-- be mistaken for a repeated index.
 DO $$
 DECLARE
   r          RECORD;
@@ -197,22 +216,23 @@ DECLARE
 BEGIN
   FOR r IN
     SELECT
-      c.relname                        AS table_name,
+      c.relname AS table_name,
       array_agg(i.indexrelid::regclass::text ORDER BY i.indexrelid) AS idx_names,
-      -- A constraint-backed index must be the survivor: dropping it would drop
-      -- the guarantee, not just the lookup.
+      -- Scalar, not a join. A constraint-backed index must be the survivor:
+      -- dropping it drops the guarantee, not just the lookup.
       array_agg(
-        CASE WHEN con.conindid IS NOT NULL THEN 'CONSTRAINT' ELSE 'plain' END
+        CASE WHEN EXISTS (
+          SELECT 1 FROM pg_constraint con WHERE con.conindid = i.indexrelid AND con.conrelid = i.indrelid
+        ) THEN 'CONSTRAINT' ELSE 'plain' END
         ORDER BY i.indexrelid
-      )                                AS kinds,
+      ) AS kinds,
       pg_get_indexdef(min(i.indexrelid)) AS definition
     FROM pg_index i
-    JOIN pg_class c   ON c.oid = i.indrelid
+    JOIN pg_class c     ON c.oid = i.indrelid
     JOIN pg_namespace n ON n.oid = c.relnamespace
-    LEFT JOIN pg_constraint con ON con.conindid = i.indexrelid
     WHERE n.nspname = 'public'
     GROUP BY c.relname, i.indrelid, i.indkey, i.indclass, i.indexprs, i.indpred, i.indisunique
-    HAVING count(*) > 1
+    HAVING count(DISTINCT i.indexrelid) > 1
   LOOP
     v_found := v_found + 1;
     RAISE NOTICE 'DUPLICATE INDEX on %: % (kinds: %) — def: %',

@@ -4,7 +4,7 @@ import { toast } from '../../utils/toast';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import dynamic from 'next/dynamic';
-import { supabase } from '../../utils/supabaseClient';
+import { uploadAsset } from '../../utils/uploadAsset';
 import { startSmsCreditPurchase } from '../../utils/smsPurchase';
 import { toTagArray } from '../components/TagListEditor';
 import { TEMPLATES, TEMPLATE_PREVIEW_PATTERN, RETIRED_TEMPLATE_SUCCESSOR } from '../../utils/curatedTemplates';
@@ -921,24 +921,17 @@ export default function CreateEventWizard() {
   const handleCoverImageUpload = useCallback(async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 8 * 1024 * 1024) {
-      toast.error('File exceeds 8MB. Please use a smaller file.');
-      return;
-    }
+    e.target.value = '';
+
     setCoverImageUploading(true);
     try {
-      if (!supabase) throw new Error('Storage client not configured.');
-      const ext = file.name.split('.').pop();
-      const filePath = `covers/wizard-${Date.now()}.${ext}`;
-      const { error: uploadErr } = await supabase.storage
-        .from('event-assets')
-        .upload(filePath, file, { cacheControl: '3600', upsert: true });
-      if (uploadErr) throw uploadErr;
-      const { data: { publicUrl } } = supabase.storage.from('event-assets').getPublicUrl(filePath);
-      setCoverImageUrl(publicUrl);
+      // Server-side: authenticated by session, resized and re-encoded, and
+      // named after a hash of its bytes so re-uploading the same photo cannot
+      // create a second object. See utils/uploadAsset.js.
+      const { url } = await uploadAsset(file, 'cover');
+      setCoverImageUrl(url);
     } catch (err) {
-      console.error('Cover image upload failed:', err);
-      toast.error('Cover image upload failed. Please try again.');
+      toast.error(err?.message || 'Cover image upload failed. Please try again.');
     } finally {
       setCoverImageUploading(false);
     }
@@ -953,79 +946,54 @@ export default function CreateEventWizard() {
      this. That put a couple's photograph in `venues/` from the wizard while
      the very same field written from Event Details landed in `covers/` — one
      field, two folders, and one of them named after something else entirely. */
-  const uploadRowImage = useCallback(async (file, folder = 'venues') => {
+  const uploadRowImage = useCallback(async (file, kind = 'venue') => {
     if (!file) return null;
-    if (file.size > 8 * 1024 * 1024) {
-      toast.error('File exceeds 8MB. Please use a smaller file.');
-      return null;
-    }
     try {
-      if (!supabase) throw new Error('Storage client not configured.');
-      const ext = file.name.split('.').pop();
-      const filePath = `${folder}/wizard-row-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
-      const { error: uploadErr } = await supabase.storage
-        .from('event-assets')
-        .upload(filePath, file, { cacheControl: '3600', upsert: true });
-      if (uploadErr) throw uploadErr;
-      const { data: { publicUrl } } = supabase.storage.from('event-assets').getPublicUrl(filePath);
-      return publicUrl;
+      const { url } = await uploadAsset(file, kind);
+      return url;
     } catch (err) {
-      console.error('Row image upload failed:', err);
-      toast.error('Image upload failed. Please try again.');
+      toast.error(err?.message || 'Image upload failed. Please try again.');
       return null;
     }
   }, []);
 
-  /* ═══ Background music upload (Supabase storage — no base64 fallback) ═══ */
+  /* ═══ Background music upload ═══
+     Routed through the API like everything else. The server does not transcode
+     audio (that needs ffmpeg), but it does hash-name the object — which is what
+     stops the same popular track being stored once per organizer, as it was:
+     19 music objects in the bucket hashed to 10 distinct files. */
   const handleMusicUpload = useCallback(async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 8 * 1024 * 1024) {
-      toast.error('File exceeds 8MB. Please use a smaller file.');
-      return;
-    }
+    e.target.value = '';
+
     setMusicUploading(true);
     try {
-      if (!supabase) throw new Error('Storage client not configured.');
-      const ext = file.name.split('.').pop();
-      const filePath = `music/wizard-${Date.now()}.${ext}`;
-      const { error: uploadErr } = await supabase.storage
-        .from('event-assets')
-        .upload(filePath, file, { cacheControl: '3600', upsert: true });
-      if (uploadErr) throw uploadErr;
-      const { data: { publicUrl } } = supabase.storage.from('event-assets').getPublicUrl(filePath);
-      setBackgroundMusicUrl(publicUrl);
+      const { url } = await uploadAsset(file, 'music');
+      setBackgroundMusicUrl(url);
     } catch (err) {
-      console.error('Music upload failed:', err);
-      toast.error('Music upload failed. Please try again.');
+      toast.error(err?.message || 'Music upload failed. Please try again.');
     } finally {
       setMusicUploading(false);
     }
   }, []);
 
-  /* ═══ Gallery image upload (Supabase storage — no base64 fallback) ═══ */
+  /* ═══ Gallery image upload ═══
+     Sequential on purpose: parallel uploads get throttled, the finish order
+     would decide the gallery's order, and each one now costs the server an
+     image encode. One failure does not lose the rest. */
   const handleGalleryUpload = useCallback(async (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
+    e.target.value = '';
+
     setGalleryUploading(true);
     for (const file of files) {
-      if (file.size > 8 * 1024 * 1024) {
-        toast.error(`"${file.name}" exceeds 8MB and was skipped.`);
-        continue;
-      }
       try {
-        if (!supabase) throw new Error('Storage client not configured.');
-        const ext = file.name.split('.').pop();
-        const filePath = `gallery/wizard-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
-        const { error: uploadErr } = await supabase.storage
-          .from('event-assets')
-          .upload(filePath, file, { cacheControl: '3600', upsert: true });
-        if (uploadErr) throw uploadErr;
-        const { data: { publicUrl } } = supabase.storage.from('event-assets').getPublicUrl(filePath);
-        setGalleryUrls(prev => [...prev, publicUrl]);
+        const { url } = await uploadAsset(file, 'gallery');
+        setGalleryUrls(prev => [...prev, url]);
       } catch (err) {
-        console.error('Gallery upload failed:', err);
-        toast.error(`"${file.name}" could not be uploaded. Please try again.`);
+        toast.error(err?.message || `"${file.name}" could not be uploaded.`);
       }
     }
     setGalleryUploading(false);

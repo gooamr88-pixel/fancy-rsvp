@@ -126,7 +126,7 @@ function Testimonials() {
   };
 
   const handlePhotoUpload = makeImageUploadHandler({
-    pathPrefix: 'testimonials',
+    kind: 'testimonial',
     setField: (url) => setForm((prev) => ({ ...prev, photoUrl: url })),
     setUploading: setPhotoUploading,
     showAlert,
@@ -357,7 +357,7 @@ function PressMentions() {
   };
 
   const handleLogoUpload = makeImageUploadHandler({
-    pathPrefix: 'press-logos',
+    kind: 'press-logo',
     setField: (url) => setForm((prev) => ({ ...prev, logoUrl: url })),
     setUploading: setLogoUploading,
     showAlert,
@@ -570,7 +570,7 @@ function BlogPosts() {
   };
 
   const handleCoverUpload = makeImageUploadHandler({
-    pathPrefix: 'blog-covers',
+    kind: 'blog-cover',
     setField: (url) => setForm((prev) => ({ ...prev, coverImageUrl: url })),
     setUploading: setCoverUploading,
     showAlert,

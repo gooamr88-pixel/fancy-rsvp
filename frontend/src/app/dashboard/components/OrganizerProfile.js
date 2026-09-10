@@ -3,7 +3,7 @@ import { toast } from '../../utils/toast';
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../../utils/apiClient';
-import { supabase } from '../../utils/supabaseClient';
+import { uploadAsset } from '../../utils/uploadAsset';
 import PhoneNumberInput from '../../components/PhoneNumberInput';
 import { ORGANIZER_TIMEZONES } from '../../utils/organizerTimezones';
 import { formatInZone, zoneAbbreviation } from '../../utils/timezone';
@@ -158,42 +158,20 @@ export default function OrganizerProfile({ events = [], forcePasswordReset = fal
   const handleLogoUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 8 * 1024 * 1024) {
-      toast.error('File size exceeds 8MB. Please use a smaller file.');
-      return;
-    }
+    e.target.value = '';
+
     setLogoUploading(true);
     try {
-      if (!supabase) throw new Error('Supabase client is not initialized.');
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${profile?.id || 'logo'}-${Date.now()}.${fileExt}`;
-      const filePath = `logos/${fileName}`;
-      const { error: uploadErr } = await supabase.storage
-        .from('event-assets')
-        .upload(filePath, file, { cacheControl: '3600', upsert: true });
-      if (uploadErr) throw uploadErr;
-      const { data: { publicUrl } } = supabase.storage
-        .from('event-assets')
-        .getPublicUrl(filePath);
-      setForm(prev => ({ ...prev, logo_url: publicUrl }));
+      // Through the app's API rather than straight into the bucket with the
+      // anon key: authenticated, resized server-side, and named by a hash of
+      // its bytes. The base64 fallback that used to live here is gone — it hid
+      // storage failures behind an image embedded in a database row, which is
+      // re-sent uncached on every page load. See utils/uploadAsset.js.
+      const { url } = await uploadAsset(file, 'logo');
+      setForm(prev => ({ ...prev, logo_url: url }));
       toast.success('Logo uploaded successfully.');
     } catch (err) {
-      console.error('Logo upload failed, falling back to base64:', err);
-      if (file.size > 3.5 * 1024 * 1024) {
-        toast.error("Couldn't upload to storage, and this file is too large to embed directly (max ~3.5MB). Please use a smaller file.");
-        setLogoUploading(false);
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        setForm(prev => ({ ...prev, logo_url: event.target.result }));
-        setLogoUploading(false);
-      };
-      reader.onerror = () => {
-        toast.error('Failed to read the logo file.');
-        setLogoUploading(false);
-      };
-      reader.readAsDataURL(file);
+      toast.error(err?.message || 'The logo upload did not complete.');
     } finally {
       setLogoUploading(false);
     }

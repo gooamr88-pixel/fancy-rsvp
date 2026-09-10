@@ -45,6 +45,7 @@ import { WEDDING_VARIANT_TEMPLATES } from '../utils/templateFamilies';
 import { buildInvitationCardData } from '../utils/invitationCardData';
 import Icon from '../components/icons/Icon';
 import { safeZone } from '../utils/timezone';
+import { assetUrl, assetSrcSet } from '../utils/assetUrl';
 
 /* ═══════════════════════════════════════════════════════════════
    Route-level code splitting
@@ -1607,9 +1608,22 @@ export default function EventPageClient({
                       position: 'relative'
                     }}
                   >
+                    {/*
+                      Served at display size, not at whatever came off the
+                      organizer's phone. `covers/` averages 1,610 kB and runs to
+                      6,708 kB, and this frame is a few hundred CSS pixels wide —
+                      so the original was costing roughly ten times the bytes it
+                      could possibly show. srcSet lets a phone take the 400 px
+                      copy, which is where most guest traffic is.
+                      See utils/assetUrl.js for the measurements behind this.
+                    */}
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={event.cover_image_url}
+                      src={assetUrl(event.cover_image_url, 'hero')}
+                      srcSet={assetSrcSet(event.cover_image_url)}
+                      sizes="(max-width: 600px) 92vw, 520px"
+                      loading="lazy"
+                      decoding="async"
                       style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                       alt="Event Cover"
                     />
@@ -2145,11 +2159,24 @@ export default function EventPageClient({
                                     background: '#F0ECE3', position: 'relative',
                                   }}
                                 >
+                                  {/*
+                                    The gallery is the biggest single win on this
+                                    page: 70 stored photos averaging 1,469 kB (one
+                                    is 7,994 kB), shown in a 200px-tall tile. Six
+                                    of them was ~9 MB of the ~15 MB a guest visit
+                                    used to cost. The lightbox below asks for the
+                                    'full' size, so detail is still there for
+                                    anyone who taps — they just no longer pay for
+                                    it while scrolling past.
+                                  */}
                                   {/* eslint-disable-next-line @next/next/no-img-element */}
                                   <img
-                                    src={url}
+                                    src={assetUrl(url, 'card')}
+                                    srcSet={assetSrcSet(url, [400, 800])}
+                                    sizes="(max-width: 600px) 45vw, 300px"
                                     alt={`Gallery photo ${i + 1}`}
                                     loading="lazy"
+                                    decoding="async"
                                     style={{ width: '100%', height: '100%', objectFit: 'cover', transition: 'transform 0.5s ease' }}
                                     onError={e => e.target.style.display = 'none'}
                                   />
@@ -2226,7 +2253,14 @@ export default function EventPageClient({
             <AnimatePresence>
               {lightboxOpen && (
                 <GalleryLightbox
-                  images={event.gallery_urls}
+                  /*
+                    'full' (2000px), not the original. This is the one place a
+                    guest deliberately asks to SEE the photo, so it gets real
+                    detail — but a 2000px re-encode of a 7,994 kB phone photo is
+                    still a fraction of the original, and it is only paid for on
+                    a tap rather than on every page load.
+                  */
+                  images={event.gallery_urls.map((u) => assetUrl(u, 'full'))}
                   initialIndex={lightboxIndex}
                   onClose={() => setLightboxOpen(false)}
                 />

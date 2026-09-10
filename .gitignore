@@ -60,6 +60,14 @@ android/.gradle/
 # Anchored, for the reason given above `/templates/`.
 /app-release.apk
 
+# Scratch space for backend/scripts/reencode-audio.js: downloaded originals and
+# their re-encoded copies. Tens of megabytes of customer audio that already
+# lives in the bucket — there is nothing here worth versioning.
+#
+# Leading slash on purpose. An unanchored `.audio-work/` matches at EVERY depth,
+# which is precisely the mistake the /templates/ note below documents.
+/.audio-work/
+
 # ⚠ INERT AS WRITTEN — the quotes are literal.
 #
 # git does not strip quotation marks from a pattern, so this asks it to ignore

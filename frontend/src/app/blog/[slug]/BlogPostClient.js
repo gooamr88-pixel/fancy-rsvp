@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import BlogContent from '../BlogContent';
+import { assetUrl, assetSrcSet } from '../../utils/assetUrl';
 
 function formatDate(dateStr) {
   if (!dateStr) return '';
@@ -84,7 +85,10 @@ export default function BlogPostClient({ post }) {
           // eslint-disable-next-line @next/next/no-img-element
           <img
             className="post-cover"
-            src={post.cover_image_url}
+            src={assetUrl(post.cover_image_url, 'hero')}
+            srcSet={assetSrcSet(post.cover_image_url)}
+            sizes="(max-width: 800px) 100vw, 760px"
+            decoding="async"
             alt=""
             style={{ width: '100%', maxHeight: '440px', objectFit: 'cover', borderRadius: '16px', marginBottom: '48px' }}
           />
