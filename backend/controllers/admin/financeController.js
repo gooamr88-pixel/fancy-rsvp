@@ -10,6 +10,23 @@ const { CONFIG_ID } = require('../../utils/configCache');
 /** GET /api/v1/admin/finance/summary?from=YYYY-MM-DD&to=YYYY-MM-DD */
 const getFinancialSummary = async (req, res, next) => {
   try {
+    /**
+     * ── REFRESH WHEN SOMEBODY LOOKS, NOT EVERY FIFTEEN MINUTES ──
+     *
+     * `refresh_daily_revenue()` was the single heaviest statement on this
+     * database: 568,576 ms across 7,435 calls in pg_stat_statements, roughly
+     * double the heaviest application query. It was doing that to keep
+     * mv_daily_revenue — ONE ROW, derived from ONE payment — current, on a
+     * fifteen-minute timer, forever, for a dashboard nobody had open.
+     *
+     * The interval still exists as a floor (revenueRollup.js, now daily), but
+     * the freshness that actually matters is "when an admin opens this page",
+     * and that is here. Awaited rather than fired and forgotten so the numbers
+     * on screen are the numbers in the database; a failure is swallowed because
+     * a stale rollup is a much better outcome than a 500 on the finance page.
+     */
+    await require('../../services/revenueRollup').runOnce('finance-view').catch(() => {});
+
     // Default window: last 30 days. Ignore unparseable query dates rather than
     // letting `new Date('garbage').toISOString()` throw a RangeError → 500.
     const parseDate = (raw, fallback) => {

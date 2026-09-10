@@ -4,7 +4,7 @@ import { check, sleep, group } from 'k6';
 import {
   BASE_URL, SLUG, ENABLE_PAYMENTS, ORG_EMAIL, ORG_PASSWORD, EVENT_ID,
   browseTrend, searchTrend, rsvpTrend, loginTrend, dashTrend, checkoutTrend,
-  rsvpDup, bizErrors, JSON_HEADERS, randName, uniqueEmail,
+  rsvpDup, rsvpWritten, bizErrors, JSON_HEADERS, randName, uniqueEmail, uniquePhone,
 } from './common.js';
 
 // think time — real guests pause between actions (seconds)
@@ -40,9 +40,30 @@ export function guestJourney() {
     const payload = {
       guestName: randName(),
       email: uniqueEmail(),
-      phone: '+15551234567',
+      /**
+       * A UNIQUE NUMBER PER SUBMISSION, and this is not cosmetic.
+       *
+       * Every guest used to send the same '+15551234567'. `guests` has a unique
+       * index on (event_id, phone) WHERE is_primary_contact, and submit_rsvp_v2
+       * treats a matching number as the same person: the second submission
+       * onwards comes back PHONE_ALREADY_REGISTERED → 409, and the branch below
+       * counts a 409 as an expected duplicate and returns.
+       *
+       * So the run stayed green while writing exactly ONE row. Every number
+       * after the first measured a rejection three statements into the function
+       * — before the advisory lock does any real work, before the cascades,
+       * before the cap count. The load test reported that the RSVP path was
+       * fast because it never exercised it.
+       */
+      phone: uniquePhone(),
       response: attending ? 'yes' : 'no',
       partySize,
+      /**
+       * REQUIRED since 2026-09-04. Without it submitPublicRSVP rejects every
+       * non-decline with 400 SMS_CONSENT_REQUIRED before touching the database
+       * — this harness predates that change by three months.
+       */
+      smsConsent: true,
       additionalGuests: attending && partySize > 1
         ? Array.from({ length: partySize - 1 }, () => ({ fullName: randName() }))
         : [],
@@ -51,8 +72,12 @@ export function guestJourney() {
       headers: JSON_HEADERS, tags: { endpoint: 'rsvp_submit' },
     });
     rsvpTrend.add(res.timings.duration);
-    if (res.status === 409) { rsvpDup.add(1); return; } // duplicate email — not an error
+    // Still tolerated (a genuine collision is possible), but now COUNTED against
+    // a threshold — see rsvp_duplicate_409 in common.js. A run where most RSVPs
+    // collide is a run that measured nothing, and it must fail rather than pass.
+    if (res.status === 409) { rsvpDup.add(1); rsvpWritten.add(false); return; }
     const ok = check(res, { 'rsvp 201': (r) => r.status === 201 });
+    rsvpWritten.add(ok);
     bizErrors.add(!ok);
   });
 

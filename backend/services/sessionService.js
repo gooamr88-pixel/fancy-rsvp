@@ -18,22 +18,73 @@ async function maybeAlertNewDevice(req, userId) {
     const fingerprint = crypto.createHash('sha256').update(String(userAgent || 'unknown')).digest('hex');
     const deviceLabel = `${browser || 'Unknown browser'} on ${os || 'unknown OS'}`;
 
-    const { count: priorCount } = await supabase
-      .from('devices').select('id', { count: 'exact', head: true }).eq('user_id', userId);
-
-    const { data: inserted, error: insErr } = await supabase
+    /**
+     * ── WHY THIS READS FIRST INSTEAD OF LETTING THE INSERT FAIL ──
+     *
+     * This used to INSERT unconditionally and treat the resulting error as the
+     * answer to "have I seen this device before?":
+     *
+     *     const { error: insErr } = await supabase.from('devices').insert(…);
+     *     if (insErr) { …update last_seen…; return; }   // ← the failure WAS the logic
+     *
+     * It worked, and it was the single loudest thing in the Postgres log. Every
+     * returning sign-in from a known browser raised
+     *
+     *     duplicate key value violates unique constraint
+     *     "devices_user_id_fingerprint_key"
+     *
+     * which is a real ERROR-level line, on the happy path, on every login. Three
+     * costs, in ascending order of how much they matter:
+     *
+     *   1. Three round trips (count, failed insert, update) where two will do.
+     *   2. Postgres opens and aborts a subtransaction for each violation.
+     *   3. THE ONE THAT ACTUALLY BIT: it drowned the error log. Reading the logs
+     *      for the 2026-09-03 outage meant scrolling past these to find out
+     *      whether anything real had happened. An error you expect is an error
+     *      you stop reading.
+     *
+     * One read now answers both questions at once — how many devices this user
+     * has, and whether THIS one is among them — because a user has a handful of
+     * devices, not a page of them.
+     */
+    const { data: known, error: readErr } = await supabase
       .from('devices')
-      .insert({ user_id: userId, fingerprint, label: deviceLabel })
-      .select('id')
-      .single();
+      .select('id, fingerprint')
+      .eq('user_id', userId)
+      .limit(100);
 
-    if (insErr) {
-      // Already a known device → just refresh last_seen, no alert.
+    if (readErr) throw readErr;
+
+    const priorCount = (known || []).length;
+    const alreadyKnown = (known || []).some((d) => d.fingerprint === fingerprint);
+
+    if (alreadyKnown) {
+      // Known device → refresh last_seen, no alert. Same outcome as before, one
+      // fewer round trip and no exception.
       await supabase.from('devices').update({ last_seen: new Date().toISOString() })
         .eq('user_id', userId).eq('fingerprint', fingerprint);
       return;
     }
-    if (!inserted || (priorCount || 0) === 0) return; // first-ever device is expected
+
+    /**
+     * `upsert`, not `insert`, purely for the race: two tabs signing in at the
+     * same instant both read "not known" and both write. With insert that is a
+     * 23505 — the exact log line this change exists to remove, reintroduced in
+     * the one case nobody would think to test. With upsert the loser updates.
+     *
+     * The conflict target is the unique index this whole comment is about.
+     */
+    const { error: upErr } = await supabase
+      .from('devices')
+      .upsert(
+        { user_id: userId, fingerprint, label: deviceLabel, last_seen: new Date().toISOString() },
+        { onConflict: 'user_id,fingerprint' },
+      );
+
+    if (upErr) throw upErr;
+
+    // A first-ever device is expected, not suspicious — alert only on additions.
+    if (priorCount === 0) return;
 
     const { data: org } = await supabase
       .from('organizations').select('name, email, timezone').eq('owner_user_id', userId).single();

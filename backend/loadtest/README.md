@@ -3,6 +3,44 @@
 Measures how the API copes with **100 / 500 / 1000 / 5000** simultaneous users,
 finds the breaking point, and pinpoints what to fix before launch.
 
+> ## ⚠️ READ THIS BEFORE YOUR FIRST RUN (updated 2026-09-10)
+>
+> This harness was written 2026-06-19 and **had never been executed** — `results/`
+> contained only `TEMPLATE.md`. Two things had drifted underneath it since, and
+> both have now been repaired in `lib/`:
+>
+> 1. **`smsConsent` became mandatory** (2026-09-04). Without it every attending
+>    RSVP is rejected with `400 SMS_CONSENT_REQUIRED` before the request reaches
+>    the database — you would have measured a validation branch.
+> 2. **Every guest sent the same phone number.** `guests` is unique on
+>    `(event_id, phone) WHERE is_primary_contact`, so from the second submission
+>    onward `submit_rsvp_v2` answered `PHONE_ALREADY_REGISTERED` → 409 — which
+>    the journey counted as an expected duplicate and forgave. **The run would
+>    have gone green having written one row**, never reaching the advisory lock,
+>    the cascade deletes or the guest-cap count. A new `rsvp_written` rate with a
+>    `rate>0.95` threshold now makes that failure impossible to mistake for a pass.
+>
+> Numbers below are only meaningful if **`rsvp_written` is ≥ 0.95** in the summary.
+> If it is low, you measured rejections, not throughput — fix the cause and rerun.
+>
+> **Phone numbers repeat between runs.** Either clear the load-test rows or pass
+> a fresh `-e PHONE_SALT=<n>` each time:
+>
+> ```sql
+> -- Removes only rows this harness created, from the demo event.
+> DELETE FROM rsvp_parties p
+>  USING events e, guests g
+>  WHERE e.slug = 'demo' AND p.event_id = e.id
+>    AND g.party_id = p.id AND g.email LIKE 'lt\_%@loadtest.example';
+> ```
+>
+> **Already fixed since this file's "bottlenecks" list was written** — do not go
+> chasing these: #2 (per-write Realtime channel → now REST broadcast in
+> `utils/realtime.js`), #4 (`instances: 'max'`, `max_memory_restart: 1G`), #8
+> (`compression()` is mounted in `app.js`). #1 is partly done — the RSVP write is
+> one `submit_rsvp_v2` RPC now, though the handler still makes a few surrounding
+> round trips. #5, #6 and #7 are still open and are the ones worth reading.
+
 ## Tool choice: **k6** (recommended)
 
 | | k6 ✅ | Locust | Artillery |

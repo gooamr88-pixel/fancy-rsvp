@@ -1585,14 +1585,30 @@ const getEventStats = async (req, res, next) => {
       // Undone check-ins are soft-deleted since migration 20260814000000 —
       // excluded so the dashboard's arrival counter matches the room.
       supabase.from('check_ins').select('*', { count: 'exact', head: true }).eq('event_id', eventId).is('deleted_at', null),
-      supabase.from('seating_assignments').select('rsvp_parties(guests(id))').eq('event_id', eventId),
+      /**
+       * `party_id` ONLY — the party sizes are already in hand.
+       *
+       * This used to select `rsvp_parties(guests(id))`, a two-level PostgREST
+       * embed that re-resolved every seated party and re-fetched all of its
+       * guest rows — the exact rows query 1 above has already returned for the
+       * whole event. On an event where most parties are seated that doubled the
+       * guest rows read and shipped per call, and this endpoint is on the
+       * organizer dashboard's 20-second refresh, so it ran continuously for
+       * every open dashboard. The size lookup below is the same number from the
+       * data already fetched.
+       */
+      supabase.from('seating_assignments').select('party_id').eq('event_id', eventId),
     ]);
 
     stats.invitationsSent = new Set((invitationsRes.data || []).map(i => i.party_id)).size;
     stats.checkedInGuests = checkinRes.count || 0;
 
+    // Guest count per party, from the single read at the top. seating_assignments
+    // is UNIQUE(event_id, party_id) with an FK to rsvp_parties, so every row here
+    // names a party of THIS event and is therefore present in `parties`.
+    const guestCountByPartyId = new Map(parties.map(p => [p.id, (p.guests || []).length]));
     (seatingRes.data || []).forEach(sa => {
-      if (sa.rsvp_parties) stats.seatingAssignedGuests += (sa.rsvp_parties.guests || []).length || 0;
+      stats.seatingAssignedGuests += guestCountByPartyId.get(sa.party_id) || 0;
     });
 
     return res.json({

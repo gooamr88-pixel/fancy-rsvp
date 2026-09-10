@@ -305,14 +305,83 @@ app.use((req, res, next) => {
 const { csrfOriginGuard } = require('./middleware/csrf');
 app.use(csrfOriginGuard);
 
-// UUID format validation middleware for :eventId param
+/**
+ * ── THE LITERAL STRING "undefined" REACHING POSTGRES ──
+ *
+ * The Postgres log carries bursts of
+ *
+ *     invalid input syntax for type uuid: "undefined"
+ *
+ * — thirteen of them inside 22 seconds on 2026-09-10, eight inside one second on
+ * 2026-09-08. That is JavaScript's `undefined` stringified into a URL by a
+ * caller and handed to PostgREST as if it were an id: `?partyId=undefined`, or
+ * `/rsvps/undefined`. Postgres rejects it at parse time, so each one is a wasted
+ * round trip that fails, and — as with the `devices` violations — a real
+ * ERROR-level line on a path nobody considers broken.
+ *
+ * The correct long-term fix is in whatever builds those URLs, which is front-end
+ * work and out of scope for this phase. This is the guard on the DATABASE side
+ * of the boundary: nothing that is obviously not an id should reach a query.
+ *
+ * Two layers, because the log shows both shapes arriving:
+ */
+
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-app.param('eventId', (req, res, next, value) => {
-  if (!UUID_REGEX.test(value)) {
-    return res.status(400).json({ success: false, error: 'INVALID_PARAM', message: 'eventId must be a valid UUID.' });
+
+/**
+ * Layer 1 — QUERY STRING. `?partyId=undefined` is indistinguishable from a
+ * caller that meant to omit the filter, so treat it as omitted rather than
+ * 400-ing: the burst pattern says these come from optional filters, and failing
+ * the whole request would turn a cosmetic front-end bug into a broken page.
+ *
+ * Only the two literals JavaScript produces by accident. A guest whose name is
+ * genuinely "null" still searches fine, because `?query=null` is a search term,
+ * not an id — which is why this scrubs by VALUE and not by key.
+ */
+const JS_ACCIDENTS = new Set(['undefined', 'null', 'NaN']);
+app.use((req, res, next) => {
+  if (req.query) {
+    for (const [key, value] of Object.entries(req.query)) {
+      // Ids only. Free-text params (search, query, q) are left completely alone.
+      if (typeof value === 'string' && JS_ACCIDENTS.has(value) && /Id$|^id$/.test(key)) {
+        delete req.query[key];
+      }
+    }
   }
   next();
 });
+
+/**
+ * Layer 2 — ROUTE PARAMS. Every `:*Id` in the routing table is a UUID column in
+ * this schema, so a value that is not a UUID cannot match anything and is worth
+ * one cheap regex to stop at the edge.
+ *
+ * Rejected here rather than scrubbed: a path segment is not optional. A request
+ * to `/events/undefined/rsvps` has no sensible interpretation, and answering 400
+ * INVALID_PARAM tells whoever wrote that caller exactly what is wrong — which
+ * `invalid input syntax for type uuid` buried in a Postgres log did not.
+ *
+ * `code`, `slug` and `token` are deliberately NOT in this list: short-link codes,
+ * event slugs and signed JWTs are not UUIDs and each has its own validation.
+ */
+const UUID_PARAMS = [
+  'eventId', 'partyId', 'guestId', 'tableId', 'fieldId', 'deviceId', 'sessionId',
+  'userId', 'roleId', 'paymentId', 'productId', 'categoryId', 'imageId', 'postId',
+  'badgeId', 'inquiryId', 'logId', 'packageId', 'pressMentionId', 'promoCodeId',
+  'testimonialId',
+];
+for (const name of UUID_PARAMS) {
+  app.param(name, (req, res, next, value) => {
+    if (!UUID_REGEX.test(value)) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_PARAM',
+        message: `${name} must be a valid UUID.`,
+      });
+    }
+    next();
+  });
+}
 
 // ─── ROUTES ───
 

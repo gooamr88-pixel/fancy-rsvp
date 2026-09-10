@@ -12,9 +12,9 @@ const { getPublicShop, getPublicProductBySlug, recordShopInquiry } = require('..
 const { verifyTurnstile } = require('../middleware/captcha');
 const { generateQRCodeBuffer } = require('../utils/qrHelper');
 const { getPlatformConfig } = require('../utils/configCache');
+const { getLandingCounts } = require('../utils/landingCounts');
 const { getPublicBaseUrl } = require('../utils/publicUrl');
 const shortLinks = require('../utils/shortLinks');
-const { supabase } = require('../config/supabase');
 
 const router = express.Router();
 
@@ -88,8 +88,16 @@ router.get('/links/:code', shortLinkLimiter, async (req, res) => {
 // Reads the cached config and exposes ONLY this column — never the rest of the row
 // (pricing, payment methods, etc.) to anonymous clients. Entries tagged
 // source: 'events_count' / 'guests_count' get their `target` overwritten with a
-// real COUNT(*) below rather than the admin-typed number — only genuinely
+// real COUNT(*) rather than the admin-typed number — only genuinely
 // unmeasurable stats (e.g. uptime) stay purely admin-set.
+//
+// Those two counts come from utils/landingCounts, which CACHES them. They are
+// `count: 'exact'` reads — a bare SELECT count(*), i.e. a full scan, one of them
+// over `guests`. Uncached, this endpoint made the marketing home page cost two
+// sequential scans per visit, growing with the size of the business. The
+// Cache-Control header below is advice to one browser and does nothing for a
+// crawler or a server render; see that module for the reasoning and the
+// behaviour when a count fails.
 router.get('/landing-stats', async (req, res) => {
   try {
     const config = await getPlatformConfig();
@@ -97,17 +105,16 @@ router.get('/landing-stats', async (req, res) => {
 
     const needsEvents = stats.some(s => s.source === 'events_count');
     const needsGuests = stats.some(s => s.source === 'guests_count');
-    const [eventsCount, guestsCount] = await Promise.all([
-      needsEvents ? supabase.from('events').select('*', { count: 'exact', head: true }) : null,
-      needsGuests ? supabase.from('guests').select('*', { count: 'exact', head: true }) : null,
-    ]);
+    const counts = (needsEvents || needsGuests)
+      ? await getLandingCounts({ needsEvents, needsGuests })
+      : { events: null, guests: null };
 
     const liveStats = stats.map((s) => {
-      if (s.source === 'events_count' && eventsCount && !eventsCount.error) {
-        return { ...s, target: eventsCount.count ?? s.target };
+      if (s.source === 'events_count' && counts.events != null) {
+        return { ...s, target: counts.events };
       }
-      if (s.source === 'guests_count' && guestsCount && !guestsCount.error) {
-        return { ...s, target: guestsCount.count ?? s.target };
+      if (s.source === 'guests_count' && counts.guests != null) {
+        return { ...s, target: counts.guests };
       }
       return s;
     });
