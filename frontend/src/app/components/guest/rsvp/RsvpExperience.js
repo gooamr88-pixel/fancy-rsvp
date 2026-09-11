@@ -12,6 +12,7 @@ import { useIdempotentRsvpSubmit } from './useIdempotentRsvpSubmit';
 import { useSeatingLookup } from '../../../[slug]/rsvp/hooks/useSeatingLookup';
 import SeatingResultPanel from '../../../[slug]/rsvp/steps/SeatingResultPanel';
 import { CelebrateIcon, ClockIcon, EnvelopeIcon, CreditCardIcon, DoorIcon, SearchIcon, PencilIcon } from '../RsvpIcons';
+import { useGuestAnalytics, GuestAnalyticsProvider } from '../../../utils/useGuestAnalytics';
 
 /**
  * RsvpExperience — the unified orchestration engine for the entire guest RSVP
@@ -227,9 +228,38 @@ function RsvpLockedCard({ event, guest, allowEdits, isRTL, onEdit, onReset, seat
   );
 }
 
-export default function RsvpExperience({ context, lang = 'en', envelope = false, children }) {
-  const isRTL = lang === 'ar';
+/**
+ * The standalone /[slug]/rsvp route's half of the engagement tracking.
+ *
+ * Same job as the wrapper on EventPageClient, and the same reason for being a
+ * wrapper: the component below has nine early returns, so a provider placed
+ * inside it would cover some phases and not others. It renders CalendarButton,
+ * ShareButton and the guest pass, and calls useSeatingLookup in its own body —
+ * all of which read this tracker from context.
+ */
+export default function RsvpExperience({ context, ...rest }) {
+  /* The resolver is called HERE, one level up, rather than in the component
+     below — and that is the whole reason this wrapper can exist without any
+     extra state or an effect.
+
+     The slug is not always known up front. `{ kind: 'slug' }` (public link,
+     private SMS ?g=, invite ?party_id=) carries it; `{ kind: 'token' }`, the
+     one-click link in an email, carries only a signed token and the slug is not
+     known until the event resolves. Reading it off the engine covers both, and
+     the engine is a hook called exactly once either way — lifting it changes
+     nothing about how many times the event is fetched. */
   const engine = useRsvpResolver(context);
+  const { trackEvent } = useGuestAnalytics(engine.event?.slug || context?.slug || '');
+
+  return (
+    <GuestAnalyticsProvider trackEvent={trackEvent}>
+      <RsvpExperienceInner context={context} engine={engine} {...rest} />
+    </GuestAnalyticsProvider>
+  );
+}
+
+function RsvpExperienceInner({ context, engine, lang = 'en', envelope = false, children }) {
+  const isRTL = lang === 'ar';
   const reduceMotion = useReducedMotion();
 
   // DigitalEnvelope intro — plays every time this page loads (no "seen before"

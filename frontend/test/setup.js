@@ -1,6 +1,24 @@
 import * as jestDomMatchers from '@testing-library/jest-dom/matchers';
 import { cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, expect, vi } from 'vitest';
+import React from 'react';
+
+/* ── React in scope for the CLASSIC JSX runtime ──
+   vitest.config.mjs hands every .js under src/ to esbuild with `loader: 'jsx'`,
+   and esbuild's default JSX mode is the classic transform — it compiles <div/>
+   to `React.createElement(...)` and expects a `React` binding in module scope.
+   Next.js uses the AUTOMATIC runtime, which needs no such import, so a component
+   that never writes `import React` is perfectly correct in the product and
+   throws `ReferenceError: React is not defined` only in here.
+
+   Most of src/ imports React anyway (which is why that import is not dead code
+   and must not be "tidied away"), but src/app/admin does not — so mounting any
+   admin page failed on the harness rather than on anything real.
+
+   A global binding is the honest fix: it makes the test environment agree with
+   how the app is actually built. It changes nothing for the files that already
+   import React — their own module-scope binding shadows this one. */
+globalThis.React = React;
 
 /* Matchers registered by hand rather than via '@testing-library/jest-dom/vitest'.
    This is an npm-workspaces repo: testing-library hoists to the ROOT

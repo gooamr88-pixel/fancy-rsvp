@@ -5,6 +5,7 @@ import { motion } from 'framer-motion';
 import { formatTableLabel } from '../../utils/tableLabel';
 import { lighten, luminance } from '../../utils/color';
 import { safeZone } from '../../utils/timezone';
+import { useTrackGuestAction } from '../../utils/useGuestAnalytics';
 
 // This card's body is a fixed near-black (#191B1E) regardless of the event's
 // own custom_colors — callers pass in a raw, unclamped organizer color (e.g.
@@ -104,8 +105,16 @@ export default function GuestPassCard({
    * surrounding foil, the perforation and a 112px render. Re-encoded at 1024px
    * here rather than reusing the on-screen data URL for the same reason.
    */
+  /* `guest_pass_downloaded` covers BOTH saves — the full keepsake pass and the
+     bare check-in QR. They are different artefacts but one organizer question
+     ("did guests take their pass with them?"), and the dashboard shows a single
+     count; `kind` in the metadata keeps them separable later without needing a
+     second event type in the backend whitelist. */
+  const trackAction = useTrackGuestAction();
+
   const handleDownloadQr = useCallback(() => {
     if (!qrData) return;
+    trackAction('guest_pass_downloaded', { kind: 'qr' });
     import('qrcode').then(QRCode => {
       QRCode.toDataURL(qrData, {
         width: 1024, margin: 3, errorCorrectionLevel: 'Q',
@@ -117,7 +126,7 @@ export default function GuestPassCard({
         a.click();
       }).catch(() => {});
     }).catch(() => {});
-  }, [qrData, guestName]);
+  }, [qrData, guestName, trackAction]);
 
   const handleDownload = useCallback(async () => {
     const canvas = document.createElement('canvas');
@@ -240,8 +249,9 @@ export default function GuestPassCard({
       finish();
     }
 
+    trackAction('guest_pass_downloaded', { kind: 'pass' });
     if (onDownload) onDownload();
-  }, [eventTitle, dateFormatted, dateShort, timeFormatted, eventLocation, guestName, tableName, response, themeColor, accent, qrImageUrl, onDownload, removeWatermark]);
+  }, [eventTitle, dateFormatted, dateShort, timeFormatted, eventLocation, guestName, tableName, response, themeColor, accent, qrImageUrl, onDownload, removeWatermark, trackAction]);
 
   return (
     <div style={{ perspective: '1400px', maxWidth: '480px', width: '100%', margin: '0 auto' }}>

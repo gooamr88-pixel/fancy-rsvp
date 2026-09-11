@@ -7,6 +7,7 @@ import { lighten, darken } from '../../utils/color';
 import { isWhiteLabel } from '../../utils/guestBranding';
 import { viewOf } from '../../utils/frameDocument';
 import { useModalA11y } from '../../hooks/useModalA11y';
+import { useTrackGuestAction } from '../../utils/useGuestAnalytics';
 import { CelebrateIcon, ClockIcon, EnvelopeIcon, CalendarIcon, CheckIcon, LinkIcon } from './RsvpIcons';
 
 /* ═══════════════════════════════════════════════════════════════
@@ -422,6 +423,14 @@ export function GalleryLightbox({ images, initialIndex = 0, onClose }) {
   const [current, setCurrent] = useState(initialIndex);
   const touchStartX = useRef(0);
 
+  /* `gallery_viewed`, reported from the lightbox rather than from whatever
+     thumbnail opened it — the lightbox is the thing that means "the guest is
+     actually looking at the photos", and several templates open it from
+     different affordances. Mounting is the whole signal, so this fires once and
+     browsing between images does not re-report. */
+  const trackAction = useTrackGuestAction();
+  useEffect(() => { trackAction('gallery_viewed'); }, [trackAction]);
+
   const next = useCallback(() => setCurrent(i => (i + 1) % images.length), [images.length]);
   const prev = useCallback(() => setCurrent(i => (i - 1 + images.length) % images.length), [images.length]);
 
@@ -610,14 +619,29 @@ export function buildCalendarLinks(event) {
 // ─── CalendarButton: Add to Calendar ───
 export function CalendarButton({ event, isRTL = false, variant = 'outline', style = {}, buttonStyle = {} }) {
   const [open, setOpen] = useState(false);
+  // Must be read before the `links` early-return below — a hook cannot sit
+  // after a conditional return.
+  const trackAction = useTrackGuestAction();
 
   const links = buildCalendarLinks(event);
   if (!links) return null;
 
+  /* `calendar_added` fires on CHOOSING a calendar, not on opening the menu.
+     Opening it is curiosity; picking Google or downloading the .ics is the
+     guest actually putting the event in their diary, which is the thing the
+     organizer is being shown a count of. `provider` rides along in the
+     metadata — the beacon column is bounded server-side and this is one small
+     string. */
+  const pick = (provider, go) => () => {
+    trackAction('calendar_added', { provider });
+    go();
+    setOpen(false);
+  };
+
   const options = [
-    { label: 'Google Calendar', action: () => { window.open(links.googleUrl, '_blank'); setOpen(false); } },
-    { label: 'Apple Calendar', action: () => { links.downloadIcs(); setOpen(false); } },
-    { label: 'Outlook / Other', action: () => { links.downloadIcs(); setOpen(false); } },
+    { label: 'Google Calendar', action: pick('google', () => window.open(links.googleUrl, '_blank')) },
+    { label: 'Apple Calendar', action: pick('apple', links.downloadIcs) },
+    { label: 'Outlook / Other', action: pick('outlook', links.downloadIcs) },
   ];
 
   return (
@@ -670,14 +694,21 @@ export function CalendarButton({ event, isRTL = false, variant = 'outline', styl
 // ─── ShareButton: Native Share API or fallback ───
 export function ShareButton({ title, text, url, isRTL = false, variant = 'ghost', style = {} }) {
   const [copied, setCopied] = useState(false);
+  const trackAction = useTrackGuestAction();
 
   const handleShare = async () => {
     if (navigator.share) {
       try {
         await navigator.share({ title, text, url: url || window.location.href });
+        // Reported only on a RESOLVED share sheet. `navigator.share` rejects
+        // when the guest dismisses it, and that lands in the catch below —
+        // counting a cancelled sheet would inflate this against the clipboard
+        // path, which cannot be cancelled at all.
+        trackAction('share_clicked', { method: 'web_share' });
       } catch (e) { /* user cancelled */ }
     } else {
       await navigator.clipboard.writeText(url || window.location.href);
+      trackAction('share_clicked', { method: 'clipboard' });
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }

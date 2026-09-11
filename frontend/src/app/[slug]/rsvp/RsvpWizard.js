@@ -7,7 +7,7 @@ import { translations } from '../../utils/translations';
 import { guestTitle } from '../../utils/guestBranding';
 import { normalizeToE164 } from '../../utils/phone';
 import { publicApiFetch } from '../../utils/publicApi';
-import { useGuestAnalytics, useRsvpFunnelTracking, useAbandonmentTracking } from '../../utils/useGuestAnalytics';
+import { useGuestAnalytics, useRsvpFunnelProgress, useAbandonmentTracking, hasAnyAnswer } from '../../utils/useGuestAnalytics';
 import { isSeatingRevealed } from '../../utils/seating';
 import { getRsvpDeadlineStatus, daysLeftPhrase } from '../../utils/rsvpDeadline';
 import { splitName } from '../../utils/nameFields';
@@ -154,11 +154,30 @@ export default function RsvpWizard({ event, guest, context, submit: doSubmit, re
   };
 
   /* ═══ Analytics ═══
-     The funnel/abandonment trackers just want a numeric "how far along" signal —
-     derive it from the page's reveal state instead of a navigable step index. */
-  const analyticsStep = submitted ? 5 : (attending ? 3 : 2);
+     The funnel reports named milestones read off the real form state.
+
+     It used to derive a numeric step here — `submitted ? 5 : (attending ? 3 : 2)`
+     — and hand that to a lookup table. That expression can only ever be 2, 3 or
+     5, so `rsvp_step_1` ("Name Entered") and `rsvp_step_4` were never emitted by
+     this screen or any other, and the organizer's funnel showed a total wipeout
+     at step one on every event. See useRsvpFunnelProgress for the full note.
+
+     `nameEntered` goes true on a token-resolved guest without them typing
+     anything, and that is correct: the step asks whether the guest is
+     identified, not whether they used the keyboard. */
   const { trackEvent } = useGuestAnalytics(slug);
-  useRsvpFunnelTracking(slug, analyticsStep);
+  useRsvpFunnelProgress(trackEvent, {
+    nameEntered: !!guestName.trim(),
+    attendanceSelected: !!attending,
+    detailsEntered: !!(email.trim() || phone.trim()),
+    questionsAnswered: !!primaryMeal || hasAnyAnswer(customAnswers),
+    completed: submitted,
+  });
+
+  // Abandonment still wants a coarse "how far along" number, and its only
+  // thresholds are `>= 2` and "did they finish" — so the old derivation is
+  // exactly right for this one and stays.
+  const analyticsStep = submitted ? 5 : (attending ? 3 : 2);
   useAbandonmentTracking(slug, analyticsStep, submitted);
 
   useEffect(() => { trackEvent('rsvp_started'); }, [trackEvent]);

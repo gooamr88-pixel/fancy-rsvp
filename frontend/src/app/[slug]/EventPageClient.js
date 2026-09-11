@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { guestTitle } from '../utils/guestBranding';
 import { motion, AnimatePresence, useInView } from 'framer-motion';
 import { translations } from '../utils/translations';
-import { useGuestAnalytics } from '../utils/useGuestAnalytics';
+import { useGuestAnalytics, GuestAnalyticsProvider } from '../utils/useGuestAnalytics';
 import { useIsClient } from '../utils/useIsClient';
 import { extractYouTubeId, loadYouTubeIframeApi } from '../utils/youtube';
 import { getRsvpDeadlineStatus, daysLeftPhrase } from '../utils/rsvpDeadline';
@@ -269,7 +269,30 @@ function HeroFloralAccent({ color, mirror = false }) {
    COMPONENT
    ═══════════════════════════════════════════════════════════════ */
 
-export default function EventPageClient({
+/**
+ * Publishes this page's analytics tracker to the shared guest components below
+ * it — GuestUI's CalendarButton / ShareButton / GalleryLightbox, the pass
+ * generator, the seat lookup, the venue directions link.
+ *
+ * A wrapper rather than two edits inside the component because the body has two
+ * full render branches (the full-page templates and the continuous-scroll page)
+ * plus eight early returns, and a provider that covers only some of them is how
+ * half the engagement beacons would go quietly missing again.
+ *
+ * The slug is recomputed here rather than lifted out of the inner component's
+ * state: that state is initialised to exactly this and `setSlug` is never
+ * called, so the two cannot diverge.
+ */
+export default function EventPageClient(props) {
+  const { trackEvent } = useGuestAnalytics(props.slug || '');
+  return (
+    <GuestAnalyticsProvider trackEvent={trackEvent}>
+      <EventPageClientInner {...props} />
+    </GuestAnalyticsProvider>
+  );
+}
+
+function EventPageClientInner({
   initialEvent,
   slug: serverSlug,
   // Per-guest invitation token. Unlocks private events and lets the RSVP form
@@ -405,12 +428,19 @@ export default function EventPageClient({
     if (!el) return;
     if (el.paused) {
       userPausedRef.current = false;
+      /* `music_played` belongs HERE and not on the element's `onPlay`. The
+         self-healing resume below calls play() on the guest's behalf after a
+         browser-forced pause, and `onPlay` cannot tell that apart from a
+         deliberate tap — wiring the beacon there would have counted the
+         watchdog's own work as guest engagement, over and over, on every
+         scroll-induced suspend. This branch only runs from the toggle. */
+      trackEvent('music_played');
       el.play().catch((err) => console.error('Background music playback failed:', err));
     } else {
       userPausedRef.current = true;
       el.pause();
     }
-  }, []);
+  }, [trackEvent]);
   // Self-heal: whenever playback stops for any reason OTHER than the guest's
   // own tap, immediately retry. Safe to call unconditionally — a browser that
   // is genuinely still blocking autoplay just no-ops here the same way the
@@ -1684,7 +1714,7 @@ export default function EventPageClient({
                       <span style={{ fontSize: '18px', color: '#191B1E', fontWeight: 600, display: 'block', marginBottom: '8px' }}>{event.location_name}</span>
                       <span style={{ fontSize: '14px', color: '#77736A', display: 'block', marginBottom: '16px' }}>{event.location_address}</span>
                       {(event.location_lat && event.location_lng || event.location_address) && (
-                        <MagneticButton variant="outline" size="sm" onClick={() => window.open(getDirectionsUrl(event.location_lat, event.location_lng, event.location_address, isClient), '_blank')}>
+                        <MagneticButton variant="outline" size="sm" onClick={() => { trackEvent('directions_clicked'); window.open(getDirectionsUrl(event.location_lat, event.location_lng, event.location_address, isClient), '_blank'); }}>
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}><Icon name="compass" size={13} strokeWidth={1.6} /> {isRTL ? 'الاتجاهات' : 'Get Directions'}</span>
                         </MagneticButton>
                       )}
@@ -2207,6 +2237,7 @@ export default function EventPageClient({
                             </h2>
                             <a
                               href={getDirectionsUrl(event.location_lat, event.location_lng, event.location_address, isClient)}
+                              onClick={() => trackEvent('directions_clicked')}
                               target="_blank" rel="noopener noreferrer"
                               style={{
                                 display: 'inline-flex', alignItems: 'center', gap: '6px',

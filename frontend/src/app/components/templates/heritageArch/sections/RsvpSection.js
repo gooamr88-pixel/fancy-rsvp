@@ -28,6 +28,7 @@ import { useSeatingLookup } from '../../../../[slug]/rsvp/hooks/useSeatingLookup
 import SeatingResultPanel from '../../../../[slug]/rsvp/steps/SeatingResultPanel';
 import { alpha, darken, isDark } from '../../../../utils/color';
 import { safeZone } from '../../../../utils/timezone';
+import { useRsvpFunnelProgress, hasAnyAnswer } from '../../../../utils/useGuestAnalytics';
 
 const ALLERGY_OPTIONS = ['Gluten-free / Celiac', 'Lactose-free', 'Nut allergy', 'Seafood'];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -344,6 +345,31 @@ export default function RsvpSection({ event, slug, guestRsvp, hasResponded, resp
   useEffect(() => {
     if (!showConfirmation) trackEvent?.('rsvp_started');
   }, [trackEvent, showConfirmation]);
+
+  /* ═══ The RSVP funnel ═══
+     This screen reported `rsvp_started` and then nothing else — no step events
+     and, critically, no `rsvp_completed`. Every heritageArch event RSVPs here,
+     so on the organizer's dashboard the funnel fell to zero straight after
+     "RSVP Started" and the "Responses" line in Activity over time was flat zero
+     no matter how many guests actually replied.
+
+     Reported only when this visit is really the guest working the form:
+     a returning guest lands on their confirmation card with `attending`
+     pre-filled from the response they gave weeks ago, and counting that as a
+     fresh walk through the funnel would inflate every step on every revisit.
+     `submitted` is the one case where a confirmation IS this session's work.
+
+     readOnly/simulate are the organizer's preview and the marketing demo. The
+     hook already refuses the demo slugs, but neither should reach the ladder at
+     all — a preview is not a guest. */
+  const funnelInert = readOnly || simulate || ((hasResponded || locked) && !submitted);
+  useRsvpFunnelProgress(trackEvent, funnelInert ? null : {
+    nameEntered: !!guestName.trim(),
+    attendanceSelected: !!attending,
+    detailsEntered: !!(email.trim() || phone.trim()),
+    questionsAnswered: !!meal || hasAnyAnswer(customAnswers),
+    completed: submitted,
+  });
 
   // Prefill from the guest's existing RSVP once it resolves (EventPageClient paints
   // from the SSR snapshot with guestRsvp still null, then fills it after refetch —

@@ -214,6 +214,23 @@ const getEventAnalytics = async (req, res, next) => {
   const { eventId } = req.params;
   const { from, to } = req.query;
 
+  /* FAIL LOUDLY IF THE ROUTE DID NOT HAND US AN EVENT.
+     This is not defensive padding — it is a tripwire for a bug that already
+     shipped. `analyticsRoutes` was mounted under /events/:eventId/analytics
+     without `mergeParams`, so `eventId` arrived undefined and every query below
+     filtered on it; PostgREST rejected the UUID cast, the errors were
+     discarded, and the endpoint returned a cheerful 200 full of zeroes with the
+     advanced blocks withheld. An organizer cannot tell that apart from "nobody
+     has opened my invitation yet", which is why it went unnoticed.
+     A 500 here is the correct answer: there is no such thing as analytics for
+     no event, and a wrong mount should break the screen, not the data. */
+  if (!eventId) {
+    return next(new Error(
+      'getEventAnalytics: req.params.eventId is missing — check that analyticsRoutes '
+      + 'is created with express.Router({ mergeParams: true }).',
+    ));
+  }
+
   // Validate optional date range parameters
   if (from && isNaN(Date.parse(from))) {
     return res.status(400).json({ success: false, error: 'VALIDATION_ERROR', message: "Invalid 'from' date parameter. Use ISO 8601 format (e.g. 2026-01-01)." });
@@ -348,6 +365,28 @@ const getEventAnalytics = async (req, res, next) => {
         .eq('event_id', eventId)
         .in('event_type', REVEAL_EVENT_TYPES)),
     ]);
+
+    /* A FAILED QUERY IS NOT AN EMPTY ONE.
+       Each of these was `result.data || []`, which turns any error — a bad
+       filter value, a dropped column, a PostgREST cast failure — into "no rows"
+       and renders it as a chart of zeroes. That is how the missing `mergeParams`
+       above stayed invisible: six queries failed on every single request and the
+       page reported a perfectly plausible brand-new event.
+       Zero and "we could not find out" must never look the same on this screen. */
+    const results = {
+      analytics: analyticsResult,
+      rsvpStats: rsvpStatsResult,
+      declineReasons: declineReasonsResult,
+      sourceBreakdown: sourceBreakdownResult,
+      timeline: timelineResult,
+      reveal: revealResult,
+    };
+    for (const [name, result] of Object.entries(results)) {
+      if (result?.error) {
+        logger.error({ err: result.error, eventId, query: name }, 'Analytics query failed');
+        return next(new Error(`Analytics query "${name}" failed: ${result.error.message}`));
+      }
+    }
 
     const analytics = analyticsResult.data || [];
     const rsvps = rsvpStatsResult.data || [];

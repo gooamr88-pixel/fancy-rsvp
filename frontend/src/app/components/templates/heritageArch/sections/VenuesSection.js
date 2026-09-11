@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { useFullPageTheme } from '../theme';
 import { SectionShell, SectionHeading, DayTabs, ScrollToRsvpHint, MapEmbed, getDirectionsUrl } from '../shared';
+import { useTrackGuestAction } from '../../../../utils/useGuestAnalytics';
 
 // A small decorative venue glyph (a classical arch/colonnade) shown above the
 // venue name — bundled with the template, tinted from the event's palette,
@@ -20,6 +21,7 @@ function VenueMonogram({ color }) {
 
 export default function VenuesSection({ days, isRTL, t }) {
   const C = useFullPageTheme();
+  const trackAction = useTrackGuestAction();
   const [dayIndex, setDayIndex] = useState(0);
   const venue = days?.[dayIndex]?.venue || {};
   const hasName = !!(venue.name || venue.address);
@@ -71,6 +73,7 @@ export default function VenuesSection({ days, isRTL, t }) {
         {hasMap && (
           <a
             href={getDirectionsUrl(venue.lat, venue.lng, venue.address)}
+            onClick={() => trackAction('directions_clicked')}
             target="_blank" rel="noopener noreferrer"
             style={{
               alignSelf: 'center', display: 'inline-flex', alignItems: 'center', gap: '8px',

@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { publicApiFetch } from '../../../utils/publicApi';
+import { useTrackGuestAction } from '../../../utils/useGuestAnalytics';
 
 /**
  * "Find my table" — identity-verified lookup. The guest proves who they are
@@ -18,8 +19,16 @@ export function useSeatingLookup(slug) {
   const [seatingView, setSeatingView] = useState(null);
   const [seatingLoading, setSeatingLoading] = useState(false);
 
+  const trackAction = useTrackGuestAction();
+
   const verifyTable = async () => {
     if (!verifyName.trim() || !/^\d{4}$/.test(verifyLast4)) return;
+    /* `seating_searched` — reported on a genuine ATTEMPT, above the try, not on
+       a successful match. The organizer's question behind this number is "are
+       guests hunting for their table?", and a guest who typed the wrong last-4
+       and failed was hunting hardest of all. The early return above means a
+       half-filled form is not counted. */
+    trackAction('seating_searched');
     setVerifying(true);
     setVerifyFailed(false);
     setSeatingView(null);

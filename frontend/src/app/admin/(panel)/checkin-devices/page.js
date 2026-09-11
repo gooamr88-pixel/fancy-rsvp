@@ -264,7 +264,17 @@ export default function CheckinDevicesPage() {
         loading={loading}
         emptyText="No check-in devices match."
         rowKey={(r) => r.id}
-        onRefresh={load}
+        /* `reload`, not `load`. There has never been a `load` in this file — the
+           refetch has always been the tick-bumping `reload` defined above — so
+           this threw `ReferenceError: load is not defined` while building the
+           JSX, on every render, for every operator. The component never mounted;
+           the App Router error boundary did, and its button says "Try again".
+           A whole admin screen was dead behind what looked like a flaky fetch.
+
+           Nothing caught it: `no-undef` was not enabled (it is now — see
+           eslint.config.mjs), the file parses fine so scripts/parseCheck.js is
+           blind to it, and src/app/admin had no test of any kind. */
+        onRefresh={reload}
       />
     </div>
   );
