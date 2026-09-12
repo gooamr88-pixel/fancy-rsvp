@@ -373,19 +373,51 @@ const getEventAnalytics = async (req, res, next) => {
        above stayed invisible: six queries failed on every single request and the
        page reported a perfectly plausible brand-new event.
        Zero and "we could not find out" must never look the same on this screen. */
-    const results = {
-      analytics: analyticsResult,
+    /* ── TWO CLASSES OF FAILURE, AND ONLY ONE OF THEM IS FATAL ──
+       These six queries read two different tables, and the right answer to a
+       failure is different for each.
+
+       `rsvp_parties` is the guest list. If it cannot be read there is no
+       headcount, no response mix, nothing — the screen has no subject, so this
+       fails the request outright.
+
+       `guest_analytics` is the beacon table: page views, the funnel, the
+       envelope, the timeline. It is fed by a public endpoint and is the
+       likelier of the two to be unavailable. Failing the whole request on it
+       would take the RSVP counts down as collateral — and those are
+       `analytics_basic`, which EVERY plan carries, so a beacon-table problem
+       would black out the free dashboard for everyone.
+
+       What it must not do is report zero. Zero page views is a real, ordinary
+       answer for a young event, and it is indistinguishable from "the query
+       failed" — which is exactly how the missing `mergeParams` above hid for so
+       long. So the affected figures come back as NULL and the client is told
+       `engagementAvailable: false`, which the page renders as "—" plus a plain
+       statement that the data could not be loaded. */
+    const rsvpQueries = {
       rsvpStats: rsvpStatsResult,
       declineReasons: declineReasonsResult,
       sourceBreakdown: sourceBreakdownResult,
+    };
+    for (const [name, result] of Object.entries(rsvpQueries)) {
+      if (result?.error) {
+        logger.error({ err: result.error, eventId, query: name }, 'Analytics guest-list query failed');
+        return next(new Error(`Analytics query "${name}" failed: ${result.error.message}`));
+      }
+    }
+
+    const beaconQueries = {
+      analytics: analyticsResult,
       timeline: timelineResult,
       reveal: revealResult,
     };
-    for (const [name, result] of Object.entries(results)) {
-      if (result?.error) {
-        logger.error({ err: result.error, eventId, query: name }, 'Analytics query failed');
-        return next(new Error(`Analytics query "${name}" failed: ${result.error.message}`));
-      }
+    const beaconFailure = Object.entries(beaconQueries).find(([, result]) => result?.error);
+    const engagementAvailable = !beaconFailure;
+    if (beaconFailure) {
+      logger.error(
+        { err: beaconFailure[1].error, eventId, query: beaconFailure[0] },
+        'Analytics beacon query failed — engagement figures withheld, guest-list figures still served',
+      );
     }
 
     const analytics = analyticsResult.data || [];
@@ -527,9 +559,21 @@ const getEventAnalytics = async (req, res, next) => {
          */
         truncated: (analytics.length >= ANALYTICS_ROW_CAP)
           || (timelineData.length >= ANALYTICS_ROW_CAP),
+        /**
+         * False when the beacon table could not be read. Everything derived from
+         * `guest_analytics` is then NULL or absent rather than zero — see the
+         * note beside the two failure classes above.
+         *
+         * Always present, and true on the happy path, so the client can tell
+         * "withheld" from "this response predates the flag".
+         */
+        engagementAvailable,
         overview: {
-          totalPageViews,
-          uniqueVisitors: uniqueSessions,
+          // Null, not 0, when the beacon table is unreadable: a brand-new event
+          // genuinely has zero views, and the organizer cannot be left unable to
+          // tell that apart from a broken query.
+          totalPageViews: engagementAvailable ? totalPageViews : null,
+          uniqueVisitors: engagementAvailable ? uniqueSessions : null,
           totalRsvps,
           attendingCount,
           declinedCount,
@@ -541,13 +585,14 @@ const getEventAnalytics = async (req, res, next) => {
           // the window, so the ratio is meaningless — and on a narrow window
           // it cheerfully exceeds 100%. The UI hides the tile when this is
           // null rather than printing a figure nobody can act on.
-          conversionRate: rangeApplied
+          // Null too when the views it divides by are unavailable at all.
+          conversionRate: (rangeApplied || !engagementAvailable)
             ? null
             : (totalPageViews > 0 ? Math.round((totalRsvps / totalPageViews) * 100) : 0),
           // Nulled under a window for the same reason as conversionRate
           // directly above: unique VISITORS is windowed and total responses is
           // not, so the ratio compares two different spans of time.
-          engagementRate: rangeApplied
+          engagementRate: (rangeApplied || !engagementAvailable)
             ? null
             : (uniqueSessions > 0 ? Math.round((totalRsvps / uniqueSessions) * 100) : 0),
         },
@@ -569,12 +614,22 @@ const getEventAnalytics = async (req, res, next) => {
          */
         advanced,
         ...(advanced ? {
-          funnel,
+          /* Derived from `rsvp_parties`, so these two survive a beacon-table
+             failure and are sent whenever the plan carries the advanced half. */
           declineReasons,
           sources,
-          engagementActions,
-          reveal,
-          timeline,
+          /* Derived from `guest_analytics`. Omitted entirely when that table
+             could not be read — the same rule as the plan gate above: the page
+             destructures with `= []` / `= {}` defaults, so sending them would
+             draw a funnel of zeroes and a flat timeline, which is a lie rather
+             than a degraded view. `engagementAvailable` tells the page to say
+             so instead. */
+          ...(engagementAvailable ? {
+            funnel,
+            engagementActions,
+            reveal,
+            timeline,
+          } : {}),
         } : {}),
       },
     });

@@ -319,6 +319,18 @@ function Dashboard({ data }) {
      * of version skew. The API is the enforcement; this is presentation.
      */
     advanced = true,
+    /**
+     * Could the beacon table be read at all?
+     *
+     * Defaults TRUE for the same version-skew reason as `advanced` above: a
+     * response that predates the flag must not be painted as an outage.
+     *
+     * When false, every figure that comes from `guest_analytics` arrives as null
+     * or is absent — NOT as zero. Zero views is a real answer for a young event,
+     * and the two must never look alike on this screen. Stat renders null as
+     * "—", and the note below says plainly what is missing.
+     */
+    engagementAvailable = true,
   } = data;
 
   /* Who is coming is a CURRENT fact, not a windowed one — the backend
@@ -356,6 +368,20 @@ function Dashboard({ data }) {
   return (
     <div style={{ display: 'grid', gap: 16 }}>
 
+      {/* Said once, at the top, rather than repeated as an empty state inside
+          every card that happens to be missing. The guest-list numbers below
+          are unaffected and still correct, so this has to read as "part of this
+          page is missing" and not as "this page is broken". */}
+      {!engagementAvailable && (
+        <StatusNote tone="critical">
+          <strong>Visitor and engagement data could not be loaded.</strong> The counts
+          below that come from your guest list — who is coming, who has replied — are
+          accurate. Page views, the RSVP funnel, the envelope and the day-by-day
+          timeline are missing rather than zero, and are shown as “—”. This is a fault
+          on our side; try again shortly.
+        </StatusNote>
+      )}
+
       {/* ─── 1 + 2: the headline ─── */}
       {/* Was `gridTemplateColumns: 'minmax(180px, 260px) 1fr'` with no media
           query anywhere in this file. minmax()'s min is a HARD floor, so at
@@ -382,8 +408,12 @@ function Dashboard({ data }) {
             140px floor survives auto-fit. --fx-col 140px keeps the same
             desktop behaviour with the floor capped at the container. */}
         <div className="fx-grid" style={{ '--fx-col': '140px', '--fx-gap': '10px' }}>
-          <Stat label="Invitation views" value={compact(overview.totalPageViews || 0)} />
-          <Stat label="Unique visitors" value={compact(overview.uniqueVisitors || 0)} />
+          {/* `?? null`, NOT `|| 0`. The server sends null for these two exactly
+              when the beacon table could not be read, and `|| 0` would convert
+              that straight back into the confident "0 views" this is meant to
+              stop printing. compact(null) renders "—". */}
+          <Stat label="Invitation views" value={compact(overview.totalPageViews ?? null)} />
+          <Stat label="Unique visitors" value={compact(overview.uniqueVisitors ?? null)} />
           <Stat label="Responses" value={compact(overview.totalRsvps || 0)} sub={`${overview.pendingCount || 0} still to reply${stateNote ? ` · ${stateNote}` : ''}`} />
           {/* Hidden while a range is applied — its two halves would come from
               different windows. The backend sends null rather than a figure. */}
@@ -404,7 +434,12 @@ function Dashboard({ data }) {
       ) : (
         <>
           {/* ─── 3: the envelope ─── */}
-          <Card
+          {/* This card and the three other beacon-derived ones below render only
+              when the beacon table was readable. Drawing them from withheld data
+              would produce a 0% open rate, an empty funnel and a flat timeline —
+              each of which is a specific, believable, WRONG claim rather than a
+              blank. The note at the top of the page carries the explanation. */}
+          {engagementAvailable && <Card
             title="The envelope"
             hint="Every guest meets the sealed invitation before the page itself. This is how many got past it — and how long they hesitated before tapping the wax."
             table={{
@@ -440,10 +475,10 @@ function Dashboard({ data }) {
             ) : (
               <Empty text="No guest has reached the envelope in this range yet." />
             )}
-          </Card>
+          </Card>}
 
           {/* ─── 4: where they fall out ─── */}
-          <Card
+          {engagementAvailable && <Card
             title="RSVP funnel"
             hint="Each step is the number of guests who reached it. The drop beside a step is how many were lost getting there from the one above."
             table={{
@@ -461,7 +496,7 @@ function Dashboard({ data }) {
                 }))}
               />
             ) : <Empty text="No form activity in this range yet." />}
-          </Card>
+          </Card>}
 
           {/* ─── 5: what they answered ─── */}
           <Card
@@ -476,7 +511,7 @@ function Dashboard({ data }) {
           </Card>
 
           {/* ─── 6: when ─── */}
-          <Card
+          {engagementAvailable && <Card
             title="Activity over time"
             hint="Three separate panels, each on its own scale — views outnumber responses by an order of magnitude, and stacking them on one axis would flatten the line that matters most."
             table={{
@@ -499,19 +534,21 @@ function Dashboard({ data }) {
                 </div>
               </div>
             ) : <Empty text="No activity in this range yet." />}
-          </Card>
+          </Card>}
 
           {/* ─── 7: the rest ─── */}
           {/* minmax(320px, …) plus Card's own 44px of horizontal padding needed
               364px against the 316px available at 360px — the three cards
               clipped on the right. */}
           <div className="fx-grid" style={{ '--fx-col': '320px', '--fx-gap': '16px' }}>
-            <Card
+            {/* The only beacon-derived card in this row; the other two come from
+                the guest list and survive a beacon-table failure. */}
+            {engagementAvailable && <Card
               title="What guests did"
               table={{ columns: ['Action', 'Times'], rows: engagementItems.map((i) => [i.label, compact(i.value)]) }}
             >
               <BarList items={engagementItems} emptyText="No extra interactions recorded yet." />
-            </Card>
+            </Card>}
 
             <Card
               title="Why guests declined"

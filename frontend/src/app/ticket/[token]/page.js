@@ -22,6 +22,7 @@ import Icon from '../../components/icons/Icon';
 // sections use, so the pin a guest gets here is the pin they get everywhere.
 import { getDirectionsUrl } from '../../components/templates/heritageArch/shared';
 import { safeZone } from '../../utils/timezone';
+import { useGuestAnalytics } from '../../utils/useGuestAnalytics';
 import SelfCheckIn from './SelfCheckIn';
 
 /**
@@ -125,6 +126,17 @@ function TicketRoute({ token }) {
     ? new Date(event.event_date).toLocaleDateString(isRTL ? 'ar-EG' : 'en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: safeZone(event.timezone) })
     : '';
 
+  /* The directions link below is a `directions_clicked` the organizer was not
+     being shown. This page is the ONLY thing the day-before SMS links to, so
+     "did guests ask how to get here" is answered here more than anywhere else.
+
+     The slug comes off the decoded ticket payload rather than the route: this
+     page is addressed by a signed token and has no :slug segment (see the note
+     at the top of the file). That means it is null until the fetch lands —
+     harmless, because `useGuestAnalytics` no-ops on an empty slug and the link
+     cannot be clicked before the event it describes has rendered. */
+  const { trackEvent } = useGuestAnalytics(event?.slug || '');
+
   return (
     <div dir={isRTL ? 'rtl' : 'ltr'} style={{
       minHeight: '100dvh', position: 'relative',
@@ -174,6 +186,7 @@ function TicketRoute({ token }) {
             {(event?.location_name || event?.location_address) && (
               <a
                 href={getDirectionsUrl(event.location_lat, event.location_lng, event.location_address || event.location_name)}
+                onClick={() => trackEvent('directions_clicked')}
                 target="_blank"
                 rel="noopener noreferrer"
                 data-testid="ticket-directions"

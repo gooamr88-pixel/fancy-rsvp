@@ -1,17 +1,46 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useFullPageTheme } from '../theme';
 import { SectionShell, SectionHeading, ScrollToRsvpHint } from '../shared';
+import { useTrackGuestAction } from '../../../../utils/useGuestAnalytics';
 
 export default function GallerySection({ images, isRTL }) {
   const C = useFullPageTheme();
   const [index, setIndex] = useState(0);
+
+  /* ═══ `gallery_viewed` ═══
+     This template's gallery is an inline carousel sitting in the page flow —
+     there is no lightbox and therefore NO "opened it" moment to report. The
+     beacon was originally wired into GuestUI's GalleryLightbox, which only the
+     other (continuous-scroll) page ever renders, so this template — the one
+     nearly every event actually uses — reported nothing and the organizer's
+     "Opened the gallery" count sat at zero for good.
+
+     Mounting is not the signal either: the section is always mounted once the
+     guest reaches it, so firing on mount would count scrolling past it.
+     Advancing a photo IS a deliberate act, so the FIRST arrow press is the
+     honest "this guest looked at the photos" moment.
+
+     Once per mount, hence the ref: an organizer's count of guests who browsed
+     the gallery must not be a count of how many times they pressed an arrow.
+     (GalleryLightbox reports once per open for the same reason.)
+
+     Hooks sit above the empty-images early return below — a hook after a
+     conditional return is a different hook order on the next render. */
+  const trackAction = useTrackGuestAction();
+  const browsedRef = useRef(false);
+  const reportBrowsed = useCallback(() => {
+    if (browsedRef.current) return;
+    browsedRef.current = true;
+    trackAction('gallery_viewed');
+  }, [trackAction]);
+
   if (!images || images.length === 0) return null;
 
-  const next = () => setIndex((i) => (i + 1) % images.length);
-  const prev = () => setIndex((i) => (i - 1 + images.length) % images.length);
+  const next = () => { reportBrowsed(); setIndex((i) => (i + 1) % images.length); };
+  const prev = () => { reportBrowsed(); setIndex((i) => (i - 1 + images.length) % images.length); };
 
   return (
     <SectionShell background={C.paper}>

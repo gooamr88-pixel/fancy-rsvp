@@ -219,6 +219,28 @@ const isPublicGuestSurface = (req) => {
   return PUBLIC_GUEST_PREFIXES.some((p) => path === p || path.startsWith(`${p}/`));
 };
 
+/**
+ * The fire-and-forget guest analytics beacon.
+ *
+ * Singled out because it is the one endpoint on the guest surface whose request
+ * count is driven by how much a guest DOES rather than how many pages they open,
+ * and it shares `/api/v1/public/events` with `GET /public/events/:slug` — the
+ * invitation itself.
+ *
+ * A full guest journey now sends roughly sixteen of these (a page view, the four
+ * envelope events, the five funnel steps, and up to seven engagement actions),
+ * up from about nine before the engagement actions were wired up. Left on the
+ * read budget, a busy shared address — carrier CGNAT, one venue's Wi-Fi — would
+ * spend that budget on BEACONS and then start refusing to serve the invitation
+ * page, which the guest UI renders as a permanent "Event Not Found". Telemetry
+ * must never be able to cost a guest their invitation.
+ */
+const isAnalyticsBeacon = (req) => {
+  if (req.method !== 'POST') return false;
+  const path = (req.originalUrl || '').split('?')[0];
+  return /^\/api\/v1\/public\/events\/[^/]+\/analytics\/?$/.test(path);
+};
+
 if (RATE_LIMIT_DISABLED) {
   logger.warn('⚠️  Rate limiting is DISABLED (DISABLE_RATE_LIMIT=true). Do NOT run production like this.');
 } else {
@@ -299,9 +321,40 @@ if (RATE_LIMIT_DISABLED) {
     message: { success: false, error: 'TOO_MANY_REQUESTS', message: 'Too many requests. Please try again in a moment.' },
     standardHeaders: true,
     legacyHeaders: false,
-    skip: (req) => skipInternal(req) || req.method === 'OPTIONS',
+    // The beacon is excluded because it has its OWN budget below. Skipping it
+    // here is what actually separates the two: mounting a second limiter would
+    // otherwise just charge each beacon to both buckets, which is the problem
+    // rather than the fix.
+    skip: (req) => skipInternal(req) || req.method === 'OPTIONS' || isAnalyticsBeacon(req),
     store: storeFor('publicread'),
   });
+
+  /**
+   * The analytics beacon's own budget.
+   *
+   * Deliberately LARGER than the read limiter, which looks backwards until you
+   * count: one guest produces ~16 beacons against a handful of page reads, so
+   * serving the same number of humans behind one address takes a bigger number,
+   * not a smaller one. 2000/15min is roughly 125 complete guest journeys from a
+   * single shared IP — comfortably above any real household, venue or CGNAT
+   * pool, and still a hard ceiling on how fast one address can inflate
+   * `guest_analytics`. That table is fed by an unauthenticated endpoint and read
+   * whole (up to ANALYTICS_ROW_CAP) on every organizer dashboard load, and
+   * storage/egress is the resource class that has already had this project's
+   * services restricted once.
+   *
+   * Its own store, so beacons and reads cannot evict each other's counters.
+   */
+  const beaconLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 2000,
+    message: { success: false, error: 'TOO_MANY_REQUESTS', message: 'Too many requests. Please try again in a moment.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => skipInternal(req) || req.method === 'OPTIONS',
+    store: storeFor('beacon'),
+  });
+  app.post('/api/v1/public/events/:slug/analytics', beaconLimiter);
 
   // Writes first — these are the abuse surface (ballot stuffing, seating probing).
   app.post('/api/v1/public/events/:slug/rsvp', publicWriteLimiter);
